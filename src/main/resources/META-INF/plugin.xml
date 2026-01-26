@@ -29,8 +29,8 @@
         <platform.lsp.serverSupportProvider implementationClass="com.txpipe.aiken.lsp.AikenLspServerSupportProvider"/>
         <platform.lsp.formattingSupport implementationClass="com.txpipe.aiken.lsp.AikenLspFormattingSupport"/>
 
-        <!-- Replace Reformat actions at app init -->
-        <applicationInitializedListener implementation="com.txpipe.aiken.actions.AikenReformatInstaller"/>
+        <!-- Replace Reformat actions at project startup (stable API) -->
+        <postStartupActivity implementation="com.txpipe.aiken.actions.AikenReformatStartupActivity"/>
     </extensions>
 
     <applicationListeners>
