@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.10.2"
 }
 
-group = "com.txpipe"
+group = "com.medusalabs"
 version = "1.0-SNAPSHOT"
 
 repositories {

@@ -1,8 +1,7 @@
-<idea-plugin xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-             xsi:noNamespaceSchemaLocation="https://plugins.jetbrains.com/schemas/IDEA_PLUGIN_2_0.xsd">
-    <id>com.txpipe.aiken</id>
+<idea-plugin>
+    <id>com.medusalabs.aiken</id>
     <name>Aiken</name>
-    <vendor email="" url="https://github.com/MedusaLabs">MedusaLabs</vendor>
+    <vendor email="" url="https://github.com/MedusaDevelopment">MedusaLabs</vendor>
     <description><![CDATA[
       Aiken language support for IntelliJ-based IDEs: file types for Aiken (.ak) and UPLC (.uplc),
       syntax highlighting, and Language Server Protocol integration via the Aiken CLI.
@@ -13,30 +12,33 @@
     <depends>com.intellij.modules.lsp</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <lang.language id="Aiken" implementationClass="com.txpipe.aiken.lang.AikenLanguage"/>
-        <lang.language id="UPLC" implementationClass="com.txpipe.aiken.lang.UplcLanguage"/>
+        <lang.language id="Aiken" implementationClass="com.medusalabs.aiken.lang.AikenLanguage"/>
+        <lang.language id="UPLC" implementationClass="com.medusalabs.aiken.lang.UplcLanguage"/>
 
-        <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.txpipe.aiken.lang.AikenFileType"/>
-        <fileType name="UPLC" language="UPLC" extensions="uplc" implementationClass="com.txpipe.aiken.lang.UplcFileType"/>
+        <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.medusalabs.aiken.lang.AikenFileType"/>
+        <fileType name="UPLC" language="UPLC" extensions="uplc" implementationClass="com.medusalabs.aiken.lang.UplcFileType"/>
 
-        <lang.syntaxHighlighterFactory language="Aiken" implementationClass="com.txpipe.aiken.highlight.AikenSyntaxHighlighterFactory"/>
-        <lang.syntaxHighlighterFactory language="UPLC" implementationClass="com.txpipe.aiken.highlight.UplcSyntaxHighlighterFactory"/>
+        <lang.syntaxHighlighterFactory language="Aiken" implementationClass="com.medusalabs.aiken.highlight.AikenSyntaxHighlighterFactory"/>
+        <lang.syntaxHighlighterFactory language="UPLC" implementationClass="com.medusalabs.aiken.highlight.UplcSyntaxHighlighterFactory"/>
 
-        <colorSettingsPage implementationClass="com.txpipe.aiken.highlight.AikenColorSettingsPage"/>
-        <colorSettingsPage implementationClass="com.txpipe.aiken.highlight.UplcColorSettingsPage"/>
+        <lang.parserDefinition language="Aiken" implementationClass="com.medusalabs.aiken.parser.AikenParserDefinition"/>
+        <lang.parserDefinition language="UPLC" implementationClass="com.medusalabs.aiken.parser.UplcParserDefinition"/>
+
+        <lang.pairedBraceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
+        <lang.pairedBraceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
+
+        <lang.foldingBuilder language="Aiken" implementationClass="com.medusalabs.aiken.folding.AikenFoldingBuilder"/>
+        <lang.foldingBuilder language="UPLC" implementationClass="com.medusalabs.aiken.folding.UplcFoldingBuilder"/>
+
+        <colorSettingsPage implementationClass="com.medusalabs.aiken.highlight.AikenColorSettingsPage"/>
+        <colorSettingsPage implementationClass="com.medusalabs.aiken.highlight.UplcColorSettingsPage"/>
 
         <!-- LSP integration -->
-        <platform.lsp.serverSupportProvider implementationClass="com.txpipe.aiken.lsp.AikenLspServerSupportProvider"/>
-        <platform.lsp.formattingSupport implementationClass="com.txpipe.aiken.lsp.AikenLspFormattingSupport"/>
-
-        <!-- Replace Reformat actions at project startup (stable API) -->
-        <postStartupActivity implementation="com.txpipe.aiken.actions.AikenReformatStartupActivity"/>
+        <platform.lsp.serverSupportProvider implementation="com.medusalabs.aiken.lsp.AikenLspServerSupportProvider"/>
     </extensions>
 
     <applicationListeners>
-        <listener class="com.txpipe.aiken.format.AikenSaveFormatter"
+        <listener class="com.medusalabs.aiken.format.AikenSaveFormatter"
                   topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
-        <listener class="com.txpipe.aiken.actions.AikenReformatActionListener"
-                  topic="com.intellij.openapi.actionSystem.ex.AnActionListener"/>
     </applicationListeners>
 </idea-plugin>
