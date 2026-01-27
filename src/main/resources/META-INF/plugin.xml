@@ -24,8 +24,13 @@
         <lang.parserDefinition language="Aiken" implementationClass="com.medusalabs.aiken.parser.AikenParserDefinition"/>
         <lang.parserDefinition language="UPLC" implementationClass="com.medusalabs.aiken.parser.UplcParserDefinition"/>
 
+        <lang.commenter language="Aiken" implementationClass="com.medusalabs.aiken.comment.AikenCommenter"/>
+        <lang.commenter language="UPLC" implementationClass="com.medusalabs.aiken.comment.UplcCommenter"/>
+
         <lang.pairedBraceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
         <lang.pairedBraceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
+
+        <editorFactoryListener implementation="com.medusalabs.aiken.braces.AikenBraceHighlightingEditorFactoryListener"/>
 
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>

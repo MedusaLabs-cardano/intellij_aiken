@@ -10,12 +10,11 @@ class AikenPairedBraceMatcher : PairedBraceMatcher {
     override fun getPairs(): Array<BracePair> =
         arrayOf(
             BracePair(AikenTokenTypes.LBRACE, AikenTokenTypes.RBRACE, true),
-            BracePair(AikenTokenTypes.LPAREN, AikenTokenTypes.RPAREN, false),
-            BracePair(AikenTokenTypes.LBRACKET, AikenTokenTypes.RBRACKET, false)
+            BracePair(AikenTokenTypes.LPAREN, AikenTokenTypes.RPAREN, true),
+            BracePair(AikenTokenTypes.LBRACKET, AikenTokenTypes.RBRACKET, true)
         )
 
     override fun isPairedBracesAllowedBeforeType(lbraceType: IElementType, contextType: IElementType?): Boolean = true
 
     override fun getCodeConstructStart(file: PsiFile, openingBraceOffset: Int): Int = openingBraceOffset
 }
-

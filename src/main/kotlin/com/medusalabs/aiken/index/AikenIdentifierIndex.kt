@@ -29,7 +29,7 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 4
+    override fun getVersion(): Int = 5
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -78,10 +78,11 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                             "validator" -> IdentifierKind.FUNCTION
                             "type" -> IdentifierKind.TYPE
                             "let",
-                            "const" -> null
+                            "const",
+                            "expect" -> null
                             else -> null
                         }
-                    collectingBindings = word == "let" || word == "const"
+                    collectingBindings = word == "let" || word == "const" || word == "expect"
                     lexer.advance()
                     continue
                 }

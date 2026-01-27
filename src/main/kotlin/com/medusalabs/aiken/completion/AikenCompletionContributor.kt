@@ -31,7 +31,7 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
                     "validator" to CompletionSymbolKind.FUNCTION,
                     "type" to CompletionSymbolKind.TYPE
                 ),
-                bindingKeywords = setOf("let", "const"),
+                bindingKeywords = setOf("let", "const", "expect"),
                 includeNonDeclarationIdentifiers = false
             )
         )
