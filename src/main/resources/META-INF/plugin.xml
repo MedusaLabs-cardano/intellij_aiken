@@ -1,10 +1,10 @@
 <idea-plugin>
     <id>com.medusalabs.aiken</id>
     <name>Aiken</name>
-    <vendor email="" url="https://github.com/MedusaDevelopment">MedusaLabs</vendor>
+    <vendor email="" url="https://github.com/MedusaLabs-cardano">MedusaLabs</vendor>
     <description><![CDATA[
       Aiken language support for IntelliJ-based IDEs: file types for Aiken (.ak) and UPLC (.uplc),
-      syntax highlighting, and Language Server Protocol integration via the Aiken CLI.
+      syntax highlighting, Language Server Protocol integration, project indexation and code suggestion.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
