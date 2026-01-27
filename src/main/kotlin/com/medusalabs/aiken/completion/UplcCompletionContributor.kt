@@ -1,0 +1,47 @@
+package com.medusalabs.aiken.completion
+
+import com.intellij.codeInsight.completion.CompletionContributor
+import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.openapi.project.DumbAware
+import com.intellij.patterns.PlatformPatterns
+import com.medusalabs.aiken.highlight.lexer.UplcLexing
+import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
+import com.medusalabs.aiken.index.UplcIdentifierIndex
+import com.medusalabs.aiken.lang.UplcLanguage
+
+class UplcCompletionContributor : CompletionContributor(), DumbAware {
+    init {
+        extend(
+            CompletionType.BASIC,
+            PlatformPatterns.psiElement().withLanguage(UplcLanguage),
+            KeywordCompletionProvider(
+                keywords = UplcLexing.keywords + setOf("True", "False"),
+                stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
+            )
+        )
+
+        extend(
+            CompletionType.BASIC,
+            PlatformPatterns.psiElement().withLanguage(UplcLanguage),
+            IndexedIdentifierCompletionProvider(
+                indexId = UplcIdentifierIndex.NAME,
+                stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
+            )
+        )
+
+        extend(
+            CompletionType.BASIC,
+            PlatformPatterns.psiElement().withLanguage(UplcLanguage),
+            IdentifierCompletionProvider(
+                lexerFactory = { UplcLexing.createLexer() },
+                identifierTokenTypes = setOf(
+                    UplcTokenTypes.IDENTIFIER,
+                    UplcTokenTypes.TYPE,
+                    UplcTokenTypes.FUNCTION,
+                    UplcTokenTypes.FIELD
+                ),
+                stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
+            )
+        )
+    }
+}

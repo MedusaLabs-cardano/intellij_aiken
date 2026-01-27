@@ -45,7 +45,7 @@ class AikenLspServerDescriptor(project: Project) :
 
     override fun createCommandLine(): GeneralCommandLine {
         val executable = if (SystemInfo.isWindows) "aiken.exe" else "aiken"
-        return GeneralCommandLine(executable, "lsp").apply {
+        return GeneralCommandLine(executable, "lsp", "--stdio").apply {
             withEnvironment(System.getenv())
             project.basePath?.let { withWorkDirectory(it) }
         }

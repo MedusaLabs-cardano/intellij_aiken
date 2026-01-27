@@ -27,6 +27,15 @@
         <lang.pairedBraceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
         <lang.pairedBraceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
 
+        <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
+        <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
+
+        <lang.findUsagesProvider language="Aiken" implementationClass="com.medusalabs.aiken.usages.AikenFindUsagesProvider"/>
+        <lang.findUsagesProvider language="UPLC" implementationClass="com.medusalabs.aiken.usages.UplcFindUsagesProvider"/>
+
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
+
         <lang.foldingBuilder language="Aiken" implementationClass="com.medusalabs.aiken.folding.AikenFoldingBuilder"/>
         <lang.foldingBuilder language="UPLC" implementationClass="com.medusalabs.aiken.folding.UplcFoldingBuilder"/>
 
