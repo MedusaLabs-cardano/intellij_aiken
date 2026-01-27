@@ -32,7 +32,7 @@ class UplcIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 2
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -57,7 +57,14 @@ class UplcIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                 if (tokenType != null && IDENTIFIER_TOKENS.contains(tokenType)) {
                     val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                     if (word.length >= 2) {
-                        result[word] = 1
+                        val kind =
+                            when (tokenType) {
+                                UplcTokenTypes.TYPE -> IdentifierKind.TYPE
+                                UplcTokenTypes.FUNCTION -> IdentifierKind.FUNCTION
+                                UplcTokenTypes.FIELD -> IdentifierKind.FIELD
+                                else -> IdentifierKind.IDENTIFIER
+                            }
+                        result[word] = (result[word] ?: 0) or kind
                     }
                 }
                 lexer.advance()

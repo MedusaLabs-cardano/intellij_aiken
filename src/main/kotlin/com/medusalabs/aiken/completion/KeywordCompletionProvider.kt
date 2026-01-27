@@ -3,13 +3,13 @@ package com.medusalabs.aiken.completion
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
-import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.psi.tree.IElementType
 import com.intellij.util.ProcessingContext
 
 class KeywordCompletionProvider(
     keywords: Collection<String>,
-    private val stopTokenTypes: Set<IElementType>
+    private val stopTokenTypes: Set<IElementType>,
+    private val priority: Double = 500.0
 ) : CompletionProvider<CompletionParameters>() {
     private val distinctKeywords: List<String> = keywords.toSortedSet().toList()
 
@@ -22,8 +22,7 @@ class KeywordCompletionProvider(
         if (stopTokenTypes.contains(elementType)) return
 
         for (keyword in distinctKeywords) {
-            result.addElement(LookupElementBuilder.create(keyword))
+            result.addElement(CompletionItemFactory.create(keyword, CompletionSymbolKind.KEYWORD, priority))
         }
     }
 }
-

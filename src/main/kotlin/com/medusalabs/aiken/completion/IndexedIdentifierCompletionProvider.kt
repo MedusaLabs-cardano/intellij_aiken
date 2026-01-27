@@ -3,20 +3,22 @@ package com.medusalabs.aiken.completion
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
-import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.psi.tree.IElementType
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.ProcessingContext
 import com.intellij.util.Processor
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.ID
+import com.medusalabs.aiken.index.IdentifierKind
 
 class IndexedIdentifierCompletionProvider(
     private val indexId: ID<String, Int>,
     private val stopTokenTypes: Set<IElementType>,
     private val minPrefixLength: Int = 2,
-    private val maxResults: Int = 500
+    private val maxResults: Int = 500,
+    private val basePriority: Double = 1000.0
 ) : CompletionProvider<CompletionParameters>() {
     override fun addCompletions(
         parameters: CompletionParameters,
@@ -36,12 +38,17 @@ class IndexedIdentifierCompletionProvider(
         val seen = HashSet<String>()
         var added = 0
         try {
-            FileBasedIndex.getInstance().processAllKeys(
+            val index = FileBasedIndex.getInstance()
+            val scope = GlobalSearchScope.allScope(project)
+            index.processAllKeys(
                 indexId,
                 Processor { key ->
                     if (!prefixMatcher.prefixMatches(key)) return@Processor true
                     if (seen.add(key)) {
-                        result.addElement(LookupElementBuilder.create(key))
+                        val kindMask = resolveKindMask(index, key, scope)
+                        val kind = dominantKind(kindMask)
+                        val priority = basePriority + kindPriority(kind)
+                        result.addElement(CompletionItemFactory.create(key, kind, priority))
                         added++
                     }
                     added < maxResults
@@ -52,4 +59,35 @@ class IndexedIdentifierCompletionProvider(
             // Fallback providers (e.g. current-file scan) will still run.
         }
     }
+
+    private fun resolveKindMask(
+        index: FileBasedIndex,
+        key: String,
+        scope: GlobalSearchScope
+    ): Int =
+        try {
+            val values = index.getValues(indexId, key, scope)
+            var mask = 0
+            for (value in values) mask = mask or value
+            mask
+        } catch (_: IndexNotReadyException) {
+            0
+        }
+
+    private fun dominantKind(kindMask: Int): CompletionSymbolKind =
+        when {
+            kindMask and IdentifierKind.TYPE != 0 -> CompletionSymbolKind.TYPE
+            kindMask and IdentifierKind.FUNCTION != 0 -> CompletionSymbolKind.FUNCTION
+            kindMask and IdentifierKind.FIELD != 0 -> CompletionSymbolKind.FIELD
+            else -> CompletionSymbolKind.IDENTIFIER
+        }
+
+    private fun kindPriority(kind: CompletionSymbolKind): Double =
+        when (kind) {
+            CompletionSymbolKind.TYPE -> 80.0
+            CompletionSymbolKind.FUNCTION -> 60.0
+            CompletionSymbolKind.FIELD -> 40.0
+            CompletionSymbolKind.IDENTIFIER -> 0.0
+            CompletionSymbolKind.KEYWORD -> 0.0
+        }
 }

@@ -9,6 +9,7 @@ import com.intellij.util.indexing.ID
 import com.intellij.util.io.EnumeratorStringDescriptor
 import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.KeyDescriptor
+import com.intellij.psi.TokenType
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.lang.AikenFileType
@@ -21,18 +22,14 @@ import java.io.DataOutput
 class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
     companion object {
         val NAME: ID<String, Int> = ID.create("aiken.identifiers")
-        private val IDENTIFIER_TOKENS: TokenSet =
-            TokenSet.create(
-                AikenTokenTypes.IDENTIFIER,
-                AikenTokenTypes.TYPE,
-                AikenTokenTypes.FUNCTION,
-                AikenTokenTypes.FIELD
-            )
+        private val TYPE_TOKENS: TokenSet = TokenSet.create(AikenTokenTypes.TYPE)
+        private val FUNCTION_TOKENS: TokenSet = TokenSet.create(AikenTokenTypes.FUNCTION)
+        private val FIELD_TOKENS: TokenSet = TokenSet.create(AikenTokenTypes.FIELD)
     }
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 4
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -52,14 +49,81 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
             lexer.start(text)
 
             val result = HashMap<String, Int>()
+            var collectingBindings: Boolean = false
+            var expectedDeclarationKind: Int? = null
             while (lexer.tokenType != null) {
                 val tokenType = lexer.tokenType
-                if (tokenType != null && IDENTIFIER_TOKENS.contains(tokenType)) {
+                if (collectingBindings) {
+                    when {
+                        tokenType == TokenType.WHITE_SPACE -> {}
+                        tokenType == AikenTokenTypes.OPERATOR &&
+                            text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "=" -> collectingBindings = false
+                        tokenType == AikenTokenTypes.IDENTIFIER -> {
+                            val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                            if (word.length >= 2) {
+                                result[word] = (result[word] ?: 0) or IdentifierKind.IDENTIFIER
+                            }
+                        }
+                    }
+                    lexer.advance()
+                    continue
+                }
+                if (tokenType == AikenTokenTypes.KEYWORD) {
                     val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-                    if (word.length >= 2) {
-                        result[word] = 1
+                    expectedDeclarationKind =
+                        when (word) {
+                            "fn",
+                            "test",
+                            "bench",
+                            "validator" -> IdentifierKind.FUNCTION
+                            "type" -> IdentifierKind.TYPE
+                            "let",
+                            "const" -> null
+                            else -> null
+                        }
+                    collectingBindings = word == "let" || word == "const"
+                    lexer.advance()
+                    continue
+                }
+
+                if (expectedDeclarationKind != null) {
+                    when {
+                        tokenType == TokenType.WHITE_SPACE -> {
+                            lexer.advance()
+                            continue
+                        }
+                        tokenType == AikenTokenTypes.IDENTIFIER ||
+                            tokenType == AikenTokenTypes.FUNCTION ||
+                            tokenType == AikenTokenTypes.TYPE -> {
+                            val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                            if (word.length >= 2) {
+                                result[word] = (result[word] ?: 0) or expectedDeclarationKind!!
+                            }
+                            expectedDeclarationKind = null
+                            lexer.advance()
+                            continue
+                        }
+                        else -> {
+                            expectedDeclarationKind = null
+                        }
                     }
                 }
+
+                if (tokenType != null &&
+                    (TYPE_TOKENS.contains(tokenType) || FUNCTION_TOKENS.contains(tokenType) || FIELD_TOKENS.contains(tokenType))
+                ) {
+                    val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                    if (word.length >= 2) {
+                        val kind =
+                            when {
+                                TYPE_TOKENS.contains(tokenType) -> IdentifierKind.TYPE
+                                FUNCTION_TOKENS.contains(tokenType) -> IdentifierKind.FUNCTION
+                                else -> IdentifierKind.FIELD
+                            }
+                        result[word] = (result[word] ?: 0) or kind
+                    }
+                }
+
                 lexer.advance()
             }
 

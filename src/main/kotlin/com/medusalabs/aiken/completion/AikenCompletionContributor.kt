@@ -14,9 +14,25 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
         extend(
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(AikenLanguage),
-            KeywordCompletionProvider(
-                keywords = AikenLexing.keywords + setOf("True", "False"),
-                stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING)
+            IdentifierCompletionProvider(
+                lexerFactory = { AikenLexing.createLexer() },
+                kindByTokenType = mapOf(
+                    AikenTokenTypes.IDENTIFIER to CompletionSymbolKind.IDENTIFIER,
+                    AikenTokenTypes.TYPE to CompletionSymbolKind.TYPE,
+                    AikenTokenTypes.FUNCTION to CompletionSymbolKind.FUNCTION,
+                    AikenTokenTypes.FIELD to CompletionSymbolKind.FIELD
+                ),
+                stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING),
+                keywordTokenType = AikenTokenTypes.KEYWORD,
+                declarationKindByKeyword = mapOf(
+                    "fn" to CompletionSymbolKind.FUNCTION,
+                    "test" to CompletionSymbolKind.FUNCTION,
+                    "bench" to CompletionSymbolKind.FUNCTION,
+                    "validator" to CompletionSymbolKind.FUNCTION,
+                    "type" to CompletionSymbolKind.TYPE
+                ),
+                bindingKeywords = setOf("let", "const"),
+                includeNonDeclarationIdentifiers = false
             )
         )
 
@@ -32,14 +48,8 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
         extend(
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(AikenLanguage),
-            IdentifierCompletionProvider(
-                lexerFactory = { AikenLexing.createLexer() },
-                identifierTokenTypes = setOf(
-                    AikenTokenTypes.IDENTIFIER,
-                    AikenTokenTypes.TYPE,
-                    AikenTokenTypes.FUNCTION,
-                    AikenTokenTypes.FIELD
-                ),
+            KeywordCompletionProvider(
+                keywords = AikenLexing.keywords + setOf("True", "False"),
                 stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING)
             )
         )

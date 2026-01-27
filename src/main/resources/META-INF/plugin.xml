@@ -36,6 +36,8 @@
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 
+        <indexableSetContributor implementation="com.medusalabs.aiken.index.AikenBuildIndexableSetContributor"/>
+
         <lang.foldingBuilder language="Aiken" implementationClass="com.medusalabs.aiken.folding.AikenFoldingBuilder"/>
         <lang.foldingBuilder language="UPLC" implementationClass="com.medusalabs.aiken.folding.UplcFoldingBuilder"/>
 

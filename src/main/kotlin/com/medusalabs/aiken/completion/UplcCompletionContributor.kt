@@ -14,8 +14,14 @@ class UplcCompletionContributor : CompletionContributor(), DumbAware {
         extend(
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(UplcLanguage),
-            KeywordCompletionProvider(
-                keywords = UplcLexing.keywords + setOf("True", "False"),
+            IdentifierCompletionProvider(
+                lexerFactory = { UplcLexing.createLexer() },
+                kindByTokenType = mapOf(
+                    UplcTokenTypes.IDENTIFIER to CompletionSymbolKind.IDENTIFIER,
+                    UplcTokenTypes.TYPE to CompletionSymbolKind.TYPE,
+                    UplcTokenTypes.FUNCTION to CompletionSymbolKind.FUNCTION,
+                    UplcTokenTypes.FIELD to CompletionSymbolKind.FIELD
+                ),
                 stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
             )
         )
@@ -32,14 +38,8 @@ class UplcCompletionContributor : CompletionContributor(), DumbAware {
         extend(
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(UplcLanguage),
-            IdentifierCompletionProvider(
-                lexerFactory = { UplcLexing.createLexer() },
-                identifierTokenTypes = setOf(
-                    UplcTokenTypes.IDENTIFIER,
-                    UplcTokenTypes.TYPE,
-                    UplcTokenTypes.FUNCTION,
-                    UplcTokenTypes.FIELD
-                ),
+            KeywordCompletionProvider(
+                keywords = UplcLexing.keywords + setOf("True", "False"),
                 stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
             )
         )
