@@ -11,7 +11,8 @@ import com.intellij.psi.PsiElement
 class AikenFoldingBuilder : BalancedPairFoldingBuilder(
     pairs = listOf('{' to '}'),
     lineCommentPrefix = "//",
-    stringDelimiter = '"'
+    stringDelimiter = '"',
+    keepClosingPairOnOwnLine = true
 ) {
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
         val base = super.buildFoldRegions(root, document, quick)

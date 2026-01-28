@@ -15,7 +15,8 @@ import com.intellij.psi.PsiElement
 abstract class BalancedPairFoldingBuilder(
     pairs: List<Pair<Char, Char>>,
     private val lineCommentPrefix: String = "//",
-    private val stringDelimiter: Char = '"'
+    private val stringDelimiter: Char = '"',
+    private val keepClosingPairOnOwnLine: Boolean = false
 ) : FoldingBuilderEx() {
     private val openToClose: Map<Char, Char> = pairs.toMap()
     private val closeToOpen: Map<Char, Char> = pairs.associate { (open, close) -> close to open }
@@ -94,7 +95,31 @@ abstract class BalancedPairFoldingBuilder(
                     val closeOffset = i
                     if (document.getLineNumber(openOffset) < document.getLineNumber(closeOffset)) {
                         val rangeStart = openOffset + 1
-                        val rangeEnd = closeOffset
+                        val rangeEnd =
+                            if (keepClosingPairOnOwnLine) {
+                                val closeLine = document.getLineNumber(closeOffset)
+                                if (closeLine > 0) {
+                                    val closeLineStart = document.getLineStartOffset(closeLine)
+                                    var onlyWhitespaceBeforeClose = true
+                                    for (j in closeLineStart until closeOffset) {
+                                        if (!text[j].isWhitespace()) {
+                                            onlyWhitespaceBeforeClose = false
+                                            break
+                                        }
+                                    }
+
+                                    if (onlyWhitespaceBeforeClose) {
+                                        val candidate = document.getLineEndOffset(closeLine - 1)
+                                        if (candidate > rangeStart) candidate else closeOffset
+                                    } else {
+                                        closeOffset
+                                    }
+                                } else {
+                                    closeOffset
+                                }
+                            } else {
+                                closeOffset
+                            }
                         if (rangeStart < rangeEnd) {
                             foldRanges.add(TextRange(rangeStart, rangeEnd))
                         }
@@ -132,4 +157,3 @@ abstract class BalancedPairFoldingBuilder(
         return true
     }
 }
-

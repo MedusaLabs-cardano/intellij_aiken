@@ -35,10 +35,13 @@
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
 
+        <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
+
         <lang.findUsagesProvider language="Aiken" implementationClass="com.medusalabs.aiken.usages.AikenFindUsagesProvider"/>
         <lang.findUsagesProvider language="UPLC" implementationClass="com.medusalabs.aiken.usages.UplcFindUsagesProvider"/>
 
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenFunctionSignatureIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 
         <indexableSetContributor implementation="com.medusalabs.aiken.index.AikenBuildIndexableSetContributor"/>
