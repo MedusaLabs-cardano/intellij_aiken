@@ -28,6 +28,7 @@ import com.medusalabs.aiken.index.AikenImportIndex
 import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
+import com.medusalabs.aiken.navigation.AikenDeclarationResolver
 
 class AikenFindUsagesHandlerFactory : FindUsagesHandlerFactory() {
     override fun canFindUsages(element: PsiElement): Boolean {
@@ -46,17 +47,21 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
         processor: Processor<in UsageInfo>,
         options: FindUsagesOptions
     ): Boolean {
-        val name = element.text
+        val resolved = AikenDeclarationResolver.resolve(element) ?: element
+        val name = resolved.text
         if (name.isEmpty()) return true
+        val declarationRange = resolved.textRange
+        val declarationFile = resolved.containingFile?.virtualFile
+        if (!processor.process(UsageInfo(resolved))) return false
 
-        val type = element.node?.elementType ?: return true
-        val project = element.project
-        val config = UsageConfig.fromElement(element, type) ?: return true
+        val type = resolved.node?.elementType ?: return true
+        val project = resolved.project
+        val config = UsageConfig.fromElement(resolved, type) ?: return true
 
-        val targetFiles = collectTargetFiles(project, element, config, name)
+        val targetFiles = collectTargetFiles(project, resolved, config, name)
         if (targetFiles.isEmpty()) return true
 
-        val limitInFile: TextRange? = config.limitFactory?.invoke(element, name)
+        val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
         val psiManager = PsiManager.getInstance(project)
         val psiDocumentManager = PsiDocumentManager.getInstance(project)
 
@@ -66,6 +71,7 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
             val limit = if (vf == element.containingFile?.virtualFile) limitInFile else null
             val ranges = collectRanges(document, config, name, limit)
             for (range in ranges) {
+                if (vf == declarationFile && declarationRange == range) continue
                 if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return false
             }
         }

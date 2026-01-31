@@ -31,6 +31,7 @@ import com.medusalabs.aiken.index.AikenIdentifierIndex
 import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
+import com.medusalabs.aiken.navigation.AikenDeclarationResolver
 
 class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
     override fun canProcessElement(element: PsiElement): Boolean {
@@ -63,19 +64,29 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         searchInCommentsAndStrings: Boolean
     ): Collection<PsiReference> {
         val target = if (element is PsiNamedElement) element else element.parent as? PsiNamedElement ?: return emptyList()
-        val type = target.node?.elementType ?: return emptyList()
-        val name = target.text
+        val resolvedTarget = AikenDeclarationResolver.resolve(target) ?: target
+        val type = resolvedTarget.node?.elementType ?: return emptyList()
+        val name = resolvedTarget.text
         if (name.isEmpty()) return emptyList()
 
-        val config = RenameConfig.fromElement(target, type) ?: return emptyList()
-        val project = target.project
-        val targetFiles = collectTargetFiles(project, target, config, name)
+        val config = RenameConfig.fromElement(resolvedTarget, type) ?: return emptyList()
+        val project = resolvedTarget.project
+        val targetFiles = collectTargetFiles(project, resolvedTarget, config, name)
         if (targetFiles.isEmpty()) return emptyList()
 
-        val limitInFile: TextRange? = config.limitFactory?.invoke(target, name)
+        val limitInFile: TextRange? = config.limitFactory?.invoke(resolvedTarget, name)
         val psiManager = PsiManager.getInstance(project)
         val psiDocumentManager = PsiDocumentManager.getInstance(project)
-        val references = ArrayList<PsiReference>()
+        val references = LinkedHashMap<Pair<VirtualFile, TextRange>, PsiReference>()
+        val declarationFile = resolvedTarget.containingFile?.virtualFile
+        val declarationRange = resolvedTarget.textRange
+        if (declarationFile != null) {
+            val psiFile = psiManager.findFile(declarationFile)
+            if (psiFile != null) {
+                val key = declarationFile to declarationRange
+                references[key] = AikenRenameReference(resolvedTarget, psiFile, declarationRange)
+            }
+        }
 
         for (vf in targetFiles) {
             val psiFile = psiManager.findFile(vf) ?: continue
@@ -84,11 +95,14 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
             val ranges = collectRenameRanges(document, config, name, limit) +
                 collectImportedNameRanges(document, config, name)
             for (range in ranges.distinct()) {
-                references.add(AikenRenameReference(target, psiFile, range))
+                val key = vf to range
+                if (!references.containsKey(key)) {
+                    references[key] = AikenRenameReference(resolvedTarget, psiFile, range)
+                }
             }
         }
 
-        return references
+        return references.values.toList()
     }
 
     override fun renameElement(
@@ -98,23 +112,24 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         listener: RefactoringElementListener?
     ) {
         val target = if (element is PsiNamedElement) element else element.parent as? PsiNamedElement ?: return
-        val oldName = target.text
+        val resolvedTarget = AikenDeclarationResolver.resolve(target) ?: target
+        val oldName = resolvedTarget.text
         if (oldName == newName) return
 
-        val type = target.node?.elementType ?: return
-        val project = target.project
+        val type = resolvedTarget.node?.elementType ?: return
+        val project = resolvedTarget.project
 
-        val config = RenameConfig.fromElement(target, type) ?: return
-        val targetFiles = collectTargetFiles(project, target, config, oldName)
+        val config = RenameConfig.fromElement(resolvedTarget, type) ?: return
+        val targetFiles = collectTargetFiles(project, resolvedTarget, config, oldName)
         if (targetFiles.isEmpty()) return
-        val limitInFile: TextRange? = config.limitFactory?.invoke(target, oldName)
+        val limitInFile: TextRange? = config.limitFactory?.invoke(resolvedTarget, oldName)
 
         WriteCommandAction.runWriteCommandAction(project) {
             val psiDocumentManager = PsiDocumentManager.getInstance(project)
             for (vf in targetFiles) {
                 val psiFile = PsiManager.getInstance(project).findFile(vf) ?: continue
                 val document = psiDocumentManager.getDocument(psiFile) ?: continue
-                val limit = if (vf == target.containingFile?.virtualFile) limitInFile else null
+                val limit = if (vf == resolvedTarget.containingFile?.virtualFile) limitInFile else null
                 val ranges = collectRenameRanges(document, config, oldName, limit) +
                     collectImportedNameRanges(document, config, oldName)
                 if (ranges.isEmpty()) continue
@@ -126,7 +141,7 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
             }
         }
 
-        listener?.elementRenamed(target)
+        listener?.elementRenamed(resolvedTarget)
     }
 
     private fun collectTargetFiles(
