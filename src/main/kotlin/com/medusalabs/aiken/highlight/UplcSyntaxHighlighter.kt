@@ -3,14 +3,10 @@ package com.medusalabs.aiken.highlight
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.colors.TextAttributesKey
-import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileTypes.SyntaxHighlighterBase
 import com.intellij.psi.tree.IElementType
-import com.intellij.ui.JBColor
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
-import java.awt.Color
-import java.awt.Font
 
 class UplcSyntaxHighlighter : SyntaxHighlighterBase() {
     override fun getHighlightingLexer(): Lexer = UplcLexing.createLexer()
@@ -34,27 +30,9 @@ class UplcSyntaxHighlighter : SyntaxHighlighterBase() {
         val COMMENT: TextAttributesKey =
             TextAttributesKey.createTextAttributesKey("UPLC_COMMENT", DefaultLanguageHighlighterColors.LINE_COMMENT)
         val TYPE: TextAttributesKey =
-            TextAttributesKey.createTextAttributesKey(
-                "UPLC_TYPE",
-                TextAttributes(
-                    JBColor(Color(0x0055AA), Color(0x80C0FF)),
-                    null,
-                    null,
-                    null,
-                    Font.PLAIN
-                )
-            )
+            TextAttributesKey.createTextAttributesKey("UPLC_TYPE", DefaultLanguageHighlighterColors.CLASS_NAME)
         val FUNCTION: TextAttributesKey =
-            TextAttributesKey.createTextAttributesKey(
-                "UPLC_FUNCTION",
-                TextAttributes(
-                    JBColor(Color(0x8A6A00), Color(0xFFD75F)),
-                    null,
-                    null,
-                    null,
-                    Font.PLAIN
-                )
-            )
+            TextAttributesKey.createTextAttributesKey("UPLC_FUNCTION", DefaultLanguageHighlighterColors.FUNCTION_DECLARATION)
         val OPERATOR: TextAttributesKey =
             TextAttributesKey.createTextAttributesKey("UPLC_OPERATOR", DefaultLanguageHighlighterColors.OPERATION_SIGN)
         val PUNCTUATION: TextAttributesKey =

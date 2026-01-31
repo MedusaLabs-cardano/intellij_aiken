@@ -53,7 +53,13 @@ class IdentifierCompletionProvider(
                     tokenType != null && kindByTokenType[tokenType] == CompletionSymbolKind.IDENTIFIER -> {
                         val word = text.substring(lexer.tokenStart, lexer.tokenEnd)
                         if (word.length >= 2 && seen.add(word) && prefixMatcher.prefixMatches(word)) {
-                            result.addElement(CompletionItemFactory.create(word, CompletionSymbolKind.IDENTIFIER, basePriority))
+                            result.addElement(
+                                CompletionItemFactory.create(
+                                    word,
+                                    CompletionSymbolKind.IDENTIFIER,
+                                    basePriority
+                                )
+                            )
                         }
                     }
                 }
@@ -67,20 +73,23 @@ class IdentifierCompletionProvider(
                         lexer.advance()
                         continue
                     }
+
                     tokenType != null && nameTokenTypes.contains(tokenType) -> {
                         val word = text.substring(lexer.tokenStart, lexer.tokenEnd)
                         if (word.length >= 2 && seen.add(word) && prefixMatcher.prefixMatches(word)) {
-                            val kind = expectedKind
-                            if (kind != null) {
-                                result.addElement(
-                                    CompletionItemFactory.create(word, kind, basePriority + kindPriority(kind))
+                            result.addElement(
+                                CompletionItemFactory.create(
+                                    word,
+                                    expectedKind,
+                                    basePriority + kindPriority(expectedKind)
                                 )
-                            }
+                            )
                         }
                         expectedKind = null
                         lexer.advance()
                         continue
                     }
+
                     else -> {
                         expectedKind = null
                     }

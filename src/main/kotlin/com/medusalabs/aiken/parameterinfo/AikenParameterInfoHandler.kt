@@ -87,10 +87,6 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
         )
     }
 
-    override fun getParameterCloseChars(): String = ")"
-
-    override fun couldShowInLookup(): Boolean = false
-
     private fun collectSignatures(project: Project, fileText: CharSequence, name: String): List<SignatureItem> {
         val scope = GlobalSearchScope.allScope(project)
         val indexed =
