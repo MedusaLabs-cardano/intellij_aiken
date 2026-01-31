@@ -8,12 +8,12 @@ import com.intellij.psi.FileViewProvider
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.TokenType
-import com.intellij.extapi.psi.ASTWrapperPsiElement
 import com.intellij.psi.tree.IFileElementType
 import com.intellij.psi.tree.TokenSet
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.lang.AikenLanguage
+import com.medusalabs.aiken.psi.AikenNamedElement
 import com.medusalabs.aiken.psi.AikenPsiFile
 
 class AikenParserDefinition : ParserDefinition {
@@ -36,7 +36,14 @@ class AikenParserDefinition : ParserDefinition {
 
     override fun getStringLiteralElements(): TokenSet = STRINGS
 
-    override fun createElement(node: ASTNode): PsiElement = ASTWrapperPsiElement(node)
+    override fun createElement(node: ASTNode): PsiElement =
+        when (node.elementType) {
+            AikenTokenTypes.IDENTIFIER,
+            AikenTokenTypes.TYPE,
+            AikenTokenTypes.FUNCTION,
+            AikenTokenTypes.FIELD -> AikenNamedElement(node)
+            else -> com.intellij.extapi.psi.ASTWrapperPsiElement(node)
+        }
 
     override fun createFile(viewProvider: FileViewProvider): PsiFile = AikenPsiFile(viewProvider)
 

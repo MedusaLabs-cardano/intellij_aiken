@@ -27,20 +27,35 @@
         <lang.commenter language="Aiken" implementationClass="com.medusalabs.aiken.comment.AikenCommenter"/>
         <lang.commenter language="UPLC" implementationClass="com.medusalabs.aiken.comment.UplcCommenter"/>
 
+        <lang.refactoringSupport language="Aiken" implementationClass="com.medusalabs.aiken.refactor.AikenRefactoringSupportProvider"/>
+        <lang.refactoringSupport language="UPLC" implementationClass="com.medusalabs.aiken.refactor.AikenRefactoringSupportProvider"/>
+
         <lang.pairedBraceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
         <lang.pairedBraceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
 
         <editorFactoryListener implementation="com.medusalabs.aiken.braces.AikenBraceHighlightingEditorFactoryListener"/>
 
+        <breadcrumbsInfoProvider implementationClass="com.medusalabs.aiken.breadcrumbs.AikenBreadcrumbsProvider"/>
+
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
 
+        <projectService serviceImplementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsProjectViewService"/>
+        <startupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
+        <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
+
         <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
 
+        <renamePsiElementProcessor implementation="com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor"/>
+
+        <findUsagesHandlerFactory implementation="com.medusalabs.aiken.usages.AikenFindUsagesHandlerFactory"/>
         <lang.findUsagesProvider language="Aiken" implementationClass="com.medusalabs.aiken.usages.AikenFindUsagesProvider"/>
         <lang.findUsagesProvider language="UPLC" implementationClass="com.medusalabs.aiken.usages.UplcFindUsagesProvider"/>
 
+        <gotoDeclarationHandler implementation="com.medusalabs.aiken.navigation.AikenGotoDeclarationHandler"/>
+
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenImportIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenFunctionSignatureIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 

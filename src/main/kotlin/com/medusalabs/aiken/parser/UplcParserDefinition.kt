@@ -8,12 +8,12 @@ import com.intellij.psi.FileViewProvider
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.TokenType
-import com.intellij.extapi.psi.ASTWrapperPsiElement
 import com.intellij.psi.tree.IFileElementType
 import com.intellij.psi.tree.TokenSet
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
 import com.medusalabs.aiken.lang.UplcLanguage
+import com.medusalabs.aiken.psi.UplcNamedElement
 import com.medusalabs.aiken.psi.UplcPsiFile
 
 class UplcParserDefinition : ParserDefinition {
@@ -36,7 +36,14 @@ class UplcParserDefinition : ParserDefinition {
 
     override fun getStringLiteralElements(): TokenSet = STRINGS
 
-    override fun createElement(node: ASTNode): PsiElement = ASTWrapperPsiElement(node)
+    override fun createElement(node: ASTNode): PsiElement =
+        when (node.elementType) {
+            UplcTokenTypes.IDENTIFIER,
+            UplcTokenTypes.TYPE,
+            UplcTokenTypes.FUNCTION,
+            UplcTokenTypes.FIELD -> UplcNamedElement(node)
+            else -> com.intellij.extapi.psi.ASTWrapperPsiElement(node)
+        }
 
     override fun createFile(viewProvider: FileViewProvider): PsiFile = UplcPsiFile(viewProvider)
 

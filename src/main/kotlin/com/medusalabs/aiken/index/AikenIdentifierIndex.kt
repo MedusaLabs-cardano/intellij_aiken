@@ -29,7 +29,7 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 5
+    override fun getVersion(): Int = 6
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -39,12 +39,19 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getInputFilter(): FileBasedIndex.InputFilter =
         object : FileBasedIndex.InputFilter {
-            override fun acceptInput(file: com.intellij.openapi.vfs.VirtualFile): Boolean = file.fileType == AikenFileType
+            override fun acceptInput(file: com.intellij.openapi.vfs.VirtualFile): Boolean =
+                file.fileType == AikenFileType || file.name == "aiken.toml"
         }
 
     override fun getIndexer(): DataIndexer<String, Int, FileContent> =
         DataIndexer { inputData ->
+            val file = inputData.file
             val text = inputData.contentAsText
+
+            if (file.fileType != AikenFileType) {
+                return@DataIndexer indexAikenToml(text)
+            }
+
             val lexer = AikenLexing.createLexer()
             lexer.start(text)
 
@@ -130,6 +137,115 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
             result
         }
+
+    private fun indexAikenToml(text: CharSequence): Map<String, Int> {
+        val result = HashMap<String, Int>()
+
+        var indexAssignments = false
+
+        for (rawLine in text.toString().lineSequence()) {
+            val line = rawLine.trimStart()
+            if (line.isEmpty() || line.startsWith("#")) continue
+
+            val statement = stripTomlComment(rawLine).trim()
+            if (statement.isEmpty()) continue
+
+            if (statement.startsWith("[")) {
+                val (segments, isConfig) = parseTomlTableHeader(statement)
+                if (!isConfig) {
+                    indexAssignments = false
+                    continue
+                }
+
+                // Index `[config.xxx.yyy]` (and deeper) as a config "name" (yyy).
+                if (segments.size >= 3) {
+                    addConfigIdentifier(result, segments.last())
+                    indexAssignments = false
+                } else {
+                    indexAssignments = true
+                }
+                continue
+            }
+
+            if (!indexAssignments) continue
+
+            val eqIndex = statement.indexOf('=')
+            if (eqIndex <= 0) continue
+
+            val rawKey = statement.substring(0, eqIndex).trim()
+            if (rawKey.isEmpty()) continue
+
+            // Support dotted keys by taking only the top-level name, e.g. `foo.bar = ...` => `foo`.
+            val key = rawKey.substringBefore('.').trim()
+            if (isValidIdentifier(key)) {
+                addConfigIdentifier(result, key)
+            }
+        }
+
+        return result
+    }
+
+    private fun addConfigIdentifier(result: HashMap<String, Int>, name: String) {
+        if (name.length < 2) return
+        result[name] = (result[name] ?: 0) or IdentifierKind.IDENTIFIER
+    }
+
+    private fun parseTomlTableHeader(statement: String): Pair<List<String>, Boolean> {
+        val trimmed = statement.trim()
+        val isArray = trimmed.startsWith("[[")
+        val openLen = if (isArray) 2 else 1
+        val closeToken = if (isArray) "]]" else "]"
+        val closeIndex = trimmed.indexOf(closeToken, startIndex = openLen)
+        if (closeIndex == -1) return emptyList<String>() to false
+
+        val inner = trimmed.substring(openLen, closeIndex).trim()
+        if (inner.isEmpty()) return emptyList<String>() to false
+
+        val segments = inner.split('.').map { it.trim() }.filter { it.isNotEmpty() }
+        val isConfig = segments.firstOrNull() == "config"
+        return segments to isConfig
+    }
+
+    private fun stripTomlComment(line: String): String {
+        var inDouble = false
+        var inSingle = false
+        var escaped = false
+
+        for (i in line.indices) {
+            val c = line[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (inDouble && c == '\\') {
+                escaped = true
+                continue
+            }
+            if (!inSingle && c == '"') {
+                inDouble = !inDouble
+                continue
+            }
+            if (!inDouble && c == '\'') {
+                inSingle = !inSingle
+                continue
+            }
+            if (!inDouble && !inSingle && c == '#') {
+                return line.substring(0, i)
+            }
+        }
+
+        return line
+    }
+
+    private fun isValidIdentifier(key: String): Boolean {
+        if (key.isEmpty()) return false
+        val first = key[0]
+        if (!(first.isLetter() || first == '_')) return false
+        for (c in key) {
+            if (!(c.isLetterOrDigit() || c == '_')) return false
+        }
+        return true
+    }
 
     private object IntExternalizer : DataExternalizer<Int> {
         override fun save(out: DataOutput, value: Int) {
