@@ -5,6 +5,7 @@ import com.intellij.find.findUsages.FindUsagesHandlerFactory
 import com.intellij.find.findUsages.FindUsagesOptions
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -34,11 +35,13 @@ class AikenFindUsagesHandlerFactory : FindUsagesHandlerFactory() {
     override fun canFindUsages(element: PsiElement): Boolean {
         val fileType = element.containingFile?.fileType ?: return false
         if (fileType != AikenFileType && fileType != UplcFileType) return false
-        return element is PsiNamedElement
+        return true
     }
 
     override fun createFindUsagesHandler(element: PsiElement, forHighlightUsages: Boolean): FindUsagesHandler? =
-        AikenFindUsagesHandler(element)
+        AikenFindUsagesHandler(
+            if (element is PsiNamedElement) element else element.parent as? PsiNamedElement ?: element
+        )
 }
 
 private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(element) {
@@ -47,36 +50,38 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
         processor: Processor<in UsageInfo>,
         options: FindUsagesOptions
     ): Boolean {
-        val resolved = AikenDeclarationResolver.resolve(element) ?: element
-        val name = resolved.text
-        if (name.isEmpty()) return true
-        val declarationRange = resolved.textRange
-        val declarationFile = resolved.containingFile?.virtualFile
-        if (!processor.process(UsageInfo(resolved))) return false
+        return ReadAction.compute<Boolean, RuntimeException> {
+            val resolved = AikenDeclarationResolver.resolve(element) ?: element
+            val name = resolved.text
+            if (name.isEmpty()) return@compute true
+            val declarationRange = resolved.textRange
+            val declarationFile = resolved.containingFile?.virtualFile
+            if (!processor.process(UsageInfo(resolved))) return@compute false
 
-        val type = resolved.node?.elementType ?: return true
-        val project = resolved.project
-        val config = UsageConfig.fromElement(resolved, type) ?: return true
+            val type = resolved.node?.elementType ?: return@compute true
+            val project = resolved.project
+            val config = UsageConfig.fromElement(resolved, type) ?: return@compute true
 
-        val targetFiles = collectTargetFiles(project, resolved, config, name)
-        if (targetFiles.isEmpty()) return true
+            val targetFiles = collectTargetFiles(project, resolved, config, name)
+            if (targetFiles.isEmpty()) return@compute true
 
-        val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
-        val psiManager = PsiManager.getInstance(project)
-        val psiDocumentManager = PsiDocumentManager.getInstance(project)
+            val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
+            val psiManager = PsiManager.getInstance(project)
+            val psiDocumentManager = PsiDocumentManager.getInstance(project)
 
-        for (vf in targetFiles) {
-            val psiFile = psiManager.findFile(vf) ?: continue
-            val document = psiDocumentManager.getDocument(psiFile) ?: continue
-            val limit = if (vf == element.containingFile?.virtualFile) limitInFile else null
-            val ranges = collectRanges(document, config, name, limit)
-            for (range in ranges) {
-                if (vf == declarationFile && declarationRange == range) continue
-                if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return false
+            for (vf in targetFiles) {
+                val psiFile = psiManager.findFile(vf) ?: continue
+                val document = psiDocumentManager.getDocument(psiFile) ?: continue
+                val limit = if (vf == element.containingFile?.virtualFile) limitInFile else null
+                val ranges = collectRanges(document, config, name, limit)
+                for (range in ranges) {
+                    if (vf == declarationFile && declarationRange == range) continue
+                    if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return@compute false
+                }
             }
-        }
 
-        return true
+            true
+        }
     }
 
     private fun collectTargetFiles(

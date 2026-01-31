@@ -25,8 +25,10 @@ class AikenFindUsagesProvider : FindUsagesProvider {
     override fun getWordsScanner(): WordsScanner = DefaultWordsScanner(AikenLexing.createLexer(), IDENTIFIERS, COMMENTS, STRINGS)
 
     override fun canFindUsagesFor(psiElement: PsiElement): Boolean {
-        val elementType = psiElement.elementTypeOrNull() ?: return false
-        return IDENTIFIERS.contains(elementType)
+        val elementType = psiElement.elementTypeOrNull()
+        if (elementType != null && IDENTIFIERS.contains(elementType)) return true
+        val parentType = psiElement.parent?.elementTypeOrNull() ?: return false
+        return IDENTIFIERS.contains(parentType)
     }
 
     override fun getHelpId(psiElement: PsiElement): String? = null
@@ -45,4 +47,3 @@ class AikenFindUsagesProvider : FindUsagesProvider {
 
     private fun PsiElement.elementTypeOrNull(): IElementType? = node?.elementType
 }
-
