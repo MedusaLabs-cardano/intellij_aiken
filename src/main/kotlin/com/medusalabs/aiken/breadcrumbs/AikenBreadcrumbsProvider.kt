@@ -68,19 +68,27 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
 
-        val stack = ArrayList<Int>()
+        val stack = ArrayList<BraceEntry>()
         val scopes = ArrayList<ScopeRange>()
         while (lexer.tokenType != null) {
             when (lexer.tokenType) {
-                AikenTokenTypes.LBRACE -> stack.add(lexer.tokenStart)
+                AikenTokenTypes.LBRACE -> stack.add(
+                    BraceEntry(
+                        lexer.tokenStart,
+                        isBlockBrace(document, text, lexer.tokenStart)
+                    )
+                )
                 AikenTokenTypes.RBRACE -> {
                     if (stack.isNotEmpty()) {
-                        val start = stack.removeLast()
-                        val end = lexer.tokenEnd
-                        val scopeInfo = extractScopeInfo(document, text, start)
-                        val label = scopeInfo.label.ifBlank { fallbackLabel(document, scopeInfo.startOffset) }
-                        val range = TextRange(scopeInfo.startOffset, end)
-                        scopes.add(ScopeRange(scopeInfo.startOffset, end, label, range))
+                        val entry = stack.removeLast()
+                        if (entry.isBlock) {
+                            val start = entry.offset
+                            val end = lexer.tokenEnd
+                            val scopeInfo = extractScopeInfo(document, text, start)
+                            val label = scopeInfo.label.ifBlank { fallbackLabel(document, scopeInfo.startOffset) }
+                            val range = TextRange(scopeInfo.startOffset, end)
+                            scopes.add(ScopeRange(scopeInfo.startOffset, end, label, range))
+                        }
                     }
                 }
             }
@@ -92,6 +100,8 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
     }
 
     private data class ScopeInfo(val startOffset: Int, val label: String)
+
+    private data class BraceEntry(val offset: Int, val isBlock: Boolean)
 
     private fun extractScopeInfo(document: Document, text: CharSequence, braceOffset: Int): ScopeInfo {
         val header = findSignatureHeader(document, text, braceOffset)
@@ -132,6 +142,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         val startLine = (braceLine - 200).coerceAtLeast(0)
 
         if (isControlBlockHeader(document, text, braceLine)) return null
+        if (isArrowHeaderLine(document, text, braceLine)) return null
 
         val headerLine = findFunctionHeaderStartLine(document, text, braceLine, startLine) ?: return null
         val parenLine = findFirstParenLine(document, text, headerLine, braceLine) ?: headerLine
@@ -158,6 +169,33 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         return false
     }
 
+    private fun isBlockBrace(document: Document, text: CharSequence, braceOffset: Int): Boolean {
+        val line = document.getLineNumber(braceOffset)
+        val lineStart = document.getLineStartOffset(line)
+        val raw = text.subSequence(lineStart, braceOffset).toString()
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        val code = trimmed.substringBefore("//").trim()
+        if (code.isEmpty()) return false
+        if (code.contains("->")) return true
+        if (containsAnyWord(code, setOf("if", "else", "when", "and", "or", "validator", "fn", "test", "bench"))) return true
+        if (code.contains(')')) return true
+        return false
+    }
+
+    private fun isArrowHeaderLine(document: Document, text: CharSequence, braceLine: Int): Boolean {
+        val lineStart = document.getLineStartOffset(braceLine)
+        val lineEnd = document.getLineEndOffset(braceLine)
+        val raw = text.subSequence(lineStart, lineEnd).toString()
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        val code = trimmed.substringBefore("//").trim()
+        val arrowIndex = code.indexOf("->")
+        if (arrowIndex < 0) return false
+        val beforeArrow = code.substring(0, arrowIndex)
+        return !beforeArrow.contains(')')
+    }
+
     private fun findFunctionHeaderStartLine(
         document: Document,
         text: CharSequence,
@@ -177,9 +215,31 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
             if (containsWord(code, "fn")) return line
             val match = headerIdentifierRegex.find(code) ?: continue
             val name = match.groupValues[1]
-            if (name !in headerExcluded && code.contains('(')) return line
+            if (name !in headerExcluded && code.contains('(')) {
+                if (code.contains('{')) return line
+                if (hasTypeAnnotationBetween(document, text, line, fromLine)) return line
+            }
         }
         return null
+    }
+
+    private fun hasTypeAnnotationBetween(
+        document: Document,
+        text: CharSequence,
+        startLine: Int,
+        endLine: Int
+    ): Boolean {
+        for (line in startLine..endLine) {
+            val lineStart = document.getLineStartOffset(line)
+            val lineEnd = document.getLineEndOffset(line)
+            val raw = text.subSequence(lineStart, lineEnd).toString()
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) continue
+            if (trimmed.startsWith("//")) continue
+            val code = trimmed.substringBefore("//").trim()
+            if (code.contains(':')) return true
+        }
+        return false
     }
 
     private fun findFirstParenLine(
