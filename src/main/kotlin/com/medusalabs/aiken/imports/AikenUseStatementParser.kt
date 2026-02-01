@@ -75,7 +75,6 @@ object AikenUseStatementParser {
 
                     if (t == AikenTokenTypes.LBRACE) {
                         modulePathEnd = lexer.tokenStart
-                        foundImportListStart = true
                         break
                     }
 
@@ -88,9 +87,8 @@ object AikenUseStatementParser {
                 val modulePath = modulePathBuilder.toString().trim()
                 val modulePathRange =
                     run {
-                        val start = modulePathStart
                         val end = modulePathEnd
-                        if (start < end) TextRange(start, end) else null
+                        if (modulePathStart < end) TextRange(modulePathStart, end) else null
                     }
 
                 val items =
@@ -138,9 +136,6 @@ object AikenUseStatementParser {
                 TokenType.WHITE_SPACE,
                 AikenTokenTypes.PUNCT,
                 AikenTokenTypes.OPERATOR -> {
-                    if ((t == AikenTokenTypes.PUNCT || t == AikenTokenTypes.OPERATOR) && (tokenText == "," || tokenText == ".")) {
-                        // separator
-                    }
                     lexer.advance()
                 }
                 AikenTokenTypes.LBRACE -> {
@@ -153,14 +148,13 @@ object AikenUseStatementParser {
                 }
                 AikenTokenTypes.IDENTIFIER,
                 AikenTokenTypes.TYPE -> {
-                    val name = tokenText
                     val nameRange = TextRange(lexer.tokenStart, lexer.tokenEnd)
                     lexer.advance()
 
                     skipWhitespace(lexer, text)
                     val (alias, aliasRange) = parseAlias(text, lexer)
 
-                    items.add(UseItem(name = name, nameRange = nameRange, alias = alias, aliasRange = aliasRange))
+                    items.add(UseItem(name = tokenText, nameRange = nameRange, alias = alias, aliasRange = aliasRange))
                 }
                 else -> {
                     lexer.advance()

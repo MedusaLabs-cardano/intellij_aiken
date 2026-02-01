@@ -1,0 +1,14 @@
+<idea-plugin implementation-detail="true">
+  <name>PHP Markdown Integration</name>
+  <id>com.intellij.php.markdown</id>
+  <version>243.25659.45</version>
+  <idea-version since-build="243.25659" until-build="243.*" />
+  <description><![CDATA[Internal module for integration PHP with Markdown]]></description>
+  <vendor>JetBrains</vendor>
+  <depends>com.intellij.modules.ultimate</depends>
+  <depends>com.jetbrains.php</depends>
+  <depends>org.intellij.plugins.markdown</depends>
+  <extensions defaultExtensionNs="org.intellij.markdown">
+    <fenceLanguageProvider implementation="com.jetbrains.php.markdown.PhpCodeFenceLanguageProvider" />
+  </extensions>
+</idea-plugin>

@@ -22,6 +22,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         return file.fileType == AikenFileType
     }
 
+    @Suppress("UnstableApiUsage")
     override fun acceptStickyElement(element: PsiElement): Boolean = element is AikenBreadcrumbElement
 
     override fun getElementInfo(element: PsiElement): String =
@@ -212,7 +213,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
             val code = trimmed.substringBefore("//").trim()
             if (code.isEmpty()) continue
             if (headerKeywordRegex.containsMatchIn(code)) return line
-            if (containsWord(code, "fn")) return line
+            if (containsWord(code, 0, code.length, "fn")) return line
             val match = headerIdentifierRegex.find(code) ?: continue
             val name = match.groupValues[1]
             if (name !in headerExcluded && code.contains('(')) {
@@ -261,24 +262,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
     }
 
     private fun containsAnyWord(text: String, words: Set<String>): Boolean =
-        words.any { containsWord(text, it) }
-
-    private fun containsWord(text: String, word: String): Boolean {
-        if (text.length < word.length) return false
-        var i = 0
-        while (i + word.length <= text.length) {
-            var j = 0
-            while (j < word.length && text[i + j] == word[j]) j++
-            if (j == word.length) {
-                val beforeOk = i == 0 || !(text[i - 1].isLetterOrDigit() || text[i - 1] == '_')
-                val afterIndex = i + word.length
-                val afterOk = afterIndex >= text.length || !(text[afterIndex].isLetterOrDigit() || text[afterIndex] == '_')
-                if (beforeOk && afterOk) return true
-            }
-            i++
-        }
-        return false
-    }
+        words.any { containsWord(text, 0, text.length, it) }
 
     private fun collectArrowScopes(document: Document, text: CharSequence): List<ScopeRange> {
         val bracePairs = collectCurlyBracePairs(text)

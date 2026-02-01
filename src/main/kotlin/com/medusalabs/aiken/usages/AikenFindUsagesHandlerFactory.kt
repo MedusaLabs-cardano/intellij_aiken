@@ -34,13 +34,12 @@ import com.medusalabs.aiken.navigation.AikenDeclarationResolver
 class AikenFindUsagesHandlerFactory : FindUsagesHandlerFactory() {
     override fun canFindUsages(element: PsiElement): Boolean {
         val fileType = element.containingFile?.fileType ?: return false
-        if (fileType != AikenFileType && fileType != UplcFileType) return false
-        return true
+        return !(fileType != AikenFileType && fileType != UplcFileType)
     }
 
     override fun createFindUsagesHandler(element: PsiElement, forHighlightUsages: Boolean): FindUsagesHandler? =
         AikenFindUsagesHandler(
-            if (element is PsiNamedElement) element else element.parent as? PsiNamedElement ?: element
+            element as? PsiNamedElement ?: (element.parent as? PsiNamedElement ?: element)
         )
 }
 

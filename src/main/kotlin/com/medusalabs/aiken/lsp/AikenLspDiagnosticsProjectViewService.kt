@@ -7,6 +7,8 @@ import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.ide.projectView.ProjectView
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
@@ -24,6 +26,8 @@ import org.eclipse.lsp4j.DiagnosticSeverity
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+@Service(Service.Level.PROJECT)
+@Suppress("UnstableApiUsage")
 class AikenLspDiagnosticsProjectViewService(private val project: Project) {
     enum class FileSeverity(val rank: Int) {
         ERROR(3),
@@ -44,9 +48,13 @@ class AikenLspDiagnosticsProjectViewService(private val project: Project) {
     private val fileSeverities = ConcurrentHashMap<VirtualFile, FileSeverity>()
     private val refreshQueued = AtomicBoolean(false)
 
+    private val listenerDisposable =
+        Disposer.newDisposable("AikenLspDiagnosticsProjectViewService.LspListener")
+
     init {
+        Disposer.register(project, listenerDisposable)
         val manager = LspServerManager.getInstance(project)
-        manager.addLspServerManagerListener(listener, project, false)
+        manager.addLspServerManagerListener(listener, listenerDisposable, false)
     }
 
     fun refreshOpenFiles() {

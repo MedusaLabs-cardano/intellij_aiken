@@ -3,8 +3,16 @@
     <name>Aiken</name>
     <vendor email="" url="https://github.com/MedusaLabs-cardano">MedusaLabs</vendor>
     <description><![CDATA[
-      Aiken language support for IntelliJ-based IDEs: file types for Aiken (.ak) and UPLC (.uplc),
-      syntax highlighting, Language Server Protocol integration, project indexation and code suggestion.
+      <p><b>Aiken</b> language support for IntelliJ-based IDEs. Aiken is a modern smart contract language for the Cardano platform.</p>
+      <p><b>Features</b></p>
+      <ul>
+        <li>File types for <code>.ak</code> (Aiken) and <code>.uplc</code> (UPLC)</li>
+        <li>Syntax highlighting</li>
+        <li>Auto-formatting</li>
+        <li>Full project indexing and navigation, including <code>std_lib</code></li>
+        <li>Sticky lines / breadcrumbs for scope awareness</li>
+        <li>Integrated suggestions (completion)</li>
+      </ul>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -12,11 +20,8 @@
     <depends>com.intellij.modules.lsp</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <lang.language id="Aiken" implementationClass="com.medusalabs.aiken.lang.AikenLanguage"/>
-        <lang.language id="UPLC" implementationClass="com.medusalabs.aiken.lang.UplcLanguage"/>
-
-        <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.medusalabs.aiken.lang.AikenFileType"/>
-        <fileType name="UPLC" language="UPLC" extensions="uplc" implementationClass="com.medusalabs.aiken.lang.UplcFileType"/>
+        <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.medusalabs.aiken.lang.AikenFileType" fieldName="INSTANCE"/>
+        <fileType name="UPLC" language="UPLC" extensions="uplc" implementationClass="com.medusalabs.aiken.lang.UplcFileType" fieldName="INSTANCE"/>
 
         <lang.syntaxHighlighterFactory language="Aiken" implementationClass="com.medusalabs.aiken.highlight.AikenSyntaxHighlighterFactory"/>
         <lang.syntaxHighlighterFactory language="UPLC" implementationClass="com.medusalabs.aiken.highlight.UplcSyntaxHighlighterFactory"/>
@@ -30,18 +35,17 @@
         <lang.refactoringSupport language="Aiken" implementationClass="com.medusalabs.aiken.refactor.AikenRefactoringSupportProvider"/>
         <lang.refactoringSupport language="UPLC" implementationClass="com.medusalabs.aiken.refactor.AikenRefactoringSupportProvider"/>
 
-        <lang.pairedBraceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
-        <lang.pairedBraceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
+        <lang.braceMatcher language="Aiken" implementationClass="com.medusalabs.aiken.braces.AikenPairedBraceMatcher"/>
+        <lang.braceMatcher language="UPLC" implementationClass="com.medusalabs.aiken.braces.UplcPairedBraceMatcher"/>
 
         <editorFactoryListener implementation="com.medusalabs.aiken.braces.AikenBraceHighlightingEditorFactoryListener"/>
 
-        <breadcrumbsInfoProvider implementationClass="com.medusalabs.aiken.breadcrumbs.AikenBreadcrumbsProvider"/>
+        <breadcrumbsInfoProvider implementation="com.medusalabs.aiken.breadcrumbs.AikenBreadcrumbsProvider"/>
 
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
 
-        <projectService serviceImplementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsProjectViewService"/>
-        <startupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
         <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
@@ -59,13 +63,15 @@
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenFunctionSignatureIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 
-        <indexableSetContributor implementation="com.medusalabs.aiken.index.AikenBuildIndexableSetContributor"/>
+        <indexedRootsProvider implementation="com.medusalabs.aiken.index.AikenBuildIndexableSetContributor"/>
 
         <lang.foldingBuilder language="Aiken" implementationClass="com.medusalabs.aiken.folding.AikenFoldingBuilder"/>
         <lang.foldingBuilder language="UPLC" implementationClass="com.medusalabs.aiken.folding.UplcFoldingBuilder"/>
 
-        <colorSettingsPage implementationClass="com.medusalabs.aiken.highlight.AikenColorSettingsPage"/>
-        <colorSettingsPage implementationClass="com.medusalabs.aiken.highlight.UplcColorSettingsPage"/>
+        <colorSettingsPage implementation="com.medusalabs.aiken.highlight.AikenColorSettingsPage"/>
+        <colorSettingsPage implementation="com.medusalabs.aiken.highlight.UplcColorSettingsPage"/>
+
+        <externalFormatProcessor implementation="com.medusalabs.aiken.format.AikenExternalFormatProcessor"/>
 
         <!-- LSP integration -->
         <platform.lsp.serverSupportProvider implementation="com.medusalabs.aiken.lsp.AikenLspServerSupportProvider"/>
