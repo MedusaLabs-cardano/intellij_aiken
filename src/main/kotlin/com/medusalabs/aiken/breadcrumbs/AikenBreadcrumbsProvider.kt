@@ -77,9 +77,10 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
                     if (stack.isNotEmpty()) {
                         val start = stack.removeLast()
                         val end = lexer.tokenEnd
-                        val label = extractLineLabel(document, text, start)
-                        val range = TextRange(start, end)
-                        scopes.add(ScopeRange(start, end, label, range))
+                        val scopeInfo = extractScopeInfo(document, text, start)
+                        val label = scopeInfo.label.ifBlank { fallbackLabel(document, scopeInfo.startOffset) }
+                        val range = TextRange(scopeInfo.startOffset, end)
+                        scopes.add(ScopeRange(scopeInfo.startOffset, end, label, range))
                     }
                 }
             }
@@ -90,16 +91,19 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         return scopes
     }
 
-    private fun extractLineLabel(document: Document, text: CharSequence, braceOffset: Int): String {
-        val headerLabel = findSignatureHeaderLabel(document, text, braceOffset)
-        if (headerLabel != null) return headerLabel
+    private data class ScopeInfo(val startOffset: Int, val label: String)
+
+    private fun extractScopeInfo(document: Document, text: CharSequence, braceOffset: Int): ScopeInfo {
+        val header = findSignatureHeader(document, text, braceOffset)
+        if (header != null) return header
 
         val lineStart = text.lastIndexOf('\n', startIndex = braceOffset.coerceAtLeast(0))
             .let { if (it == -1) 0 else it + 1 }
         val lineEnd = text.indexOf('\n', startIndex = braceOffset).let { if (it == -1) text.length else it }
         val raw = text.subSequence(lineStart, lineEnd).toString().trim()
         val cleaned = raw.substringBefore("{").trim()
-        return if (cleaned.isNotEmpty() && cleaned != "{") cleaned else ""
+        val label = if (cleaned.isNotEmpty() && cleaned != "{") cleaned else ""
+        return ScopeInfo(braceOffset, label)
     }
 
     private fun fallbackLabel(document: Document, braceOffset: Int): String {
@@ -116,42 +120,88 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         return "{"
     }
 
-    private val signatureKeywords = listOf("fn", "test", "bench", "validator", "type")
-    private val signatureLineRegex =
-        Regex("""\b(fn|test|bench|validator|type)\s+([A-Za-z_][A-Za-z0-9_]*)""")
-    private val signatureStartRegex =
-        Regex("""^(pub\s+)?(fn|test|bench|validator|type)\b""")
+    private val headerKeywordRegex =
+        Regex("""^\s*(pub\s+)?(fn|test|bench|validator)\b""")
+    private val headerIdentifierRegex =
+        Regex("""^\s*([A-Za-z_][A-Za-z0-9_]*)\b""")
+    private val headerExcluded =
+        setOf("if", "when", "and", "or", "else", "let", "expect", "const", "type", "pub", "fn", "test", "bench", "validator")
 
-    private fun findSignatureHeaderLabel(document: Document, text: CharSequence, braceOffset: Int): String? {
+    private fun findSignatureHeader(document: Document, text: CharSequence, braceOffset: Int): ScopeInfo? {
         val braceLine = document.getLineNumber(braceOffset)
         val startLine = (braceLine - 200).coerceAtLeast(0)
-        val braceLineStart = document.getLineStartOffset(braceLine)
-        val braceLineEnd = document.getLineEndOffset(braceLine)
-        val braceIndent = countIndent(text, braceLineStart, braceLineEnd)
 
-        for (line in braceLine downTo startLine) {
+        if (isControlBlockHeader(document, text, braceLine)) return null
+
+        val headerLine = findFunctionHeaderStartLine(document, text, braceLine, startLine) ?: return null
+        val parenLine = findFirstParenLine(document, text, headerLine, braceLine) ?: headerLine
+        val parenStart = document.getLineStartOffset(parenLine)
+        val parenEnd = document.getLineEndOffset(parenLine)
+        val parenRaw = text.subSequence(parenStart, parenEnd).toString()
+        val trimmed = parenRaw.trim()
+        val label = trimmed.substringBefore("{").trim().ifEmpty { return null }
+        return ScopeInfo(parenStart, label)
+    }
+
+    private fun isControlBlockHeader(document: Document, text: CharSequence, braceLine: Int): Boolean {
+        val minLine = (braceLine - 3).coerceAtLeast(0)
+        for (line in braceLine downTo minLine) {
             val lineStart = document.getLineStartOffset(line)
             val lineEnd = document.getLineEndOffset(line)
             val raw = text.subSequence(lineStart, lineEnd).toString()
             val trimmed = raw.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith("//")) continue
-            if (countIndent(text, lineStart, lineEnd) != braceIndent) continue
-            if (!signatureStartRegex.containsMatchIn(trimmed)) continue
-
-            val match = signatureLineRegex.find(trimmed)
-            if (match != null) {
-                val keyword = match.groupValues[1]
-                val name = match.groupValues[2]
-                return "$keyword $name".trim()
-            }
-
-            val lower = trimmed.lowercase()
-            val keyword = signatureKeywords.firstOrNull { containsWord(lower, it) }
-            if (keyword != null) return keyword
+            if (trimmed.isEmpty()) continue
+            if (trimmed.startsWith("//")) continue
+            if (containsAnyWord(trimmed, setOf("if", "else", "when", "and", "or"))) return true
+            break
         }
+        return false
+    }
 
+    private fun findFunctionHeaderStartLine(
+        document: Document,
+        text: CharSequence,
+        fromLine: Int,
+        minLine: Int
+    ): Int? {
+        for (line in fromLine downTo minLine) {
+            val lineStart = document.getLineStartOffset(line)
+            val lineEnd = document.getLineEndOffset(line)
+            val raw = text.subSequence(lineStart, lineEnd).toString()
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) continue
+            if (trimmed.startsWith("//")) continue
+            val code = trimmed.substringBefore("//").trim()
+            if (code.isEmpty()) continue
+            if (headerKeywordRegex.containsMatchIn(code)) return line
+            if (containsWord(code, "fn")) return line
+            val match = headerIdentifierRegex.find(code) ?: continue
+            val name = match.groupValues[1]
+            if (name !in headerExcluded && code.contains('(')) return line
+        }
         return null
     }
+
+    private fun findFirstParenLine(
+        document: Document,
+        text: CharSequence,
+        startLine: Int,
+        endLine: Int
+    ): Int? {
+        for (line in startLine..endLine) {
+            val lineStart = document.getLineStartOffset(line)
+            val lineEnd = document.getLineEndOffset(line)
+            val raw = text.subSequence(lineStart, lineEnd).toString()
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) continue
+            if (trimmed.startsWith("//")) continue
+            if (raw.contains('(')) return line
+        }
+        return null
+    }
+
+    private fun containsAnyWord(text: String, words: Set<String>): Boolean =
+        words.any { containsWord(text, it) }
 
     private fun containsWord(text: String, word: String): Boolean {
         if (text.length < word.length) return false
