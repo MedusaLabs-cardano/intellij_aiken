@@ -12,6 +12,7 @@ import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.Key
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
@@ -213,7 +214,7 @@ class AikenBraceHighlightingEditorFactoryListener : EditorFactoryListener {
             }
 
         editor.caretModel.addCaretListener(caretListener)
-        editor.document.addDocumentListener(documentListener)
+        editor.document.addDocumentListener(documentListener, editor.project ?: ApplicationManager.getApplication())
         editor.putUserData(STATE_KEY, State(caretListener, documentListener))
 
         updateHighlights(editor)
