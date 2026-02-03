@@ -5,7 +5,6 @@ import com.intellij.openapi.startup.ProjectActivity
 
 class AikenLspDiagnosticsStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
-        val service = project.getService(AikenLspDiagnosticsProjectViewService::class.java)
-        service?.refreshOpenFiles()
+        project.getService(AikenLspDiagnosticsProjectViewService::class.java)
     }
 }
