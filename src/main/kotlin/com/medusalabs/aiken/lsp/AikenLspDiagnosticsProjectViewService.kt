@@ -87,9 +87,9 @@ class AikenLspDiagnosticsProjectViewService(private val project: Project) {
             return
         }
 
-        val document = FileDocumentManager.getInstance().getDocument(file) ?: return
         val problems =
             ReadAction.compute<List<Problem>, RuntimeException> {
+                val document = FileDocumentManager.getInstance().getDocument(file) ?: return@compute emptyList()
                 buildProblems(file, document, diagnostics)
             }
 

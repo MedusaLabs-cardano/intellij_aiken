@@ -36,5 +36,3 @@ The resulting ZIP will be under `build/distributions/`.
 - This repository uses the **IntelliJ Platform Gradle Plugin** (Kotlin DSL).
 - LSP‑based diagnostics are surfaced in the editor and project view.
 
-## License
-Internal / private use unless stated otherwise.
