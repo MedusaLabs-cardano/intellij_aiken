@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.medusalabs"
-version = "1.0"
+version = "1.1"
 
 repositories {
     mavenCentral()
@@ -29,7 +29,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "243"
+            sinceBuild = "252.25557"
         }
 
         changeNotes = """

@@ -22,9 +22,6 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
         return file.fileType == AikenFileType
     }
 
-    @Suppress("UnstableApiUsage")
-    override fun acceptStickyElement(element: PsiElement): Boolean = element is AikenBreadcrumbElement
-
     override fun getElementInfo(element: PsiElement): String =
         when (element) {
             is AikenBreadcrumbElement -> element.label

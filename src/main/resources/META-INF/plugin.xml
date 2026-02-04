@@ -71,7 +71,7 @@
         <colorSettingsPage implementation="com.medusalabs.aiken.highlight.AikenColorSettingsPage"/>
         <colorSettingsPage implementation="com.medusalabs.aiken.highlight.UplcColorSettingsPage"/>
 
-        <externalFormatProcessor implementation="com.medusalabs.aiken.format.AikenExternalFormatProcessor"/>
+        <formattingService implementation="com.medusalabs.aiken.format.AikenFormattingService"/>
 
         <!-- LSP integration -->
         <platform.lsp.serverSupportProvider implementation="com.medusalabs.aiken.lsp.AikenLspServerSupportProvider"/>
