@@ -3,14 +3,18 @@ package com.medusalabs.aiken.navigation
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
 import com.intellij.psi.TokenType
+import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.navigation.ItemPresentation
+import com.intellij.navigation.NavigationItem
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
@@ -50,7 +54,7 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
             }
 
         if (targets.isEmpty()) return null
-        return targets.toTypedArray()
+        return qualifyTargets(name, targets).toTypedArray()
     }
 
     private enum class DeclKind {
@@ -74,6 +78,7 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
     }
 
     private fun findGlobalTargets(project: Project, name: String, kinds: Set<DeclKind>): List<PsiElement> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val files = collectCandidateFiles(project, name)
         if (files.isEmpty()) return emptyList()
 
@@ -95,6 +100,7 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
     }
 
     private fun collectCandidateFiles(project: Project, name: String): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val scope = GlobalSearchScope.allScope(project)
         val files =
             if (name.length < 2) {
@@ -104,6 +110,47 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
                     .filter { it.fileType == AikenFileType }
             }
         return files
+    }
+
+    /**
+     * Decorate targets with qualifier so popup shows e.g. `list.length` instead of many `length`.
+     */
+    private fun qualifyTargets(name: String, targets: List<PsiElement>): List<PsiElement> {
+        if (targets.size <= 1) return targets
+        return targets.map { target ->
+            val qualifier = buildQualifier(target)
+            if (qualifier.isNullOrBlank()) target else QualifiedTarget(target, qualifier, name)
+        }
+    }
+
+    private fun buildQualifier(target: PsiElement): String? {
+        val file = target.containingFile ?: return null
+        val vf = file.virtualFile
+        val fileQualifier = vf?.nameWithoutExtension
+        if (!fileQualifier.isNullOrBlank()) return fileQualifier
+        return file.name.substringBeforeLast('.').ifBlank { null }
+    }
+
+    private class QualifiedTarget(
+        private val delegate: PsiElement,
+        private val qualifier: String,
+        private val name: String
+    ) : FakePsiElement(), NavigationItem {
+        override fun getParent(): PsiElement? = delegate.parent
+        override fun getName(): String = "$qualifier.$name"
+        override fun getPresentation(): ItemPresentation? {
+            val presentation = (delegate as? NavigationItem)?.presentation
+            return presentation?.let {
+                object : ItemPresentation by it {
+                    override fun getPresentableText(): String = "$qualifier.$name"
+                }
+            }
+        }
+        override fun navigate(requestFocus: Boolean) =
+            (delegate as? NavigationItem)?.navigate(requestFocus) ?: Unit
+
+        override fun canNavigate(): Boolean = (delegate as? NavigationItem)?.canNavigate() == true
+        override fun canNavigateToSource(): Boolean = (delegate as? NavigationItem)?.canNavigateToSource() == true
     }
 
     private fun findGlobalDeclarationOffsets(text: CharSequence, name: String, kinds: Set<DeclKind>): List<Int> {

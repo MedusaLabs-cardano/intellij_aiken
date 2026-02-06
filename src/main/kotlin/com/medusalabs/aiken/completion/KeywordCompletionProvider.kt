@@ -9,7 +9,7 @@ import com.intellij.util.ProcessingContext
 class KeywordCompletionProvider(
     keywords: Collection<String>,
     private val stopTokenTypes: Set<IElementType>,
-    private val priority: Double = 500.0
+    private val priority: Double = 4000.0
 ) : CompletionProvider<CompletionParameters>() {
     private val distinctKeywords: List<String> = keywords.toSortedSet().toList()
 
