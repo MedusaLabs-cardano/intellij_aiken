@@ -33,7 +33,7 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Initial version
+            Improve navigation disambiguation and prioritize keyword completion
         """.trimIndent()
     }
 
