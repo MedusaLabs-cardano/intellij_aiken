@@ -36,6 +36,10 @@ intellijPlatform {
             Initial version
         """.trimIndent()
     }
+
+    publishing {
+        token.set(System.getenv("PUBLISH_TOKEN"))
+    }
 }
 
 tasks {
