@@ -4,6 +4,8 @@ import com.intellij.lexer.Lexer
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -169,24 +171,33 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         name: String,
         scope: GlobalSearchScope
     ): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         if (config.fileType != AikenFileType) {
             return emptyList()
         }
 
-        // Import index is content-based and doesn't enforce a minimum key length.
-        return FileBasedIndex.getInstance().getContainingFiles(AikenImportIndex.NAME, name, scope)
+        return try {
+            // Import index is content-based and doesn't enforce a minimum key length.
+            FileBasedIndex.getInstance().getContainingFiles(AikenImportIndex.NAME, name, scope)
+        } catch (_: IndexNotReadyException) {
+            emptyList()
+        }
     }
 
     private fun collectProjectFiles(project: Project, config: RenameConfig, name: String): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val scope = GlobalSearchScope.allScope(project)
+        return try {
+            // Our identifier index only stores names with length >= 2.
+            if (name.length < 2) {
+                return FileTypeIndex.getFiles(config.fileType, scope)
+            }
 
-        // Our identifier index only stores names with length >= 2.
-        if (name.length < 2) {
-            return FileTypeIndex.getFiles(config.fileType, scope)
+            FileBasedIndex.getInstance().getContainingFiles(config.indexId, name, scope)
+                .filter { it.fileType == config.fileType }
+        } catch (_: IndexNotReadyException) {
+            emptyList()
         }
-
-        return FileBasedIndex.getInstance().getContainingFiles(config.indexId, name, scope)
-            .filter { it.fileType == config.fileType }
     }
 
     private fun collectRenameRanges(

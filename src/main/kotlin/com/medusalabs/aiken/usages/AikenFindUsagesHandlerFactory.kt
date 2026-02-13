@@ -6,6 +6,8 @@ import com.intellij.find.findUsages.FindUsagesOptions
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -108,15 +110,25 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
         name: String,
         scope: GlobalSearchScope
     ): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         if (config.fileType != AikenFileType) return emptyList()
-        return FileBasedIndex.getInstance().getContainingFiles(AikenImportIndex.NAME, name, scope)
+        return try {
+            FileBasedIndex.getInstance().getContainingFiles(AikenImportIndex.NAME, name, scope)
+        } catch (_: IndexNotReadyException) {
+            emptyList()
+        }
     }
 
     private fun collectProjectFiles(project: Project, config: UsageConfig, name: String): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val scope = GlobalSearchScope.allScope(project)
-        if (name.length < 2) return FileTypeIndex.getFiles(config.fileType, scope)
-        return FileBasedIndex.getInstance().getContainingFiles(config.indexId, name, scope)
-            .filter { it.fileType == config.fileType }
+        return try {
+            if (name.length < 2) return FileTypeIndex.getFiles(config.fileType, scope)
+            FileBasedIndex.getInstance().getContainingFiles(config.indexId, name, scope)
+                .filter { it.fileType == config.fileType }
+        } catch (_: IndexNotReadyException) {
+            emptyList()
+        }
     }
 
     private fun collectRanges(

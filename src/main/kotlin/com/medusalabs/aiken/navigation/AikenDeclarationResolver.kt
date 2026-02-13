@@ -1,6 +1,8 @@
 package com.medusalabs.aiken.navigation
 
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -64,6 +66,7 @@ object AikenDeclarationResolver {
     }
 
     private fun findGlobalTargets(project: Project, name: String, kinds: Set<DeclKind>): List<PsiElement> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val files = collectCandidateFiles(project, name)
         if (files.isEmpty()) return emptyList()
 
@@ -85,12 +88,17 @@ object AikenDeclarationResolver {
     }
 
     private fun collectCandidateFiles(project: Project, name: String): Collection<VirtualFile> {
+        if (DumbService.getInstance(project).isDumb) return emptyList()
         val scope = GlobalSearchScope.allScope(project)
-        return if (name.length < 2) {
-            FileTypeIndex.getFiles(AikenFileType, scope)
-        } else {
-            FileBasedIndex.getInstance().getContainingFiles(AikenIdentifierIndex.NAME, name, scope)
-                .filter { it.fileType == AikenFileType }
+        return try {
+            if (name.length < 2) {
+                FileTypeIndex.getFiles(AikenFileType, scope)
+            } else {
+                FileBasedIndex.getInstance().getContainingFiles(AikenIdentifierIndex.NAME, name, scope)
+                    .filter { it.fileType == AikenFileType }
+            }
+        } catch (_: IndexNotReadyException) {
+            emptyList()
         }
     }
 
