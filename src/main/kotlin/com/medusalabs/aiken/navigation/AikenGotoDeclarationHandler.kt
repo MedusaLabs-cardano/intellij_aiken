@@ -4,9 +4,11 @@ import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
 import com.intellij.psi.TokenType
@@ -20,6 +22,7 @@ import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.index.AikenIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
+import com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor
 
 class AikenGotoDeclarationHandler : GotoDeclarationHandler {
     override fun getGotoDeclarationTargets(sourceElement: PsiElement?, offset: Int, editor: Editor): Array<PsiElement>? {
@@ -49,18 +52,25 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
                 AikenTokenTypes.FUNCTION ->
                     findGlobalTargets(element.project, name, setOf(DeclKind.FUNCTION))
                 AikenTokenTypes.TYPE ->
-                    findGlobalTargets(element.project, name, setOf(DeclKind.TYPE))
+                    findGlobalTargets(element.project, name, setOf(DeclKind.TYPE, DeclKind.CONSTRUCTOR))
                 else -> emptyList()
             }
 
         if (targets.isEmpty()) return null
+        if (targets.any { isSameLocation(element, it) }) {
+            val usageTargets = collectUsageTargets(element)
+            if (usageTargets.size > 1) {
+                return qualifyTargets(name, usageTargets).toTypedArray()
+            }
+        }
         return qualifyTargets(name, targets).toTypedArray()
     }
 
     private enum class DeclKind {
         FUNCTION,
         TYPE,
-        CONST
+        CONST,
+        CONSTRUCTOR
     }
 
     private fun findLocalOrGlobalTargets(element: PsiElement, name: String, editor: Editor): List<PsiElement> {
@@ -102,14 +112,16 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
     private fun collectCandidateFiles(project: Project, name: String): Collection<VirtualFile> {
         if (DumbService.getInstance(project).isDumb) return emptyList()
         val scope = GlobalSearchScope.allScope(project)
-        val files =
+        return try {
             if (name.length < 2) {
                 FileTypeIndex.getFiles(AikenFileType, scope)
             } else {
                 FileBasedIndex.getInstance().getContainingFiles(AikenIdentifierIndex.NAME, name, scope)
                     .filter { it.fileType == AikenFileType }
             }
-        return files
+        } catch (_: IndexNotReadyException) {
+            emptyList()
+        }
     }
 
     /**
@@ -129,6 +141,39 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         val fileQualifier = vf?.nameWithoutExtension
         if (!fileQualifier.isNullOrBlank()) return fileQualifier
         return file.name.substringBeforeLast('.').ifBlank { null }
+    }
+
+    private fun isSameLocation(first: PsiElement, second: PsiElement): Boolean {
+        val leftFile = first.containingFile?.virtualFile
+        val rightFile = second.containingFile?.virtualFile
+        return leftFile == rightFile && first.textRange == second.textRange
+    }
+
+    private fun collectUsageTargets(element: PsiElement): List<PsiElement> {
+        val project = element.project
+        val references =
+            AikenRenamePsiElementProcessor()
+                .findReferences(element, GlobalSearchScope.allScope(project), false)
+        if (references.isEmpty()) return emptyList()
+
+        val results = ArrayList<PsiElement>()
+        val seen = HashSet<Pair<VirtualFile, Int>>()
+
+        for (reference in references) {
+            val referenceElement = reference.element
+            val psiFile = referenceElement.containingFile ?: continue
+            val virtualFile = psiFile.virtualFile ?: continue
+            val range = reference.rangeInElement
+            val absoluteStart = referenceElement.textRange.startOffset + range.startOffset
+            val leaf = psiFile.findElementAt(absoluteStart) ?: continue
+            val resolved = if (leaf.parent is PsiNamedElement) leaf.parent else leaf
+            val key = virtualFile to resolved.textRange.startOffset
+            if (seen.add(key)) {
+                results.add(resolved)
+            }
+        }
+
+        return results
     }
 
     private class QualifiedTarget(
@@ -160,6 +205,8 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         val results = ArrayList<Int>()
         var braceDepth = 0
         var expected: DeclKind? = null
+        var pendingTypeBody = false
+        var typeBodyDepth: Int? = null
 
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
@@ -167,6 +214,40 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
             when (tokenType) {
                 AikenTokenTypes.LBRACE -> braceDepth += 1
                 AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            if (typeBodyDepth != null && braceDepth < typeBodyDepth) {
+                typeBodyDepth = null
+            }
+
+            if (pendingTypeBody) {
+                when (tokenType) {
+                    TokenType.WHITE_SPACE,
+                    AikenTokenTypes.WHITESPACE,
+                    AikenTokenTypes.COMMENT -> {
+                        lexer.advance()
+                        continue
+                    }
+                    AikenTokenTypes.LBRACE -> {
+                        typeBodyDepth = braceDepth
+                        pendingTypeBody = false
+                        lexer.advance()
+                        continue
+                    }
+                    else -> pendingTypeBody = false
+                }
+            }
+
+            if (typeBodyDepth != null &&
+                kinds.contains(DeclKind.CONSTRUCTOR) &&
+                braceDepth == typeBodyDepth &&
+                tokenType == AikenTokenTypes.TYPE &&
+                isAtLogicalLineStart(text, lexer.tokenStart)
+            ) {
+                val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                if (word == name) {
+                    results.add(lexer.tokenStart)
+                }
             }
 
             if (expected != null) {
@@ -183,6 +264,9 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
                         val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                         if (word == name && kinds.contains(expected)) {
                             results.add(lexer.tokenStart)
+                        }
+                        if (expected == DeclKind.TYPE) {
+                            pendingTypeBody = true
                         }
                         expected = null
                         lexer.advance()
@@ -212,6 +296,17 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         }
 
         return results
+    }
+
+    private fun isAtLogicalLineStart(text: CharSequence, offset: Int): Boolean {
+        var index = offset - 1
+        while (index >= 0) {
+            val ch = text[index]
+            if (ch == '\n' || ch == '\r') return true
+            if (ch != ' ' && ch != '\t') return false
+            index--
+        }
+        return true
     }
 
     private fun resolveNamedElementAt(psiFile: com.intellij.psi.PsiFile, offset: Int): PsiElement? {

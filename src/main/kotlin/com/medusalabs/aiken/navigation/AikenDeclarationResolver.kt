@@ -33,7 +33,7 @@ object AikenDeclarationResolver {
             AikenTokenTypes.IDENTIFIER,
             AikenTokenTypes.FIELD -> resolveLocalOrGlobal(element, document, name)
             AikenTokenTypes.FUNCTION -> resolveGlobal(element, name, setOf(DeclKind.FUNCTION))
-            AikenTokenTypes.TYPE -> resolveGlobal(element, name, setOf(DeclKind.TYPE))
+            AikenTokenTypes.TYPE -> resolveGlobal(element, name, setOf(DeclKind.TYPE, DeclKind.CONSTRUCTOR))
             else -> null
         }
     }
@@ -41,7 +41,8 @@ object AikenDeclarationResolver {
     private enum class DeclKind {
         FUNCTION,
         TYPE,
-        CONST
+        CONST,
+        CONSTRUCTOR
     }
 
     private fun resolveLocalOrGlobal(element: PsiElement, document: Document, name: String): PsiElement? {
@@ -109,6 +110,8 @@ object AikenDeclarationResolver {
         val results = ArrayList<Int>()
         var braceDepth = 0
         var expected: DeclKind? = null
+        var pendingTypeBody = false
+        var typeBodyDepth: Int? = null
 
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
@@ -116,6 +119,40 @@ object AikenDeclarationResolver {
             when (tokenType) {
                 AikenTokenTypes.LBRACE -> braceDepth += 1
                 AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            if (typeBodyDepth != null && braceDepth < typeBodyDepth) {
+                typeBodyDepth = null
+            }
+
+            if (pendingTypeBody) {
+                when (tokenType) {
+                    TokenType.WHITE_SPACE,
+                    AikenTokenTypes.WHITESPACE,
+                    AikenTokenTypes.COMMENT -> {
+                        lexer.advance()
+                        continue
+                    }
+                    AikenTokenTypes.LBRACE -> {
+                        typeBodyDepth = braceDepth
+                        pendingTypeBody = false
+                        lexer.advance()
+                        continue
+                    }
+                    else -> pendingTypeBody = false
+                }
+            }
+
+            if (typeBodyDepth != null &&
+                kinds.contains(DeclKind.CONSTRUCTOR) &&
+                braceDepth == typeBodyDepth &&
+                tokenType == AikenTokenTypes.TYPE &&
+                isAtLogicalLineStart(text, lexer.tokenStart)
+            ) {
+                val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                if (word == name) {
+                    results.add(lexer.tokenStart)
+                }
             }
 
             if (expected != null) {
@@ -132,6 +169,9 @@ object AikenDeclarationResolver {
                         val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                         if (word == name && kinds.contains(expected)) {
                             results.add(lexer.tokenStart)
+                        }
+                        if (expected == DeclKind.TYPE) {
+                            pendingTypeBody = true
                         }
                         expected = null
                         lexer.advance()
@@ -161,6 +201,17 @@ object AikenDeclarationResolver {
         }
 
         return results
+    }
+
+    private fun isAtLogicalLineStart(text: CharSequence, offset: Int): Boolean {
+        var index = offset - 1
+        while (index >= 0) {
+            val ch = text[index]
+            if (ch == '\n' || ch == '\r') return true
+            if (ch != ' ' && ch != '\t') return false
+            index--
+        }
+        return true
     }
 
     private fun resolveNamedElementAt(psiFile: com.intellij.psi.PsiFile, offset: Int): PsiElement? {
