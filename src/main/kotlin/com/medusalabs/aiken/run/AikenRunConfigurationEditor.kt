@@ -47,6 +47,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressMainnetCheck = JBCheckBox("Generate mainnet address")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
+    private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
     private val checkDebugCheck = JBCheckBox("Pretty-print failing test UPLC")
     private val checkSeedField = JBTextField()
     private val checkMaxSuccessField = JBTextField()
@@ -85,7 +86,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
         checkSeedField.emptyText.text = "e.g. 42"
         checkMaxSuccessField.emptyText.text = "100"
-        checkMatchTestsField.emptyText.text = "e.g. \"aiken/list.{map}\""
+        checkMatchTestsField.emptyText.text = "e.g. list, aiken/list, aiken/list.{map}"
         checkEnvField.emptyText.text = "e.g. preprod"
     }
 
@@ -118,6 +119,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressMainnetCheck.isSelected = configuration.addressMainnet
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
+        checkOutputModeCombo.selectedItem = configuration.checkOutputMode
         checkDebugCheck.isSelected = configuration.checkDebug
         checkSeedField.text = configuration.checkSeed
         checkMaxSuccessField.text = configuration.checkMaxSuccess.ifBlank { "100" }
@@ -167,6 +169,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressMainnet = addressMainnetCheck.isSelected
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
+        configuration.checkOutputMode =
+            (checkOutputModeCombo.selectedItem as? AikenCheckOutputMode) ?: AikenCheckOutputMode.IDE_INTEGRATED
         configuration.checkDebug = checkDebugCheck.isSelected
         configuration.checkSeed = checkSeedField.text.trim()
         configuration.checkMaxSuccess = checkMaxSuccessField.text.trim()
@@ -193,25 +197,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(commandLabel)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Command is fixed by the selected configuration type.")
+                        .comment("Set automatically by configuration type.")
+                }
 
                 row("Project directory:") {
                     cell(projectDirectoryField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Used as working directory and passed as [DIRECTORY] to the command.")
+                        .comment("Working directory for Aiken command. Relative paths resolve from here.")
+                }
 
                 row("Aiken binary path:") {
                     cell(aikenBinaryField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Executable name or path for Aiken CLI.")
+                        .comment("Binary name or full path. Default: aiken.")
+                }
 
                 row("Extra arguments:") {
                     cell(extraArgsField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Raw CLI args appended at the end. Useful for uncommon flags.")
+                        .comment("Optional raw arguments appended at the end.")
+                }
             }
 
             row {
@@ -247,25 +255,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(buildEnvField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Environment name for build (`--env <ENV>`).")
+                        .comment("Environment name from aiken.toml, for example preprod.")
+                }
 
                 row("Blueprint output file:") {
                     cell(buildOutField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Relative output path for blueprint (`--out <FILEPATH>`).")
+                        .comment("Output blueprint file. Relative paths are inside project directory.")
+                }
 
                 row("Trace filter:") {
                     cell(buildTraceFilterCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Choose traces included in generated programs (`--trace-filter`).")
+                        .comment("Select which trace categories to include in generated code.")
+                }
 
                 row("Trace level:") {
                     cell(buildTraceLevelCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Set trace verbosity for build (`--trace-level`).")
+                        .comment("Controls detail level of emitted traces.")
+                }
             }
         }
     }
@@ -277,25 +289,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(addressInField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Plutus blueprint input file (`--in <FILEPATH>`).")
+                        .comment("Blueprint JSON file to read validators from.")
+                }
 
                 row("Module:") {
                     cell(addressModuleField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Validator module name (`--module <MODULE>`).")
+                        .comment("Validator module name inside the blueprint.")
+                }
 
                 row("Validator:") {
                     cell(addressValidatorField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Validator name in module (`--validator <VALIDATOR>`).")
+                        .comment("Validator function name in the selected module.")
+                }
 
                 row("Delegated stake address:") {
                     cell(addressDelegatedToField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Stake address to attach (`--delegated-to <DELEGATED_TO>`).")
+                        .comment("Optional stake address to include in the resulting address.")
+                }
 
                 row {
                     cell(addressMainnetCheck)
@@ -323,6 +339,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(checkSkipTestsCheck)
                 }
 
+                row("Output mode:") {
+                    cell(checkOutputModeCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("TTY for terminal output, JSON for machine output, IDE integrated for test tree.")
+                }
+
                 row {
                     cell(checkDebugCheck)
                 }
@@ -331,25 +354,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(checkSeedField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Initial unsigned seed for property tests (`--seed <UINT>`).")
+                        .comment("Unsigned integer seed for deterministic property tests.")
+                }
 
                 row("Max success:") {
                     cell(checkMaxSuccessField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Maximum successful runs for property tests (`--max-success <UINT>`).")
+                        .comment("Maximum successful iterations per property test.")
+                }
 
                 row("Property coverage mode:") {
                     cell(checkPropertyCoverageCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Coverage mode for property labels (`--property-coverage`).")
+                        .comment("How property-test label coverage is evaluated.")
+                }
 
                 row("Match tests pattern:") {
                     cell(checkMatchTestsField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Run only tests matching the pattern (`--match-tests`).")
+                        .comment("Examples: list, aiken/list, aiken/list.{map}. Separate entries with comma or space.")
+                }
 
                 row {
                     cell(checkExactMatchCheck)
@@ -359,19 +386,22 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(checkEnvField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Environment name for check (`--env <ENV>`).")
+                        .comment("Environment name from aiken.toml, for example preprod.")
+                }
 
                 row("Trace filter:") {
                     cell(checkTraceFilterCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Choose included traces for check (`--trace-filter`).")
+                        .comment("Select which trace categories to include while checking.")
+                }
 
                 row("Trace level:") {
                     cell(checkTraceLevelCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                }.comment("Set trace verbosity for check (`--trace-level`).")
+                        .comment("Controls detail level of traces in check output.")
+                }
             }
         }
     }

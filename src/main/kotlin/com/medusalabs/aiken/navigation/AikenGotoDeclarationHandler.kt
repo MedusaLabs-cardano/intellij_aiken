@@ -1,7 +1,6 @@
 package com.medusalabs.aiken.navigation
 
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
-import com.intellij.ide.util.EditSourceUtil
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.DumbService
@@ -9,14 +8,9 @@ import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.navigation.ItemPresentation
-import com.intellij.navigation.NavigationItem
-import com.intellij.openapi.util.Iconable
-import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
 import com.intellij.psi.TokenType
-import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.indexing.FileBasedIndex
@@ -24,7 +18,6 @@ import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.index.AikenIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
-import com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor
 
 class AikenGotoDeclarationHandler : GotoDeclarationHandler {
     override fun getGotoDeclarationTargets(sourceElement: PsiElement?, offset: Int, editor: Editor): Array<PsiElement>? {
@@ -46,6 +39,11 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         val name = element.text
         if (name.isBlank()) return null
 
+        AikenDeclarationResolver.resolve(element)?.let { resolved ->
+            if (isSameLocation(element, resolved)) return PsiElement.EMPTY_ARRAY
+            return arrayOf(resolved)
+        }
+
         val targets =
             when (elementType) {
                 AikenTokenTypes.IDENTIFIER,
@@ -59,13 +57,10 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
             }
 
         if (targets.isEmpty()) return null
-        if (targets.any { isSameLocation(element, it) }) {
-            val usageTargets = collectUsageTargets(element)
-            if (usageTargets.size > 1) {
-                return wrapTargets(deduplicateTargets(usageTargets), name).toTypedArray()
-            }
-        }
-        return wrapTargets(deduplicateTargets(targets), name).toTypedArray()
+        val deduplicatedTargets = deduplicateTargets(targets)
+        if (deduplicatedTargets.isEmpty()) return null
+        if (deduplicatedTargets.any { isSameLocation(element, it) }) return PsiElement.EMPTY_ARRAY
+        return deduplicatedTargets.toTypedArray()
     }
 
     private enum class DeclKind {
@@ -147,71 +142,6 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
             }
         }
         return deduped
-    }
-
-    private fun wrapTargets(targets: List<PsiElement>, fallbackName: String): List<PsiElement> {
-        if (targets.size <= 1) return targets
-        return targets.map { target ->
-            val text = AikenGotoPresentationSupport.buildPreview(target, focusToken = fallbackName) ?: fallbackName
-            val location = AikenGotoPresentationSupport.buildShortLocation(target)
-            WrappedGotoTarget(target, text, location)
-        }
-    }
-
-    private class WrappedGotoTarget(
-        private val delegate: PsiElement,
-        private val text: String,
-        private val location: String?
-    ) : FakePsiElement(), NavigationItem {
-        private val fixedPresentation =
-            object : ItemPresentation {
-                override fun getPresentableText(): String = text
-                override fun getLocationString(): String? = location
-                override fun getIcon(unused: Boolean) = delegate.getIcon(Iconable.ICON_FLAG_VISIBILITY)
-            }
-
-        override fun getParent(): PsiElement? = delegate.parent
-        override fun getContainingFile() = delegate.containingFile
-        override fun getProject() = delegate.project
-        override fun getTextRange() = delegate.textRange
-        override fun getName(): String = text
-        override fun getPresentation(): ItemPresentation = fixedPresentation
-        override fun canNavigate(): Boolean = EditSourceUtil.canNavigate(delegate)
-        override fun canNavigateToSource(): Boolean = canNavigate()
-
-        override fun navigate(requestFocus: Boolean) {
-            val descriptor = EditSourceUtil.getDescriptor(delegate) ?: return
-            if (descriptor.canNavigate()) {
-                descriptor.navigate(requestFocus)
-            }
-        }
-    }
-
-    private fun collectUsageTargets(element: PsiElement): List<PsiElement> {
-        val project = element.project
-        val references =
-            AikenRenamePsiElementProcessor()
-                .findReferences(element, GlobalSearchScope.allScope(project), false)
-        if (references.isEmpty()) return emptyList()
-
-        val results = ArrayList<PsiElement>()
-        val seen = HashSet<Pair<VirtualFile, Int>>()
-
-        for (reference in references) {
-            val referenceElement = reference.element
-            val psiFile = referenceElement.containingFile ?: continue
-            val virtualFile = psiFile.virtualFile ?: continue
-            val range = reference.rangeInElement
-            val absoluteStart = referenceElement.textRange.startOffset + range.startOffset
-            val leaf = psiFile.findElementAt(absoluteStart) ?: continue
-            val resolved = if (leaf.parent is PsiNamedElement) leaf.parent else leaf
-            val key = virtualFile to resolved.textRange.startOffset
-            if (seen.add(key)) {
-                results.add(resolved)
-            }
-        }
-
-        return results
     }
 
     private fun findGlobalDeclarationOffsets(text: CharSequence, name: String, kinds: Set<DeclKind>): List<Int> {

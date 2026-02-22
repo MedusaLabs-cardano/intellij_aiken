@@ -15,6 +15,7 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
+import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AikenIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 
@@ -32,8 +33,10 @@ object AikenDeclarationResolver {
         return when (type) {
             AikenTokenTypes.IDENTIFIER,
             AikenTokenTypes.FIELD -> resolveLocalOrGlobal(element, document, name)
-            AikenTokenTypes.FUNCTION -> resolveGlobal(element, name, setOf(DeclKind.FUNCTION))
-            AikenTokenTypes.TYPE -> resolveGlobal(element, name, setOf(DeclKind.TYPE, DeclKind.CONSTRUCTOR))
+            AikenTokenTypes.FUNCTION ->
+                resolveImportAlias(psiFile, name) ?: resolveGlobal(element, name, setOf(DeclKind.FUNCTION))
+            AikenTokenTypes.TYPE ->
+                resolveImportAlias(psiFile, name) ?: resolveGlobal(element, name, setOf(DeclKind.TYPE, DeclKind.CONSTRUCTOR))
             else -> null
         }
     }
@@ -52,8 +55,28 @@ object AikenDeclarationResolver {
         if (localOffset != null) {
             return resolveNamedElementAt(psiFile, localOffset)
         }
+        resolveImportAlias(psiFile, name)?.let { return it }
         val targets = findGlobalTargets(element.project, name, setOf(DeclKind.CONST, DeclKind.FUNCTION))
         return preferSameFile(element, targets) ?: targets.firstOrNull()
+    }
+
+    private fun resolveImportAlias(psiFile: com.intellij.psi.PsiFile, name: String): PsiElement? {
+        if (name.isBlank()) return null
+        if (psiFile.fileType != AikenFileType) return null
+
+        val useStatements = AikenUseStatementParser.parse(psiFile.text)
+        val aliasOffset =
+            useStatements
+                .asSequence()
+                .flatMap { it.items.asSequence() }
+                .mapNotNull { item ->
+                    val aliasRange = item.aliasRange ?: return@mapNotNull null
+                    if (item.alias == name) aliasRange.startOffset else null
+                }
+                .firstOrNull()
+                ?: return null
+
+        return resolveNamedElementAt(psiFile, aliasOffset)
     }
 
     private fun resolveGlobal(element: PsiElement, name: String, kinds: Set<DeclKind>): PsiElement? {

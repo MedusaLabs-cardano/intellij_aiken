@@ -12,6 +12,7 @@ import com.intellij.util.io.KeyDescriptor
 import com.intellij.psi.TokenType
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
+import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.lang.AikenFileType
 import java.io.DataInput
 import java.io.DataOutput
@@ -29,7 +30,7 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 7
+    override fun getVersion(): Int = 8
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -139,6 +140,16 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                 }
 
                 lexer.advance()
+            }
+
+            val useStatements = AikenUseStatementParser.parse(text)
+            for (stmt in useStatements) {
+                for (item in stmt.items) {
+                    val alias = item.alias?.trim().orEmpty()
+                    if (alias.length < 2) continue
+                    val kind = if (alias.first().isUpperCase()) IdentifierKind.TYPE else IdentifierKind.IDENTIFIER
+                    result[alias] = (result[alias] ?: 0) or kind
+                }
             }
 
             result

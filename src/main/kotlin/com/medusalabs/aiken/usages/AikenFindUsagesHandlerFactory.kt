@@ -215,7 +215,11 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
                         } else {
                             UsageConfig(
                                 lexerFactory = { AikenLexing.createLexer() },
-                                tokenTypes = setOf(AikenTokenTypes.IDENTIFIER, AikenTokenTypes.FIELD),
+                                tokenTypes = setOf(
+                                    AikenTokenTypes.IDENTIFIER,
+                                    AikenTokenTypes.FIELD,
+                                    AikenTokenTypes.FUNCTION
+                                ),
                                 fileType = AikenFileType,
                                 indexId = AikenIdentifierIndex.NAME,
                                 scope = UsageScope.CURRENT_FILE,
@@ -225,7 +229,11 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
                     }
                     AikenTokenTypes.FIELD -> UsageConfig(
                         lexerFactory = { AikenLexing.createLexer() },
-                        tokenTypes = setOf(AikenTokenTypes.IDENTIFIER, AikenTokenTypes.FIELD),
+                        tokenTypes = setOf(
+                            AikenTokenTypes.IDENTIFIER,
+                            AikenTokenTypes.FIELD,
+                            AikenTokenTypes.FUNCTION
+                        ),
                         fileType = AikenFileType,
                         indexId = AikenIdentifierIndex.NAME,
                         scope = UsageScope.CURRENT_FILE,

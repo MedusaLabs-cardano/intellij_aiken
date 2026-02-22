@@ -25,7 +25,7 @@ class AikenImportIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 2
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -48,6 +48,10 @@ class AikenImportIndex : FileBasedIndexExtension<String, Int>() {
                 for (item in stmt.items) {
                     if (item.name.isBlank()) continue
                     result[item.name] = 1
+                    val alias = item.alias?.trim().orEmpty()
+                    if (alias.isNotEmpty()) {
+                        result[alias] = 1
+                    }
                 }
             }
 

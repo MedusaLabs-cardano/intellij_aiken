@@ -271,7 +271,11 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
                         } else {
                             RenameConfig(
                                 lexerFactory = { AikenLexing.createLexer() },
-                                renameTokenTypes = setOf(AikenTokenTypes.IDENTIFIER, AikenTokenTypes.FIELD),
+                                renameTokenTypes = setOf(
+                                    AikenTokenTypes.IDENTIFIER,
+                                    AikenTokenTypes.FIELD,
+                                    AikenTokenTypes.FUNCTION
+                                ),
                                 fileType = AikenFileType,
                                 indexId = AikenIdentifierIndex.NAME,
                                 scope = RenameScope.CURRENT_FILE,
@@ -281,7 +285,11 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
                     }
                     AikenTokenTypes.FIELD -> RenameConfig(
                         lexerFactory = { AikenLexing.createLexer() },
-                        renameTokenTypes = setOf(AikenTokenTypes.IDENTIFIER, AikenTokenTypes.FIELD),
+                        renameTokenTypes = setOf(
+                            AikenTokenTypes.IDENTIFIER,
+                            AikenTokenTypes.FIELD,
+                            AikenTokenTypes.FUNCTION
+                        ),
                         fileType = AikenFileType,
                         indexId = AikenIdentifierIndex.NAME,
                         scope = RenameScope.CURRENT_FILE,
