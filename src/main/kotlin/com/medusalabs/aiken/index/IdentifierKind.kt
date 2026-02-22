@@ -5,5 +5,5 @@ object IdentifierKind {
     const val FUNCTION: Int = 1 shl 1
     const val FIELD: Int = 1 shl 2
     const val IDENTIFIER: Int = 1 shl 3
+    const val TEST: Int = 1 shl 4
 }
-

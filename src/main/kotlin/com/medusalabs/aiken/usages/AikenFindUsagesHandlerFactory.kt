@@ -5,7 +5,7 @@ import com.intellij.find.findUsages.FindUsagesHandlerFactory
 import com.intellij.find.findUsages.FindUsagesOptions
 import com.intellij.lexer.Lexer
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
@@ -51,20 +51,20 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
         processor: Processor<in UsageInfo>,
         options: FindUsagesOptions
     ): Boolean {
-        return ReadAction.compute<Boolean, RuntimeException> {
+        return runReadAction {
             val resolved = AikenDeclarationResolver.resolve(element) ?: element
             val name = resolved.text
-            if (name.isEmpty()) return@compute true
+            if (name.isEmpty()) return@runReadAction true
             val declarationRange = resolved.textRange
             val declarationFile = resolved.containingFile?.virtualFile
-            if (!processor.process(UsageInfo(resolved))) return@compute false
+            if (!processor.process(UsageInfo(resolved))) return@runReadAction false
 
-            val type = resolved.node?.elementType ?: return@compute true
+            val type = resolved.node?.elementType ?: return@runReadAction true
             val project = resolved.project
-            val config = UsageConfig.fromElement(resolved, type) ?: return@compute true
+            val config = UsageConfig.fromElement(resolved, type) ?: return@runReadAction true
 
             val targetFiles = collectTargetFiles(project, resolved, config, name)
-            if (targetFiles.isEmpty()) return@compute true
+            if (targetFiles.isEmpty()) return@runReadAction true
 
             val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
             val psiManager = PsiManager.getInstance(project)
@@ -77,7 +77,7 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
                 val ranges = collectRanges(document, config, name, limit)
                 for (range in ranges) {
                     if (vf == declarationFile && declarationRange == range) continue
-                    if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return@compute false
+                    if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return@runReadAction false
                 }
             }
 

@@ -46,7 +46,7 @@ class IndexedIdentifierCompletionProvider(
                     if (!prefixMatcher.prefixMatches(key)) return@Processor true
                     if (seen.add(key)) {
                         val kindMask = resolveKindMask(index, key, scope)
-                        val kind = dominantKind(kindMask)
+                        val kind = dominantKind(kindMask) ?: return@Processor true
                         val priority = basePriority + kindPriority(kind)
                         result.addElement(CompletionItemFactory.create(key, kind, priority))
                         added++
@@ -74,13 +74,23 @@ class IndexedIdentifierCompletionProvider(
             0
         }
 
-    private fun dominantKind(kindMask: Int): CompletionSymbolKind =
-        when {
-            kindMask and IdentifierKind.TYPE != 0 -> CompletionSymbolKind.TYPE
-            kindMask and IdentifierKind.FUNCTION != 0 -> CompletionSymbolKind.FUNCTION
-            kindMask and IdentifierKind.FIELD != 0 -> CompletionSymbolKind.FIELD
+    private fun dominantKind(kindMask: Int): CompletionSymbolKind? {
+        val callableMask =
+            kindMask and (
+                IdentifierKind.TYPE or
+                    IdentifierKind.FUNCTION or
+                    IdentifierKind.FIELD or
+                    IdentifierKind.IDENTIFIER
+                )
+        if (callableMask == 0) return null
+
+        return when {
+            callableMask and IdentifierKind.TYPE != 0 -> CompletionSymbolKind.TYPE
+            callableMask and IdentifierKind.FUNCTION != 0 -> CompletionSymbolKind.FUNCTION
+            callableMask and IdentifierKind.FIELD != 0 -> CompletionSymbolKind.FIELD
             else -> CompletionSymbolKind.IDENTIFIER
         }
+    }
 
     private fun kindPriority(kind: CompletionSymbolKind): Double =
         when (kind) {

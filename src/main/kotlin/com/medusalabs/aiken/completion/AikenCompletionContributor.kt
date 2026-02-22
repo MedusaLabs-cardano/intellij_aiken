@@ -26,11 +26,11 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
                 keywordTokenType = AikenTokenTypes.KEYWORD,
                 declarationKindByKeyword = mapOf(
                     "fn" to CompletionSymbolKind.FUNCTION,
-                    "test" to CompletionSymbolKind.FUNCTION,
                     "bench" to CompletionSymbolKind.FUNCTION,
                     "validator" to CompletionSymbolKind.FUNCTION,
                     "type" to CompletionSymbolKind.TYPE
                 ),
+                skipDeclarationKeywords = setOf("test"),
                 bindingKeywords = setOf("let", "const", "expect"),
                 includeNonDeclarationIdentifiers = false
             )

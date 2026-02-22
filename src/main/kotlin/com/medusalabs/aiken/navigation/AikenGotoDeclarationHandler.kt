@@ -1,6 +1,7 @@
 package com.medusalabs.aiken.navigation
 
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
+import com.intellij.ide.util.EditSourceUtil
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.DumbService
@@ -8,6 +9,9 @@ import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.navigation.ItemPresentation
+import com.intellij.navigation.NavigationItem
+import com.intellij.openapi.util.Iconable
 import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
@@ -15,8 +19,6 @@ import com.intellij.psi.TokenType
 import com.intellij.psi.impl.FakePsiElement
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.navigation.ItemPresentation
-import com.intellij.navigation.NavigationItem
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
@@ -60,10 +62,10 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         if (targets.any { isSameLocation(element, it) }) {
             val usageTargets = collectUsageTargets(element)
             if (usageTargets.size > 1) {
-                return qualifyTargets(name, usageTargets).toTypedArray()
+                return wrapTargets(deduplicateTargets(usageTargets), name).toTypedArray()
             }
         }
-        return qualifyTargets(name, targets).toTypedArray()
+        return wrapTargets(deduplicateTargets(targets), name).toTypedArray()
     }
 
     private enum class DeclKind {
@@ -124,29 +126,65 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         }
     }
 
-    /**
-     * Decorate targets with qualifier so popup shows e.g. `list.length` instead of many `length`.
-     */
-    private fun qualifyTargets(name: String, targets: List<PsiElement>): List<PsiElement> {
-        if (targets.size <= 1) return targets
-        return targets.map { target ->
-            val qualifier = buildQualifier(target)
-            if (qualifier.isNullOrBlank()) target else QualifiedTarget(target, qualifier, name)
-        }
-    }
-
-    private fun buildQualifier(target: PsiElement): String? {
-        val file = target.containingFile ?: return null
-        val vf = file.virtualFile
-        val fileQualifier = vf?.nameWithoutExtension
-        if (!fileQualifier.isNullOrBlank()) return fileQualifier
-        return file.name.substringBeforeLast('.').ifBlank { null }
-    }
-
     private fun isSameLocation(first: PsiElement, second: PsiElement): Boolean {
         val leftFile = first.containingFile?.virtualFile
         val rightFile = second.containingFile?.virtualFile
         return leftFile == rightFile && first.textRange == second.textRange
+    }
+
+    private fun deduplicateTargets(targets: List<PsiElement>): List<PsiElement> {
+        if (targets.size <= 1) return targets
+        val seen = HashSet<Triple<VirtualFile?, Int, Int>>(targets.size)
+        val deduped = ArrayList<PsiElement>(targets.size)
+        for (target in targets) {
+            val key = Triple(
+                target.containingFile?.virtualFile,
+                target.textRange.startOffset,
+                target.textRange.endOffset
+            )
+            if (seen.add(key)) {
+                deduped.add(target)
+            }
+        }
+        return deduped
+    }
+
+    private fun wrapTargets(targets: List<PsiElement>, fallbackName: String): List<PsiElement> {
+        if (targets.size <= 1) return targets
+        return targets.map { target ->
+            val text = AikenGotoPresentationSupport.buildPreview(target, focusToken = fallbackName) ?: fallbackName
+            val location = AikenGotoPresentationSupport.buildShortLocation(target)
+            WrappedGotoTarget(target, text, location)
+        }
+    }
+
+    private class WrappedGotoTarget(
+        private val delegate: PsiElement,
+        private val text: String,
+        private val location: String?
+    ) : FakePsiElement(), NavigationItem {
+        private val fixedPresentation =
+            object : ItemPresentation {
+                override fun getPresentableText(): String = text
+                override fun getLocationString(): String? = location
+                override fun getIcon(unused: Boolean) = delegate.getIcon(Iconable.ICON_FLAG_VISIBILITY)
+            }
+
+        override fun getParent(): PsiElement? = delegate.parent
+        override fun getContainingFile() = delegate.containingFile
+        override fun getProject() = delegate.project
+        override fun getTextRange() = delegate.textRange
+        override fun getName(): String = text
+        override fun getPresentation(): ItemPresentation = fixedPresentation
+        override fun canNavigate(): Boolean = EditSourceUtil.canNavigate(delegate)
+        override fun canNavigateToSource(): Boolean = canNavigate()
+
+        override fun navigate(requestFocus: Boolean) {
+            val descriptor = EditSourceUtil.getDescriptor(delegate) ?: return
+            if (descriptor.canNavigate()) {
+                descriptor.navigate(requestFocus)
+            }
+        }
     }
 
     private fun collectUsageTargets(element: PsiElement): List<PsiElement> {
@@ -174,28 +212,6 @@ class AikenGotoDeclarationHandler : GotoDeclarationHandler {
         }
 
         return results
-    }
-
-    private class QualifiedTarget(
-        private val delegate: PsiElement,
-        private val qualifier: String,
-        private val name: String
-    ) : FakePsiElement(), NavigationItem {
-        override fun getParent(): PsiElement? = delegate.parent
-        override fun getName(): String = "$qualifier.$name"
-        override fun getPresentation(): ItemPresentation? {
-            val presentation = (delegate as? NavigationItem)?.presentation
-            return presentation?.let {
-                object : ItemPresentation by it {
-                    override fun getPresentableText(): String = "$qualifier.$name"
-                }
-            }
-        }
-        override fun navigate(requestFocus: Boolean) =
-            (delegate as? NavigationItem)?.navigate(requestFocus) ?: Unit
-
-        override fun canNavigate(): Boolean = (delegate as? NavigationItem)?.canNavigate() == true
-        override fun canNavigateToSource(): Boolean = (delegate as? NavigationItem)?.canNavigateToSource() == true
     }
 
     private fun findGlobalDeclarationOffsets(text: CharSequence, name: String, kinds: Set<DeclKind>): List<Int> {

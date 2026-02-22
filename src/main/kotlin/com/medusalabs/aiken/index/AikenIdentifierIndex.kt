@@ -29,7 +29,7 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
 
     override fun getName(): ID<String, Int> = NAME
 
-    override fun getVersion(): Int = 6
+    override fun getVersion(): Int = 7
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -56,6 +56,7 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
             lexer.start(text)
 
             val result = HashMap<String, Int>()
+            val testNames = HashSet<String>()
             var collectingBindings: Boolean = false
             var expectedDeclarationKind: Int? = null
             while (lexer.tokenType != null) {
@@ -80,9 +81,9 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                     expectedDeclarationKind =
                         when (word) {
                             "fn",
-                            "test",
                             "bench",
                             "validator" -> IdentifierKind.FUNCTION
+                            "test" -> IdentifierKind.TEST
                             "type" -> IdentifierKind.TYPE
                             "let",
                             "const",
@@ -105,6 +106,9 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                             tokenType == AikenTokenTypes.TYPE -> {
                             val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                             if (word.length >= 2) {
+                                if (expectedDeclarationKind == IdentifierKind.TEST) {
+                                    testNames.add(word)
+                                }
                                 result[word] = (result[word] ?: 0) or expectedDeclarationKind!!
                             }
                             expectedDeclarationKind = null
@@ -128,7 +132,9 @@ class AikenIdentifierIndex : FileBasedIndexExtension<String, Int>() {
                                 FUNCTION_TOKENS.contains(tokenType) -> IdentifierKind.FUNCTION
                                 else -> IdentifierKind.FIELD
                             }
-                        result[word] = (result[word] ?: 0) or kind
+                        if (kind != IdentifierKind.FUNCTION || !testNames.contains(word)) {
+                            result[word] = (result[word] ?: 0) or kind
+                        }
                     }
                 }
 
