@@ -3,6 +3,7 @@ package com.medusalabs.aiken.run
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
+import com.intellij.openapi.ui.TextBrowseFolderListener
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
@@ -59,18 +60,17 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val checkTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
 
     init {
-        projectDirectoryField.addBrowseFolderListener(
-            "Select project directory",
-            "Directory passed to `aiken ... [DIRECTORY]` and used as working directory.",
-            null,
+        val projectDirectoryDescriptor =
             FileChooserDescriptorFactory.createSingleFolderDescriptor()
-        )
-        aikenBinaryField.addBrowseFolderListener(
-            "Select aiken binary",
-            "Path to `aiken` executable.",
-            null,
+                .withTitle("Select project directory")
+                .withDescription("Directory passed to `aiken ... [DIRECTORY]` and used as working directory.")
+        projectDirectoryField.addBrowseFolderListener(TextBrowseFolderListener(projectDirectoryDescriptor, null))
+
+        val aikenBinaryDescriptor =
             FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
-        )
+                .withTitle("Select aiken binary")
+                .withDescription("Path to `aiken` executable.")
+        aikenBinaryField.addBrowseFolderListener(TextBrowseFolderListener(aikenBinaryDescriptor, null))
 
         (projectDirectoryField.textField as? JBTextField)?.emptyText?.text = "e.g. /home/user/my-aiken-project"
         (aikenBinaryField.textField as? JBTextField)?.emptyText?.text = "aiken"
@@ -197,7 +197,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(commandLabel)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Set automatically by configuration type.")
                 }
 
                 row("Project directory:") {

@@ -58,7 +58,6 @@
 
         <gotoDeclarationHandler implementation="com.medusalabs.aiken.navigation.AikenGotoDeclarationHandler"/>
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
-        <gotoTargetRendererProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetRendererProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>
 
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
