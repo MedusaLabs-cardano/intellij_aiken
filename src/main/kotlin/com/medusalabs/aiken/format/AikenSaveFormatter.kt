@@ -25,7 +25,9 @@ class AikenSaveFormatter : FileDocumentManagerListener {
             else -> null
         } ?: return
 
-        val formatted = runFormatter(command, document.text) ?: return
+        val input = AikenFormatterInputNormalizer.normalizeWhitespaceOnlyLines(document.text)
+        val formatted = runFormatter(command, input) ?: return
+        if (formatted == document.text) return
 
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
         WriteCommandAction.runWriteCommandAction(project) {

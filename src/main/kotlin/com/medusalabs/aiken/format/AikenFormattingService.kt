@@ -56,7 +56,8 @@ class AikenFormattingService : FormattingService {
 
         val project = file.project
         val document = PsiDocumentManager.getInstance(project).getDocument(file) ?: return
-        val formatted = runFormatter(command, document.text) ?: return
+        val input = AikenFormatterInputNormalizer.normalizeWhitespaceOnlyLines(document.text)
+        val formatted = runFormatter(command, input) ?: return
         if (formatted == document.text) return
 
         WriteCommandAction.runWriteCommandAction(project) {
@@ -83,4 +84,3 @@ class AikenFormattingService : FormattingService {
             null
         }
 }
-

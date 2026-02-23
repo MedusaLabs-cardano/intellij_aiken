@@ -4,11 +4,14 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.TextBrowseFolderListener
+import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Dimension
 import javax.swing.JComponent
@@ -54,7 +57,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val checkMaxSuccessField = JBTextField()
     private val checkPropertyCoverageCombo = JComboBox(AikenPropertyCoverage.entries.toTypedArray())
     private val checkMatchTestsField = JBTextField()
-    private val checkExactMatchCheck = JBCheckBox("Use exact test-name match")
+    private val checkExactMatchCheck = JBCheckBox("Exact test name match")
+    private val checkExactMatchPanel = JPanel(BorderLayout())
     private val checkEnvField = JBTextField()
     private val checkTraceFilterCombo = JComboBox(AikenTraceFilter.entries.toTypedArray())
     private val checkTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
@@ -88,6 +92,9 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         checkMaxSuccessField.emptyText.text = "100"
         checkMatchTestsField.emptyText.text = "e.g. list, aiken/list, aiken/list.{map}"
         checkEnvField.emptyText.text = "e.g. preprod"
+        checkExactMatchPanel.isOpaque = false
+        checkExactMatchPanel.border = JBUI.Borders.empty(2, 0)
+        checkExactMatchPanel.add(checkExactMatchCheck, BorderLayout.WEST)
     }
 
     override fun resetEditorFrom(configuration: AikenRunConfiguration) {
@@ -191,7 +198,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         commandSpecificPanel.add(createAddressPanel(), addressCard)
         commandSpecificPanel.add(createCheckPanel(), checkCard)
 
-        return panel {
+        val content = panel {
             group("General") {
                 row("Command:") {
                     cell(commandLabel)
@@ -226,9 +233,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     .resizableColumn()
                     .align(AlignX.FILL)
             }
-        }.also {
-            it.preferredSize = Dimension(860, 760)
         }
+
+        content.preferredSize = Dimension(860, 760)
+        return ScrollPaneFactory.createScrollPane(content, true)
     }
 
     private fun createBuildPanel(): JComponent {
@@ -374,11 +382,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(checkMatchTestsField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Examples: list, aiken/list, aiken/list.{map}. Separate entries with comma or space.")
+                        .comment("Examples: list, aiken/list, aiken/list.{map}, module. Separate entries with comma or space.")
                 }
 
                 row {
-                    cell(checkExactMatchCheck)
+                    cell(checkExactMatchPanel)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
                 }
 
                 row("Check environment:") {

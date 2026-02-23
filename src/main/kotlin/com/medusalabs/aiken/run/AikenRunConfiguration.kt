@@ -172,6 +172,13 @@ class AikenRunConfiguration(
         }
     }
 
+    override fun onNewConfigurationCreated() {
+        super.onNewConfigurationCreated()
+        if (name.isUnnamedLike()) {
+            name = command.defaultConfigurationName()
+        }
+    }
+
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
         if (
             command == AikenRunCommand.CHECK &&
@@ -957,6 +964,11 @@ class AikenRunConfiguration(
         handler: ProcessHandler
     ) {
         val rootId = "aiken-root"
+        val rootLeafCount =
+            report.modules.sumOf { it.tests.size } +
+                diagnostics.warnings.size +
+                diagnostics.errors.size
+        val rootDisplayName = withLeafCount("aiken check", rootLeafCount)
         val allTests =
             report.modules.sumOf { it.tests.size } +
                 diagnostics.errors.size
@@ -964,7 +976,7 @@ class AikenRunConfiguration(
             handler,
             "testSuiteStarted",
             linkedMapOf(
-                "name" to "aiken check",
+                "name" to rootDisplayName,
                 "nodeId" to rootId,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
@@ -992,15 +1004,29 @@ class AikenRunConfiguration(
             asTestCases = true
         )
 
+        val testsLeafCount = report.modules.sumOf { it.tests.size }
+        val testsRootId = "tests-root"
+        val testsRootDisplayName = withLeafCount("tests", testsLeafCount)
+        emitServiceMessage(
+            handler,
+            "testSuiteStarted",
+            linkedMapOf(
+                "name" to testsRootDisplayName,
+                "nodeId" to testsRootId,
+                "parentNodeId" to rootId
+            )
+        )
+
         for ((moduleIndex, module) in report.modules.withIndex()) {
             val moduleId = "module-$moduleIndex"
+            val moduleDisplayName = withLeafCount(moduleDisplayName(module.name), module.tests.size)
             emitServiceMessage(
                 handler,
                 "testSuiteStarted",
                 linkedMapOf(
-                    "name" to module.name,
+                    "name" to moduleDisplayName,
                     "nodeId" to moduleId,
-                    "parentNodeId" to rootId
+                    "parentNodeId" to testsRootId
                 )
             )
             for ((testIndex, test) in module.tests.withIndex()) {
@@ -1070,7 +1096,7 @@ class AikenRunConfiguration(
                 handler,
                 "testSuiteFinished",
                 linkedMapOf(
-                    "name" to module.name,
+                    "name" to moduleDisplayName,
                     "nodeId" to moduleId
                 )
             )
@@ -1080,7 +1106,16 @@ class AikenRunConfiguration(
             handler,
             "testSuiteFinished",
             linkedMapOf(
-                "name" to "aiken check",
+                "name" to testsRootDisplayName,
+                "nodeId" to testsRootId
+            )
+        )
+
+        emitServiceMessage(
+            handler,
+            "testSuiteFinished",
+            linkedMapOf(
+                "name" to rootDisplayName,
                 "nodeId" to rootId
             )
         )
@@ -1092,12 +1127,14 @@ class AikenRunConfiguration(
         handler: ProcessHandler
     ) {
         val rootId = "aiken-root"
+        val rootLeafCount = diagnostics.warnings.size + diagnostics.errors.size
+        val rootDisplayName = withLeafCount("aiken check", rootLeafCount)
         val allTests = diagnostics.errors.size
         emitServiceMessage(
             handler,
             "testSuiteStarted",
             linkedMapOf(
-                "name" to "aiken check",
+                "name" to rootDisplayName,
                 "nodeId" to rootId,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
@@ -1129,7 +1166,7 @@ class AikenRunConfiguration(
             handler,
             "testSuiteFinished",
             linkedMapOf(
-                "name" to "aiken check",
+                "name" to rootDisplayName,
                 "nodeId" to rootId
             )
         )
@@ -1146,7 +1183,7 @@ class AikenRunConfiguration(
         asTestCases: Boolean
     ) {
         if (entries.isEmpty()) return
-        val sectionDisplayName = sectionName
+        val sectionDisplayName = withLeafCount(sectionName, entries.size)
 
         emitServiceMessage(
             handler,
@@ -1264,16 +1301,21 @@ class AikenRunConfiguration(
 
     private fun SMTestProxy.isWarningDiagnosticNode(): Boolean {
         val currentName = name.trim()
-        if (currentName.startsWith("⚠️")) return true
-        if (currentName.equals("warnings", ignoreCase = true)) return true
+        if (currentName.startsWith("warnings", ignoreCase = true)) return true
         if (currentName.startsWith("[warning ", ignoreCase = true)) return true
 
         val parentName = parent?.name?.trim().orEmpty()
-        if (parentName.startsWith("⚠️")) return true
-        if (parentName.equals("warnings", ignoreCase = true)) return true
+        if (parentName.startsWith("warnings", ignoreCase = true)) return true
         if (parentName.startsWith("[warning ", ignoreCase = true)) return true
 
         return false
+    }
+
+    private fun withLeafCount(name: String, leafCount: Int): String = "$name ($leafCount)"
+
+    private fun moduleDisplayName(moduleName: String): String {
+        val normalized = moduleName.trim().replace('\\', '/')
+        return normalized.removePrefix("tests/").ifBlank { moduleName }
     }
 
     private fun buildDiagnosticNodeTitle(sectionName: String, index: Int, block: String): String {
@@ -1915,6 +1957,19 @@ class AikenRunConfiguration(
         return value.toBooleanStrictOrNull() ?: defaultValue
     }
 
+    private fun String?.isUnnamedLike(): Boolean {
+        val trimmed = this?.trim().orEmpty()
+        if (trimmed.isEmpty()) return true
+        return UNNAMED_NAME_REGEX.matches(trimmed)
+    }
+
+    private fun AikenRunCommand.defaultConfigurationName(): String =
+        when (this) {
+            AikenRunCommand.CHECK -> "Check"
+            AikenRunCommand.BUILD -> "Build"
+            AikenRunCommand.ADDRESS -> "Address"
+        }
+
     private inline fun <reified T : Enum<T>> readEnum(
         element: Element,
         fieldName: String,
@@ -1928,7 +1983,7 @@ class AikenRunConfiguration(
         const val AIKEN_TEST_LOCATION_PROTOCOL = "aiken-test"
         val TEST_DECLARATION_REGEX = Regex("""^\s*(pub\s+)?test\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
         val DIAGNOSTIC_BLOCK_SEPARATOR_REGEX = Regex("""\n{2,}""")
-        val WARNING_HEADER_REGEX = Regex("""^(warning(\[[^\]]+])?:|.+:\s*warning(\[[^\]]+])?:)""", RegexOption.IGNORE_CASE)
+        val WARNING_HEADER_REGEX = Regex("""^(warning(\[[^\]]+])?:|.+:\s*warning(\[[^\]]+])?:|⚠\s+.*)$""", RegexOption.IGNORE_CASE)
         val ERROR_HEADER_REGEX = Regex("""^(error(\[[^\]]+])?:|.+:\s*error(\[[^\]]+])?:|×\s+.*)$""", RegexOption.IGNORE_CASE)
         val SUMMARY_ERRORS_WARNINGS_REGEX = Regex("""\bsummary\b.*\berrors?\b.*\bwarnings?\b""")
         val WARNING_COUNTER_ONLY_REGEX = Regex("""\b\d+\s+warnings?\b""")
@@ -1944,6 +1999,7 @@ class AikenRunConfiguration(
         val DIAGNOSTIC_PREFIX_REGEX = Regex("""^(warning|error)(\[[^\]]+])?:\s*""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_LEADING_SYMBOLS_REGEX = Regex("""^[^A-Za-z0-9]+""")
         val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[;\d?]*[ -/]*[@-~]""")
+        val UNNAMED_NAME_REGEX = Regex("""^Unnamed(?:\s*\(\d+\))?$""", RegexOption.IGNORE_CASE)
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
     }
 }
