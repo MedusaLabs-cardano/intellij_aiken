@@ -43,6 +43,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildOutField = JBTextField()
     private val buildTraceFilterCombo = JComboBox(AikenTraceFilter.entries.toTypedArray())
     private val buildTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
+    private val buildOutputModeCombo = JComboBox(AikenBuildOutputMode.entries.toTypedArray())
 
     private val addressInField = JBTextField()
     private val addressModuleField = JBTextField()
@@ -118,6 +119,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         buildOutField.text = configuration.buildOut.ifBlank { "plutus.json" }
         buildTraceFilterCombo.selectedItem = configuration.buildTraceFilter
         buildTraceLevelCombo.selectedItem = configuration.buildTraceLevel
+        buildOutputModeCombo.selectedItem = configuration.buildOutputMode
 
         addressInField.text = configuration.addressInput.ifBlank { "plutus.json" }
         addressModuleField.text = configuration.addressModule
@@ -168,6 +170,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             (buildTraceFilterCombo.selectedItem as? AikenTraceFilter) ?: AikenTraceFilter.ALL
         configuration.buildTraceLevel =
             (buildTraceLevelCombo.selectedItem as? AikenTraceLevel) ?: AikenTraceLevel.SILENT
+        configuration.buildOutputMode =
+            (buildOutputModeCombo.selectedItem as? AikenBuildOutputMode) ?: AikenBuildOutputMode.IDE_INTEGRATED
 
         configuration.addressInput = addressInField.text.trim()
         configuration.addressModule = addressModuleField.text.trim()
@@ -252,6 +256,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row {
                     cell(buildWatchCheck)
+                }
+
+                row("Output mode:") {
+                    cell(buildOutputModeCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("TTY for terminal output, IDE integrated for structured warnings/errors.")
                 }
 
                 row {

@@ -1,5 +1,11 @@
 package com.medusalabs.aiken.run
 
+import com.intellij.build.BuildTreeConsoleView
+import com.intellij.build.DefaultBuildDescriptor
+import com.intellij.build.events.MessageEvent
+import com.intellij.build.progress.BuildRootProgressImpl
+import com.intellij.build.progress.BuildProgress
+import com.intellij.build.progress.BuildProgressDescriptor
 import com.intellij.execution.Executor
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.DefaultExecutionResult
@@ -30,6 +36,7 @@ import com.intellij.execution.testframework.AbstractTestProxy
 import com.intellij.execution.testframework.actions.AbstractRerunFailedTestsAction
 import com.intellij.execution.testframework.TestConsoleProperties
 import com.intellij.execution.ui.ConsoleView
+import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
@@ -59,6 +66,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -107,6 +115,9 @@ class AikenRunConfiguration(
 
     @JvmField
     var buildTraceLevel: AikenTraceLevel = AikenTraceLevel.SILENT
+
+    @JvmField
+    var buildOutputMode: AikenBuildOutputMode = AikenBuildOutputMode.IDE_INTEGRATED
 
     @JvmField
     var addressInput: String = "plutus.json"
@@ -181,6 +192,13 @@ class AikenRunConfiguration(
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
         if (
+            command == AikenRunCommand.BUILD &&
+            buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
+        ) {
+            return AikenBuildMessagesRunState(environment)
+        }
+
+        if (
             command == AikenRunCommand.CHECK &&
             checkOutputMode == AikenCheckOutputMode.IDE_INTEGRATED
         ) {
@@ -194,9 +212,11 @@ class AikenRunConfiguration(
                 val args = buildCommandParameters()
                 val invocation = buildInvocation(executable, args, workDir)
 
-                // `aiken check` emits rich human-readable output only for TTY.
-                // Running via PTY keeps output identical to terminal instead of JSON fallback.
-                if (command == AikenRunCommand.CHECK && checkOutputMode == AikenCheckOutputMode.TTY) {
+                // `aiken check` and `aiken build` emit rich human-readable output in TTY mode.
+                if (
+                    (command == AikenRunCommand.CHECK && checkOutputMode == AikenCheckOutputMode.TTY) ||
+                    (command == AikenRunCommand.BUILD && buildOutputMode == AikenBuildOutputMode.TTY)
+                ) {
                     return createPtyProcessHandler(invocation, workDir)
                 }
 
@@ -243,7 +263,9 @@ class AikenRunConfiguration(
                                     ) {
                                         super.customizeCellRenderer(tree, value, selected, expanded, leaf, row, hasFocus)
                                         val proxy = SMTRunnerTestTreeView.getTestProxyFor(value) ?: return
-                                        if (proxy.isWarningDiagnosticNode()) {
+                                        if (proxy.isErrorDiagnosticNode()) {
+                                            icon = AllIcons.General.Error
+                                        } else if (proxy.isWarningDiagnosticNode()) {
                                             icon = AllIcons.General.Warning
                                         }
                                     }
@@ -487,6 +509,262 @@ class AikenRunConfiguration(
         }
     }
 
+    private inner class AikenBuildMessagesRunState(
+        private val executionEnvironment: ExecutionEnvironment
+    ) : RunProfileState {
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val processHandler = AikenAsyncProcessHandler()
+            val buildDescriptor = createBuildDescriptor(executionEnvironment)
+            val baseConsole = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+            val buildConsole = BuildTreeConsoleView(project, buildDescriptor, baseConsole)
+            buildConsole.attachToProcess(processHandler)
+            val buildProgress = createBuildProgress(buildConsole, buildDescriptor)
+            AppExecutorUtil.getAppExecutorService().execute {
+                runBuildWithIdeIntegration(processHandler, executionEnvironment, buildProgress)
+            }
+            return DefaultExecutionResult(buildConsole, processHandler)
+        }
+
+        private fun createBuildDescriptor(environment: ExecutionEnvironment): DefaultBuildDescriptor {
+            val workDir = resolveProjectDirectory().orEmpty()
+            val buildId = "aiken-build-${System.currentTimeMillis()}"
+            return DefaultBuildDescriptor(
+                buildId,
+                "Aiken build",
+                workDir,
+                System.currentTimeMillis()
+            ).withExecutionEnvironment(environment)
+        }
+
+        private fun createBuildProgress(
+            buildConsole: BuildTreeConsoleView,
+            descriptor: DefaultBuildDescriptor
+        ): BuildProgress<BuildProgressDescriptor> {
+            val buildProgress: BuildProgress<BuildProgressDescriptor> = BuildRootProgressImpl(buildConsole)
+            val progressDescriptor =
+                object : BuildProgressDescriptor {
+                    override fun getTitle(): String = descriptor.title
+
+                    override fun getBuildDescriptor(): DefaultBuildDescriptor = descriptor
+                }
+            buildProgress.start(progressDescriptor)
+            return buildProgress
+        }
+
+        private fun runBuildWithIdeIntegration(
+            handler: AikenAsyncProcessHandler,
+            environment: ExecutionEnvironment,
+            buildProgress: BuildProgress<BuildProgressDescriptor>
+        ) {
+            handler.startNotify()
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+            val ideWatchEnabled = watch && buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
+            val restartRequested = AtomicBoolean(false)
+            val watchConnection =
+                if (ideWatchEnabled) {
+                    installIdeIntegratedWatch(environment, workDir, handler, restartRequested, restartMessage = "build")
+                } else {
+                    null
+                }
+            var lastExitCode = 0
+
+            try {
+                buildProgress.progress("Running aiken build")
+                val args = buildCommandParameters()
+                val invocation = buildInvocation(executable, args, workDir)
+                val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
+                lastExitCode = run.exitCode
+                if (run.output.isNotBlank()) {
+                    buildProgress.output(ensureTrailingNewline(stripAnsi(run.output)), false)
+                }
+
+                val diagnostics =
+                    if (run.exitCode == 0) {
+                        diagnosticsFromText(run.output)
+                    } else {
+                        diagnosticsForFailedRun(run.output, treatWarningsAsErrors = denyWarnings)
+                    }
+                emitBuildMessages(buildProgress, diagnostics)
+
+                val buildSucceeded = run.exitCode == 0 && diagnostics.errors.isEmpty()
+                if (buildSucceeded) {
+                    buildProgress.message(
+                        "build succeeded",
+                        "Aiken build finished successfully.",
+                        MessageEvent.Kind.INFO,
+                        null
+                    )
+                    buildProgress.finish(System.currentTimeMillis(), false, "Build finished")
+                } else {
+                    buildProgress.fail(System.currentTimeMillis(), "Build failed")
+                }
+                finishOrWatch(handler, ideWatchEnabled, restartRequested, run.exitCode, idleMessage = "build")
+            } catch (e: Exception) {
+                handler.notifyTextAvailable(
+                    "Aiken build integration failed: ${e.message}\n",
+                    ProcessOutputTypes.STDERR
+                )
+                buildProgress.fail(System.currentTimeMillis(), "Build integration failed: ${e.message}")
+                finishOrWatch(handler, ideWatchEnabled, restartRequested, if (lastExitCode != 0) lastExitCode else -1, idleMessage = "build")
+            } finally {
+                watchConnection?.disconnect()
+            }
+        }
+
+        private fun emitBuildMessages(
+            buildProgress: BuildProgress<BuildProgressDescriptor>,
+            diagnostics: DiagnosticsSections
+        ) {
+            diagnostics.warnings.forEachIndexed { index, block ->
+                val sanitizedBlock = stripAnsi(block)
+                buildProgress.message(
+                    buildDiagnosticNodeTitle("warnings", index, sanitizedBlock),
+                    sanitizedBlock,
+                    MessageEvent.Kind.WARNING,
+                    null
+                )
+            }
+            diagnostics.errors.forEachIndexed { index, block ->
+                val sanitizedBlock = stripAnsi(block)
+                buildProgress.message(
+                    buildDiagnosticNodeTitle("errors", index, sanitizedBlock),
+                    sanitizedBlock,
+                    MessageEvent.Kind.ERROR,
+                    null
+                )
+            }
+        }
+    }
+
+    private fun finishOrWatch(
+        handler: AikenAsyncProcessHandler,
+        ideWatchEnabled: Boolean,
+        restartRequested: AtomicBoolean,
+        exitCode: Int,
+        idleMessage: String
+    ) {
+        if (!ideWatchEnabled) {
+            handler.finish(exitCode)
+            return
+        }
+
+        handler.notifyTextAvailable(
+            "\n[watch] Save a file to rerun $idleMessage.\n",
+            ProcessOutputTypes.STDOUT
+        )
+
+        while (!handler.isProcessTerminated && !restartRequested.get()) {
+            Thread.sleep(150)
+        }
+
+        if (!handler.isProcessTerminated && !restartRequested.get()) {
+            handler.finish(exitCode)
+        }
+    }
+
+    private fun installIdeIntegratedWatch(
+        environment: ExecutionEnvironment,
+        workDir: String?,
+        handler: AikenAsyncProcessHandler,
+        restartRequested: AtomicBoolean,
+        restartMessage: String
+    ): MessageBusConnection? {
+        val rootPath = normalizeWatchRootPath(workDir) ?: return null
+        val lastRestartAt = AtomicLong(0L)
+        val connection = project.messageBus.connect()
+        connection.subscribe(
+            VirtualFileManager.VFS_CHANGES,
+            object : BulkFileListener {
+                override fun after(events: List<VFileEvent>) {
+                    if (handler.isProcessTerminated || handler.isProcessTerminating) return
+                    val shouldRestart = events.any { event -> shouldTriggerWatchRestart(event, rootPath) }
+                    if (!shouldRestart) return
+
+                    val now = System.currentTimeMillis()
+                    val previous = lastRestartAt.get()
+                    if (now - previous < IDE_WATCH_RESTART_DEBOUNCE_MS) return
+                    lastRestartAt.set(now)
+
+                    if (!restartRequested.compareAndSet(false, true)) return
+
+                    handler.notifyTextAvailable(
+                        "\n[watch] Changes saved. Restarting Aiken $restartMessage...\n",
+                        ProcessOutputTypes.STDOUT
+                    )
+
+                    ApplicationManager.getApplication().invokeLater {
+                        if (handler.isProcessTerminated || handler.isProcessTerminating) return@invokeLater
+                        ExecutionUtil.restart(environment)
+                    }
+                }
+            }
+        )
+        return connection
+    }
+
+    private fun normalizeWatchRootPath(workDir: String?): String? {
+        val root =
+            when {
+                !workDir.isNullOrBlank() -> File(workDir)
+                !project.basePath.isNullOrBlank() -> File(project.basePath!!)
+                else -> return null
+            }
+        val path =
+            try {
+                root.canonicalPath
+            } catch (_: IOException) {
+                root.absolutePath
+            }
+        return path.replace('\\', '/').trimEnd('/')
+    }
+
+    private fun shouldTriggerWatchRestart(event: VFileEvent, rootPath: String): Boolean {
+        if (!event.isFromSave) return false
+        val rawPath = event.path.ifBlank { return false }
+        val path = rawPath.replace('\\', '/')
+        val insideRoot = path == rootPath || path.startsWith("$rootPath/")
+        if (!insideRoot) return false
+        if (path.contains("/.git/") || path.contains("/.idea/") || path.contains("/build/")) return false
+        return path.endsWith(".ak") || path.endsWith(".toml") || path.endsWith(".json")
+    }
+
+    private fun runCommandCollectingOutput(
+        invocation: List<String>,
+        workDir: String?,
+        handler: AikenAsyncProcessHandler,
+        usePty: Boolean
+    ): CommandRunResult {
+        val process =
+            if (usePty) {
+                PtyProcessBuilder(invocation.toTypedArray())
+                    .setDirectory(workDir ?: project.basePath)
+                    .setEnvironment(HashMap(System.getenv()))
+                    .setRedirectErrorStream(true)
+                    .setWindowsAnsiColorEnabled(true)
+                    .start()
+            } else {
+                val processBuilder = ProcessBuilder(invocation)
+                if (!workDir.isNullOrBlank()) {
+                    processBuilder.directory(File(workDir))
+                }
+                processBuilder.redirectErrorStream(true)
+                processBuilder.start()
+            }
+
+        handler.attachProcess(process)
+        val output =
+            process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+                reader.readText()
+            }
+        val exitCode = process.waitFor()
+        return CommandRunResult(output = output, exitCode = exitCode)
+    }
+
+    private fun ensureTrailingNewline(text: String): String {
+        return if (text.endsWith('\n')) text else "$text\n"
+    }
+
     private inner class AikenRerunSelectedTestAction(
         container: ComponentContainer,
         private val configuration: AikenRunConfiguration
@@ -576,6 +854,7 @@ class AikenRunConfiguration(
         buildOut = readString(element, "buildOut", buildOut)
         buildTraceFilter = readEnum(element, "buildTraceFilter", AikenTraceFilter.ALL)
         buildTraceLevel = readEnum(element, "buildTraceLevel", AikenTraceLevel.SILENT)
+        buildOutputMode = readEnum(element, "buildOutputMode", AikenBuildOutputMode.IDE_INTEGRATED)
 
         addressInput = readString(element, "addressInput", addressInput)
         addressModule = readString(element, "addressModule", addressModule)
@@ -613,6 +892,7 @@ class AikenRunConfiguration(
         writeField(element, "buildOut", buildOut)
         writeField(element, "buildTraceFilter", buildTraceFilter.name)
         writeField(element, "buildTraceLevel", buildTraceLevel.name)
+        writeField(element, "buildOutputMode", buildOutputMode.name)
 
         writeField(element, "addressInput", addressInput)
         writeField(element, "addressModule", addressModule)
@@ -650,7 +930,7 @@ class AikenRunConfiguration(
             AikenRunCommand.BUILD -> {
                 if (denyWarnings) parameters += "--deny"
                 if (silentWarnings) parameters += "--silent"
-                if (watch) parameters += "--watch"
+                if (watch && buildOutputMode != AikenBuildOutputMode.IDE_INTEGRATED) parameters += "--watch"
                 if (buildUplc) parameters += "--uplc"
                 appendValueOption(parameters, "--env", buildEnv)
                 appendValueOption(parameters, "--out", buildOut)
@@ -737,6 +1017,8 @@ class AikenRunConfiguration(
         val passed: Boolean,
         val details: String?,
         val traces: List<String>,
+        val memUnits: Long?,
+        val cpuUnits: Long?,
         val locationHint: String?
     )
 
@@ -755,6 +1037,7 @@ class AikenRunConfiguration(
                 val kind = testObject.getString("kind")
                 val passed = testObject.getString("status")?.equals("pass", ignoreCase = true) == true
                 val traces = testObject.getStringArray("traces")
+                val executionUnits = testObject["execution_units"]?.asJsonObjectOrNull()
                 val details = buildFailureDetails(testObject, kind, traces)
                 tests += ParsedTest(
                     title = title,
@@ -762,6 +1045,8 @@ class AikenRunConfiguration(
                     passed = passed,
                     details = details,
                     traces = traces,
+                    memUnits = executionUnits?.getLong("mem"),
+                    cpuUnits = executionUnits?.getLong("cpu"),
                     locationHint = null
                 )
             }
@@ -1001,7 +1286,7 @@ class AikenRunConfiguration(
             entries = diagnostics.errors,
             workDir = workDir,
             asError = true,
-            asTestCases = true
+            asTestCases = false
         )
 
         val testsLeafCount = report.modules.sumOf { it.tests.size }
@@ -1041,33 +1326,15 @@ class AikenRunConfiguration(
                     startedAttributes["locationHint"] = test.locationHint
                 }
                 emitServiceMessage(handler, "testStarted", startedAttributes)
-                if (test.passed) {
-                    val passedOutput =
-                        buildString {
-                            append("Aiken test passed\n")
-                            if (test.traces.isNotEmpty()) {
-                                append('\n')
-                                append(test.traces.joinToString("\n"))
-                                append('\n')
-                            }
-                        }
+                val stdOut = buildTestLeafStdOut(test)
+                if (!stdOut.isNullOrBlank()) {
                     emitServiceMessage(
                         handler,
                         "testStdOut",
                         linkedMapOf(
                             "name" to test.title,
                             "nodeId" to testId,
-                            "out" to passedOutput
-                        )
-                    )
-                } else if (test.traces.isNotEmpty()) {
-                    emitServiceMessage(
-                        handler,
-                        "testStdOut",
-                        linkedMapOf(
-                            "name" to test.title,
-                            "nodeId" to testId,
-                            "out" to (test.traces.joinToString("\n") + "\n")
+                            "out" to stdOut
                         )
                     )
                 }
@@ -1159,7 +1426,7 @@ class AikenRunConfiguration(
             entries = diagnostics.errors,
             workDir = workDir,
             asError = true,
-            asTestCases = true
+            asTestCases = false
         )
 
         emitServiceMessage(
@@ -1311,6 +1578,18 @@ class AikenRunConfiguration(
         return false
     }
 
+    private fun SMTestProxy.isErrorDiagnosticNode(): Boolean {
+        val currentName = name.trim()
+        if (currentName.startsWith("errors", ignoreCase = true)) return true
+        if (currentName.startsWith("[error ", ignoreCase = true)) return true
+
+        val parentName = parent?.name?.trim().orEmpty()
+        if (parentName.startsWith("errors", ignoreCase = true)) return true
+        if (parentName.startsWith("[error ", ignoreCase = true)) return true
+
+        return false
+    }
+
     private fun withLeafCount(name: String, leafCount: Int): String = "$name ($leafCount)"
 
     private fun moduleDisplayName(moduleName: String): String {
@@ -1397,12 +1676,6 @@ class AikenRunConfiguration(
             )
         }
         val split = splitDiagnosticBlocks(text)
-        if (split.errors.isNotEmpty()) {
-            return DiagnosticsSections(
-                warnings = split.warnings,
-                errors = listOf(text)
-            )
-        }
         return DiagnosticsSections(
             warnings = split.warnings,
             errors = split.errors
@@ -1429,15 +1702,9 @@ class AikenRunConfiguration(
         }
 
         if (split.errors.isNotEmpty()) {
-            val renderedErrors =
-                if (treatWarningsAsErrors && split.errors.size > 1) {
-                    split.errors
-                } else {
-                    listOf(fullText)
-                }
             return DiagnosticsSections(
                 warnings = if (treatWarningsAsErrors) emptyList() else split.warnings,
-                errors = renderedErrors
+                errors = split.errors
             )
         }
 
@@ -1470,6 +1737,82 @@ class AikenRunConfiguration(
         }
 
         val normalized = text.replace("\r\n", "\n")
+        val lines = normalized.split('\n')
+        val summaryLineIndex =
+            lines.indexOfFirst { line ->
+                SUMMARY_ERRORS_WARNINGS_REGEX.containsMatchIn(stripAnsi(line).lowercase())
+            }.let { index -> if (index >= 0) index else lines.size }
+
+        val markers = extractDiagnosticMarkers(lines, summaryLineIndex)
+        if (markers.isNotEmpty()) {
+            val warnings = ArrayList<String>()
+            val errors = ArrayList<String>()
+            for ((index, marker) in markers.withIndex()) {
+                if (marker.startLine >= summaryLineIndex) continue
+                val nextStart =
+                    if (index + 1 < markers.size) markers[index + 1].startLine
+                    else summaryLineIndex
+                if (nextStart <= marker.startLine) continue
+                val block =
+                    lines.subList(marker.startLine, nextStart)
+                        .joinToString("\n")
+                        .trim('\n', '\r')
+                if (block.isBlank()) continue
+                when (marker.kind) {
+                    DiagnosticKind.WARNING -> warnings += block
+                    DiagnosticKind.ERROR -> errors += block
+                    DiagnosticKind.NONE -> Unit
+                }
+            }
+            return DiagnosticSplit(
+                warnings = warnings,
+                errors = errors
+            )
+        }
+
+        return splitDiagnosticBlocksLegacy(normalized)
+    }
+
+    private enum class DiagnosticKind {
+        WARNING,
+        ERROR,
+        NONE
+    }
+
+    private data class DiagnosticMarker(
+        val kind: DiagnosticKind,
+        val startLine: Int
+    )
+
+    private fun extractDiagnosticMarkers(
+        lines: List<String>,
+        summaryLineIndex: Int
+    ): List<DiagnosticMarker> {
+        val markers = ArrayList<DiagnosticMarker>()
+        for (index in 0 until summaryLineIndex) {
+            val trimmed = stripAnsi(lines[index]).trimStart()
+            if (trimmed.startsWith("⚠")) {
+                markers += DiagnosticMarker(DiagnosticKind.WARNING, index)
+                continue
+            }
+            if (trimmed.startsWith("×")) {
+                var start = index
+                val previous = index - 1
+                if (previous >= 0) {
+                    val previousTrimmed = stripAnsi(lines[previous]).trim()
+                    if (DIAGNOSTIC_ERROR_TYPE_LINE_REGEX.matches(previousTrimmed)) {
+                        start = previous
+                    }
+                }
+                if (markers.lastOrNull()?.startLine != start) {
+                    markers += DiagnosticMarker(DiagnosticKind.ERROR, start)
+                }
+            }
+        }
+        return markers
+    }
+
+    private fun splitDiagnosticBlocksLegacy(normalized: String): DiagnosticSplit {
         val blocks = normalized.split(DIAGNOSTIC_BLOCK_SEPARATOR_REGEX)
         val warnings = ArrayList<String>()
         val errors = ArrayList<String>()
@@ -1484,7 +1827,11 @@ class AikenRunConfiguration(
                     previousKind = DiagnosticKind.WARNING
                 }
                 DiagnosticKind.ERROR -> {
-                    errors += block
+                    if (errors.isNotEmpty() && shouldMergeWithPreviousError(errors.last(), block)) {
+                        errors[errors.lastIndex] = errors.last() + "\n\n" + block
+                    } else {
+                        errors += block
+                    }
                     previousKind = DiagnosticKind.ERROR
                 }
                 DiagnosticKind.NONE -> {
@@ -1498,17 +1845,10 @@ class AikenRunConfiguration(
                 }
             }
         }
-
         return DiagnosticSplit(
             warnings = warnings,
             errors = errors
         )
-    }
-
-    private enum class DiagnosticKind {
-        WARNING,
-        ERROR,
-        NONE
     }
 
     private fun classifyDiagnosticBlock(block: String): DiagnosticKind {
@@ -1557,7 +1897,33 @@ class AikenRunConfiguration(
         return true
     }
 
-    private fun stripAnsi(text: String): String = ANSI_ESCAPE_REGEX.replace(text, "")
+    private fun shouldMergeWithPreviousError(previousBlock: String, currentBlock: String): Boolean {
+        val previousFirstLine =
+            stripAnsi(previousBlock)
+                .lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
+                ?: return false
+        if (!DIAGNOSTIC_ERROR_TYPE_LINE_REGEX.matches(previousFirstLine)) return false
+
+        val currentFirstLine =
+            stripAnsi(currentBlock)
+                .lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
+                ?: return false
+
+        return currentFirstLine.startsWith("×") ||
+            currentFirstLine.startsWith("╰─▶") ||
+            currentFirstLine.startsWith("╭─[") ||
+            currentFirstLine.startsWith("help:", ignoreCase = true)
+    }
+
+    private fun stripAnsi(text: String): String {
+        val withoutAnsi = ANSI_ESCAPE_REGEX.replace(text, "")
+        val withoutBrokenAnsi = BROKEN_ANSI_ESCAPE_REGEX.replace(withoutAnsi, "")
+        return STRAY_CSI_REGEX.replace(withoutBrokenAnsi, "")
+    }
 
     private fun emitDiagnosticsSections(sections: DiagnosticsSections, handler: ProcessHandler) {
         if (sections.warnings.isNotEmpty()) {
@@ -1658,6 +2024,90 @@ class AikenRunConfiguration(
         if (!value.isJsonPrimitive || !value.asJsonPrimitive.isNumber) return null
         return value.asInt
     }
+
+    private fun JsonObject.getLong(name: String): Long? {
+        val value = this[name] ?: return null
+        if (!value.isJsonPrimitive || !value.asJsonPrimitive.isNumber) return null
+        return value.asLong
+    }
+
+    private fun buildTestLeafStdOut(test: ParsedTest): String? {
+        val sections = ArrayList<String>(4)
+
+        val status = if (test.passed) ansiGreen("PASS") else ansiRed("FAIL")
+        val metrics = formatExecutionUnits(test.memUnits, test.cpuUnits)
+        val title = ansiBlue(test.title)
+        sections +=
+            buildString {
+                append(status)
+                if (metrics != null) {
+                    append(" [").append(metrics).append("]")
+                }
+                append(" ").append(title)
+            }
+
+        extractAssertionText(test.details)?.let { assertion ->
+            val rendered =
+                assertion.lineSequence()
+                    .mapIndexed { index, line ->
+                        if (index == 0 && !line.trimStart().startsWith("×")) {
+                            "× ${ansiRed(line)}"
+                        } else if (index == 0) {
+                            ansiRed(line)
+                        } else {
+                            line
+                        }
+                    }
+                    .joinToString("\n")
+            sections += rendered
+        }
+
+        if (test.traces.isNotEmpty()) {
+            val tracesBlock =
+                buildString {
+                    append(". with traces\n")
+                    test.traces.forEach { trace ->
+                        append("| ").append(trace).append('\n')
+                    }
+                }.trimEnd()
+            sections += tracesBlock
+        }
+
+        sections += "________"
+        return sections.joinToString("\n", postfix = "\n")
+    }
+
+    private fun formatExecutionUnits(memUnits: Long?, cpuUnits: Long?): String? {
+        if (memUnits == null && cpuUnits == null) return null
+        val parts = ArrayList<String>(2)
+        memUnits?.let { parts += "mem: ${ansiCyan(formatUnit(it.toDouble() / 1_000.0, "K"))}" }
+        cpuUnits?.let { parts += "cpu: ${ansiCyan(formatUnit(it.toDouble() / 1_000_000.0, "M"))}" }
+        return parts.joinToString(", ")
+    }
+
+    private fun formatUnit(value: Double, suffix: String): String {
+        return String.format(Locale.US, "%.2f %s", value, suffix)
+    }
+
+    private fun extractAssertionText(details: String?): String? {
+        if (details.isNullOrBlank()) return null
+        val marker = "assertion:"
+        val line =
+            details.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.startsWith(marker, ignoreCase = true) }
+                ?: return null
+        val value = line.substringAfter(':', "").trim()
+        return value.ifBlank { null }
+    }
+
+    private fun ansiGreen(text: String): String = "$ANSI_GREEN$text$ANSI_RESET"
+
+    private fun ansiRed(text: String): String = "$ANSI_RED$text$ANSI_RESET"
+
+    private fun ansiBlue(text: String): String = "$ANSI_BLUE$text$ANSI_RESET"
+
+    private fun ansiCyan(text: String): String = "$ANSI_CYAN$text$ANSI_RESET"
 
     private fun JsonObject.getStringArray(name: String): List<String> {
         val value = this[name] ?: return emptyList()
@@ -1980,6 +2430,11 @@ class AikenRunConfiguration(
     }
 
     private companion object {
+        const val ANSI_RESET = "\u001B[0m"
+        const val ANSI_RED = "\u001B[31m"
+        const val ANSI_GREEN = "\u001B[32m"
+        const val ANSI_BLUE = "\u001B[34m"
+        const val ANSI_CYAN = "\u001B[36m"
         const val AIKEN_TEST_LOCATION_PROTOCOL = "aiken-test"
         val TEST_DECLARATION_REGEX = Regex("""^\s*(pub\s+)?test\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
         val DIAGNOSTIC_BLOCK_SEPARATOR_REGEX = Regex("""\n{2,}""")
@@ -1998,7 +2453,9 @@ class AikenRunConfiguration(
         val DIAGNOSTIC_GENERIC_WHILE_LINE_REGEX = Regex("""^while\s+.+\.\.\.$""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_PREFIX_REGEX = Regex("""^(warning|error)(\[[^\]]+])?:\s*""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_LEADING_SYMBOLS_REGEX = Regex("""^[^A-Za-z0-9]+""")
-        val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[;\d?]*[ -/]*[@-~]""")
+        val ANSI_ESCAPE_REGEX = Regex("""(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]""")
+        val BROKEN_ANSI_ESCAPE_REGEX = Regex("""\uFFFD\[[0-?]*[ -/]*[@-~]""")
+        val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")
         val UNNAMED_NAME_REGEX = Regex("""^Unnamed(?:\s*\(\d+\))?$""", RegexOption.IGNORE_CASE)
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
     }
@@ -2038,6 +2495,13 @@ enum class AikenPropertyCoverage(val cliValue: String, private val label: String
 enum class AikenCheckOutputMode(private val label: String) {
     TTY("tty"),
     JSON("json"),
+    IDE_INTEGRATED("ide integrated");
+
+    override fun toString(): String = label
+}
+
+enum class AikenBuildOutputMode(private val label: String) {
+    TTY("tty"),
     IDE_INTEGRATED("ide integrated");
 
     override fun toString(): String = label
