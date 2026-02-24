@@ -14,7 +14,7 @@ import com.intellij.execution.PsiLocation
 import com.intellij.execution.configurations.ConfigurationFactory
 import com.intellij.execution.configurations.CommandLineState
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.configurations.RunConfigurationBase
+import com.intellij.execution.configurations.LocatableConfigurationBase
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RuntimeConfigurationError
 import com.intellij.execution.process.KillableColoredProcessHandler
@@ -36,10 +36,12 @@ import com.intellij.execution.testframework.AbstractTestProxy
 import com.intellij.execution.testframework.actions.AbstractRerunFailedTestsAction
 import com.intellij.execution.testframework.TestConsoleProperties
 import com.intellij.execution.ui.ConsoleView
+import com.intellij.execution.ui.ExecutionConsole
 import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComponentContainer
@@ -64,13 +66,27 @@ import com.intellij.util.concurrency.AppExecutorUtil
 import org.jdom.Element
 import java.io.File
 import java.io.IOException
+import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.datatransfer.StringSelection
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.util.LinkedHashMap
+import java.util.LinkedHashSet
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import com.intellij.util.messages.MessageBusConnection
+import com.intellij.ui.ScrollPaneFactory
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
+import com.intellij.util.ui.JBUI
+import javax.swing.BoxLayout
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JPanel
 import javax.swing.JTree
 import javax.swing.tree.TreeCellRenderer
 
@@ -79,7 +95,7 @@ class AikenRunConfiguration(
     factory: ConfigurationFactory,
     name: String,
     initialCommand: AikenRunCommand = AikenRunCommand.CHECK
-) : RunConfigurationBase<Any>(project, factory, name) {
+) : LocatableConfigurationBase<Any>(project, factory, name) {
     @JvmField
     var command: AikenRunCommand = initialCommand
 
@@ -132,7 +148,7 @@ class AikenRunConfiguration(
     var addressDelegatedTo: String = ""
 
     @JvmField
-    var addressMainnet: Boolean = false
+    var addressGeneratePolicyId: Boolean = true
 
     @JvmField
     var checkSkipTests: Boolean = false
@@ -183,14 +199,13 @@ class AikenRunConfiguration(
         }
     }
 
-    override fun onNewConfigurationCreated() {
-        super.onNewConfigurationCreated()
-        if (name.isUnnamedLike()) {
-            name = command.defaultConfigurationName()
-        }
-    }
+    override fun suggestedName(): String = command.defaultConfigurationName()
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
+        if (command == AikenRunCommand.ADDRESS) {
+            return AikenAddressRunState(environment)
+        }
+
         if (
             command == AikenRunCommand.BUILD &&
             buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
@@ -637,6 +652,551 @@ class AikenRunConfiguration(
         }
     }
 
+    private data class AddressTarget(
+        val module: String?,
+        val validator: String?,
+        val blueprintTitle: String?
+    )
+
+    private enum class AddressNetwork(val label: String, val isMainnet: Boolean) {
+        TESTNET("testnet", false),
+        MAINNET("mainnet", true)
+    }
+
+    private data class AddressVariant(
+        val network: AddressNetwork,
+        val address: String?,
+        val error: String?
+    )
+
+    private data class AddressEntry(
+        val module: String?,
+        val validator: String?,
+        val blueprintTitle: String?,
+        val stakeKey: String?,
+        val variants: List<AddressVariant>,
+        val policyId: String?,
+        val policyError: String?,
+        val commonError: String?
+    )
+
+    private inner class AikenAddressRunState(
+        private val executionEnvironment: ExecutionEnvironment
+    ) : RunProfileState {
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val processHandler = AikenAsyncProcessHandler()
+            val console = AikenAddressExecutionConsole()
+            AppExecutorUtil.getAppExecutorService().execute {
+                runAddressIdeIntegrated(processHandler, console)
+            }
+            return DefaultExecutionResult(console, processHandler)
+        }
+
+        private fun runAddressIdeIntegrated(
+            handler: AikenAsyncProcessHandler,
+            console: AikenAddressExecutionConsole
+        ) {
+            handler.startNotify()
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+
+            try {
+                val targets = resolveAddressTargets(workDir)
+                if (targets.isEmpty()) {
+                    console.showFatalError("No validators found in blueprint for address generation.")
+                    handler.finish(1)
+                    return
+                }
+
+                val entries = ArrayList<AddressEntry>(targets.size)
+                val stakeKey = addressDelegatedTo.trim().ifEmpty { null }
+
+                for ((index, target) in targets.withIndex()) {
+                    val displayName = buildAddressTargetDisplayName(target)
+                    console.showStatus("Generating addresses (${index + 1}/${targets.size}): $displayName")
+
+                    val variants = ArrayList<AddressVariant>(AddressNetwork.entries.size)
+                    var commonError: String? = null
+                    for (network in AddressNetwork.entries) {
+                        val args = buildAddressCommandParameters(target, network)
+                        val invocation = buildBlueprintInvocation(executable, "address", args, workDir)
+                        val run = runAddressLikeCommandCollectingOutput(invocation, workDir, handler)
+                        if (run.exitCode != 0) {
+                            commonError =
+                                formatCommandFailureDetails(
+                                    commandName = "aiken blueprint address",
+                                    exitCode = run.exitCode,
+                                    rawOutput = run.output
+                                )
+                            break
+                        }
+
+                        val parsedAddress = parseAddressFromOutput(run.output)
+                        if (parsedAddress.isNullOrBlank()) {
+                            commonError = "Unable to parse address from output:\n${stripAnsi(run.output).trim()}"
+                            break
+                        }
+
+                        variants += AddressVariant(network, parsedAddress, null)
+                    }
+
+                    var policyId: String? = null
+                    var policyError: String? = null
+                    if (commonError == null && addressGeneratePolicyId) {
+                        val policyArgs = buildPolicyCommandParameters(target)
+                        val policyInvocation = buildBlueprintInvocation(executable, "policy", policyArgs, workDir)
+                        val policyRun =
+                            runAddressLikeCommandCollectingOutput(policyInvocation, workDir, handler)
+                        if (policyRun.exitCode != 0) {
+                            policyError =
+                                formatCommandFailureDetails(
+                                    commandName = "aiken blueprint policy",
+                                    exitCode = policyRun.exitCode,
+                                    rawOutput = policyRun.output
+                                )
+                        } else {
+                            val parsedPolicy = parsePolicyFromOutput(policyRun.output)
+                            if (parsedPolicy.isNullOrBlank()) {
+                                policyError =
+                                    "Unable to parse policy ID from output:\n${stripAnsi(policyRun.output).trim()}"
+                            } else {
+                                policyId = parsedPolicy
+                            }
+                        }
+                    }
+
+                    entries += AddressEntry(
+                        module = target.module,
+                        validator = target.validator,
+                        blueprintTitle = target.blueprintTitle,
+                        stakeKey = stakeKey,
+                        variants = variants,
+                        policyId = policyId,
+                        policyError = policyError,
+                        commonError = commonError
+                    )
+                }
+
+                console.showResults(entries)
+                val hasErrors =
+                    entries.any { entry ->
+                        entry.commonError != null ||
+                            entry.variants.any { it.error != null } ||
+                            entry.policyError != null
+                    }
+                if (!hasErrors) {
+                    console.showStatus("Address generation completed.")
+                    handler.finish(0)
+                } else {
+                    console.showStatus("Address generation completed with errors.")
+                    handler.finish(1)
+                }
+            } catch (e: Exception) {
+                console.showFatalError("Address generation failed: ${e.message.orEmpty()}")
+                handler.finish(-1)
+            }
+        }
+
+        private fun resolveAddressTargets(workDir: String?): List<AddressTarget> {
+            val moduleFilters = parseAddressSelectors(addressModule)
+            val validatorFilters = parseAddressSelectors(addressValidator)
+            val blueprintTargets = readAddressTargetsFromBlueprint(workDir)
+
+            if (blueprintTargets.isNotEmpty()) {
+                val filtered =
+                    blueprintTargets.filter { target ->
+                        (moduleFilters.isEmpty() || moduleFilters.contains(target.module)) &&
+                            (validatorFilters.isEmpty() || validatorFilters.contains(target.validator))
+                    }
+
+                if (moduleFilters.isNotEmpty() || validatorFilters.isNotEmpty()) {
+                    if (filtered.isEmpty()) {
+                        val requestedParts = ArrayList<String>(2)
+                        if (moduleFilters.isNotEmpty()) {
+                            requestedParts += "modules=${moduleFilters.joinToString(",")}"
+                        }
+                        if (validatorFilters.isNotEmpty()) {
+                            requestedParts += "validators=${validatorFilters.joinToString(",")}"
+                        }
+                        val requested =
+                            listOfNotNull(
+                                requestedParts.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                            ).joinToString("")
+                        throw ExecutionException("No validators in blueprint match: $requested")
+                    }
+                    return filtered
+                }
+
+                return filtered
+            }
+
+            if (moduleFilters.isNotEmpty() || validatorFilters.isNotEmpty()) {
+                val modules = if (moduleFilters.isEmpty()) listOf<String?>(null) else moduleFilters
+                val validators = if (validatorFilters.isEmpty()) listOf<String?>(null) else validatorFilters
+                val targets = LinkedHashSet<AddressTarget>()
+                for (module in modules) {
+                    for (validator in validators) {
+                        targets += AddressTarget(
+                            module = module,
+                            validator = validator,
+                            blueprintTitle = null
+                        )
+                    }
+                }
+                return targets.toList()
+            }
+
+            return listOf(AddressTarget(module = null, validator = null, blueprintTitle = null))
+        }
+
+        private fun parseAddressSelectors(raw: String): List<String> {
+            if (raw.isBlank()) return emptyList()
+            return raw
+                .split(Regex("[,\\s]+"))
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+        }
+
+        private fun readAddressTargetsFromBlueprint(workDir: String?): List<AddressTarget> {
+            val blueprintFile = resolveBlueprintFile(workDir) ?: return emptyList()
+            if (!blueprintFile.exists() || !blueprintFile.isFile) return emptyList()
+
+            val root =
+                try {
+                    JsonParser.parseString(blueprintFile.readText(StandardCharsets.UTF_8)).asJsonObject
+                } catch (_: Exception) {
+                    return emptyList()
+                }
+
+            val validators = root["validators"]?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
+            val unique = LinkedHashMap<String, AddressTarget>()
+            for (element in validators) {
+                val obj = element.asJsonObjectOrNull() ?: continue
+                val title = obj.getString("title") ?: continue
+                val (moduleName, validatorName) = parseAddressTargetFromTitle(title) ?: continue
+                val key = "$moduleName::$validatorName"
+                unique.putIfAbsent(
+                    key,
+                    AddressTarget(
+                        module = moduleName,
+                        validator = validatorName,
+                        blueprintTitle = "$moduleName.$validatorName"
+                    )
+                )
+            }
+            return unique.values.toList()
+        }
+
+        private fun parseAddressTargetFromTitle(title: String): Pair<String, String>? {
+            val firstDot = title.indexOf('.')
+            if (firstDot <= 0) return null
+            val secondDot = title.indexOf('.', firstDot + 1)
+            val validatorEndExclusive = if (secondDot > firstDot + 1) secondDot else title.length
+            if (validatorEndExclusive <= firstDot + 1) return null
+
+            val moduleName = title.substring(0, firstDot).trim()
+            val validatorName = title.substring(firstDot + 1, validatorEndExclusive).trim()
+            if (moduleName.isEmpty() || validatorName.isEmpty()) return null
+            return moduleName to validatorName
+        }
+
+        private fun resolveBlueprintFile(workDir: String?): File? {
+            val configured = addressInput.trim().ifEmpty { "plutus.json" }
+            val explicit = File(configured)
+            return if (explicit.isAbsolute) explicit else {
+                val base = workDir ?: project.basePath ?: return null
+                File(base, configured)
+            }
+        }
+
+        private fun buildAddressCommandParameters(
+            target: AddressTarget,
+            network: AddressNetwork
+        ): List<String> {
+            val parameters = ArrayList<String>()
+            appendValueOption(parameters, "--in", addressInput)
+            appendValueOption(parameters, "--module", target.module.orEmpty())
+            appendValueOption(parameters, "--validator", target.validator.orEmpty())
+            appendValueOption(parameters, "--delegated-to", addressDelegatedTo)
+            if (network.isMainnet) {
+                parameters += "--mainnet"
+            }
+
+            val extra = extraArgs.trim()
+            if (extra.isNotEmpty()) {
+                parameters += ParametersListUtil.parse(extra)
+            }
+            return parameters
+        }
+
+        private fun buildPolicyCommandParameters(target: AddressTarget): List<String> {
+            val parameters = ArrayList<String>()
+            appendValueOption(parameters, "--in", addressInput)
+            appendValueOption(parameters, "--module", target.module.orEmpty())
+            appendValueOption(parameters, "--validator", target.validator.orEmpty())
+            return parameters
+        }
+
+        private fun buildBlueprintInvocation(
+            executable: String,
+            subcommand: String,
+            args: List<String>,
+            directoryArg: String?
+        ): List<String> {
+            val invocation = ArrayList<String>(args.size + 5)
+            invocation += executable
+            invocation += "blueprint"
+            invocation += subcommand
+            invocation += args
+            directoryArg?.let { invocation += it }
+            return invocation
+        }
+
+        private fun parseAddressFromOutput(raw: String): String? {
+            val lines =
+                stripAnsi(raw)
+                    .replace("\r\n", "\n")
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+
+            return lines.lastOrNull { ADDRESS_OUTPUT_LINE_REGEX.matches(it) }
+        }
+
+        private fun parsePolicyFromOutput(raw: String): String? {
+            val lines =
+                stripAnsi(raw)
+                    .replace("\r\n", "\n")
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+            return lines.lastOrNull { POLICY_ID_OUTPUT_LINE_REGEX.matches(it) }
+        }
+
+        private fun runAddressLikeCommandCollectingOutput(
+            invocation: List<String>,
+            workDir: String?,
+            handler: AikenAsyncProcessHandler
+        ): CommandRunResult {
+            return try {
+                runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
+            } catch (_: Exception) {
+                runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
+            }
+        }
+
+        private fun formatCommandFailureDetails(
+            commandName: String,
+            exitCode: Int,
+            rawOutput: String
+        ): String {
+            val details = stripAnsi(rawOutput).trim()
+            if (details.isNotEmpty()) {
+                return details
+            }
+            return buildString {
+                append(commandName)
+                append(" failed with exit code ")
+                append(exitCode)
+                append(".\n")
+                append("Check blueprint path, module/validator filters, and whether parameters are still unapplied.")
+            }
+        }
+
+        private fun buildAddressTargetDisplayName(target: AddressTarget): String {
+            val module = target.module.orEmpty()
+            val validator = target.validator.orEmpty()
+            val combined = listOf(module, validator).filter { it.isNotBlank() }.joinToString(".")
+            return combined.ifBlank { "auto-select from blueprint" }
+        }
+    }
+
+    private inner class AikenAddressExecutionConsole : ExecutionConsole {
+        private val rootPanel = JPanel(BorderLayout())
+        private val statusLabel = JBLabel("Preparing address generation...")
+        private val contentPanel = JPanel()
+        private val contentHolder = JPanel(BorderLayout())
+        private val disposed = AtomicBoolean(false)
+
+        init {
+            contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
+            contentPanel.border = JBUI.Borders.empty(8)
+            contentHolder.add(contentPanel, BorderLayout.NORTH)
+            contentHolder.border = JBUI.Borders.empty()
+
+            val scrollPane = ScrollPaneFactory.createScrollPane(contentHolder, true)
+            scrollPane.border = JBUI.Borders.empty()
+
+            rootPanel.border = JBUI.Borders.empty(8)
+            rootPanel.add(statusLabel, BorderLayout.NORTH)
+            rootPanel.add(scrollPane, BorderLayout.CENTER)
+        }
+
+        override fun getComponent(): JComponent = rootPanel
+
+        override fun getPreferredFocusableComponent(): JComponent = rootPanel
+
+        override fun dispose() {
+            disposed.set(true)
+        }
+
+        fun showStatus(text: String) {
+            updateUi {
+                statusLabel.text = text
+            }
+        }
+
+        fun showFatalError(message: String) {
+            updateUi {
+                statusLabel.text = "Address generation failed."
+                contentPanel.removeAll()
+                contentPanel.add(createMessageBlock(message))
+                refreshUi()
+            }
+        }
+
+        fun showResults(entries: List<AddressEntry>) {
+            updateUi {
+                contentPanel.removeAll()
+                if (entries.isEmpty()) {
+                    contentPanel.add(createMessageBlock("No address results produced."))
+                    refreshUi()
+                    return@updateUi
+                }
+
+                entries.forEachIndexed { index, entry ->
+                    if (index > 0) {
+                        contentPanel.add(JBUI.Panels.simplePanel().apply {
+                            border = JBUI.Borders.empty(6)
+                        })
+                    }
+                    contentPanel.add(createAddressEntryPanel(entry))
+                }
+                refreshUi()
+            }
+        }
+
+        private fun createAddressEntryPanel(entry: AddressEntry): JComponent {
+            val panel = JPanel()
+            panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+            panel.alignmentX = JComponent.LEFT_ALIGNMENT
+            panel.border = JBUI.Borders.empty(6, 8)
+
+            panel.add(createMetaRow("Module", entry.module ?: "auto"))
+            panel.add(createMetaRow("Validator", entry.validator ?: "auto"))
+            panel.add(createMetaRow("Stake key", entry.stakeKey ?: "not set"))
+
+            val commonError = entry.commonError
+            if (!commonError.isNullOrBlank()) {
+                panel.add(createErrorRow("address generation", commonError))
+                panel.maximumSize = Dimension(Int.MAX_VALUE, panel.preferredSize.height)
+                return panel
+            }
+
+            val policyId = entry.policyId
+            val policyError = entry.policyError
+            if (!policyId.isNullOrBlank()) {
+                panel.add(createCopyableValueRow("policy ID", policyId))
+            } else if (!policyError.isNullOrBlank()) {
+                panel.add(createErrorRow("policy ID", policyError))
+            }
+
+            for (variant in entry.variants) {
+                val address = variant.address
+                val error = variant.error
+                if (!address.isNullOrBlank()) {
+                    panel.add(createCopyableValueRow("${variant.network.label} address", address))
+                } else if (!error.isNullOrBlank()) {
+                    panel.add(createErrorRow("${variant.network.label} address", error))
+                }
+            }
+
+            panel.maximumSize = Dimension(Int.MAX_VALUE, panel.preferredSize.height)
+            return panel
+        }
+
+        private fun createMetaRow(label: String, value: String): JComponent {
+            return JBLabel("$label: $value").apply {
+                alignmentX = JComponent.LEFT_ALIGNMENT
+                border = JBUI.Borders.emptyTop(2)
+            }
+        }
+
+        private fun createCopyableValueRow(label: String, value: String): JComponent {
+            val row = JPanel(BorderLayout(8, 0))
+            row.alignmentX = JComponent.LEFT_ALIGNMENT
+            row.border = JBUI.Borders.emptyTop(4)
+
+            val field = JBTextField(value)
+            field.isEditable = false
+            field.caretPosition = 0
+
+            val copyButton = JButton(AllIcons.Actions.Copy).apply {
+                toolTipText = "Copy $label"
+                addActionListener {
+                    CopyPasteManager.getInstance().setContents(StringSelection(value))
+                }
+            }
+
+            val labelComponent = JBLabel("$label:")
+            val labelColumnWidth = JBUI.scale(180)
+            labelComponent.preferredSize = Dimension(labelColumnWidth, labelComponent.preferredSize.height)
+            labelComponent.minimumSize = Dimension(labelColumnWidth, labelComponent.minimumSize.height)
+            labelComponent.maximumSize = Dimension(labelColumnWidth, Int.MAX_VALUE)
+
+            row.add(labelComponent, BorderLayout.WEST)
+            row.add(field, BorderLayout.CENTER)
+            row.add(copyButton, BorderLayout.EAST)
+            row.maximumSize = Dimension(Int.MAX_VALUE, row.preferredSize.height)
+            return row
+        }
+
+        private fun createErrorRow(label: String, value: String): JComponent {
+            val panel = JPanel()
+            panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+            panel.alignmentX = JComponent.LEFT_ALIGNMENT
+            panel.border = JBUI.Borders.emptyTop(6)
+
+            panel.add(JBLabel("$label: failed").apply { alignmentX = JComponent.LEFT_ALIGNMENT })
+            panel.add(
+                JBTextArea(value).apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    border = JBUI.Borders.empty(2, 0)
+                    alignmentX = JComponent.LEFT_ALIGNMENT
+                }
+            )
+            return panel
+        }
+
+        private fun createMessageBlock(message: String): JComponent {
+            return JBTextArea(message).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                border = JBUI.Borders.empty(4)
+                alignmentX = JComponent.LEFT_ALIGNMENT
+            }
+        }
+
+        private fun updateUi(block: () -> Unit) {
+            if (disposed.get()) return
+            ApplicationManager.getApplication().invokeLater {
+                if (disposed.get()) return@invokeLater
+                block()
+            }
+        }
+
+        private fun refreshUi() {
+            contentPanel.revalidate()
+            contentPanel.repaint()
+        }
+    }
+
     private fun finishOrWatch(
         handler: AikenAsyncProcessHandler,
         ideWatchEnabled: Boolean,
@@ -860,7 +1420,7 @@ class AikenRunConfiguration(
         addressModule = readString(element, "addressModule", addressModule)
         addressValidator = readString(element, "addressValidator", addressValidator)
         addressDelegatedTo = readString(element, "addressDelegatedTo", addressDelegatedTo)
-        addressMainnet = readBoolean(element, "addressMainnet", false)
+        addressGeneratePolicyId = readBoolean(element, "addressGeneratePolicyId", true)
 
         checkSkipTests = readBoolean(element, "checkSkipTests", false)
         checkOutputMode = readEnum(element, "checkOutputMode", AikenCheckOutputMode.IDE_INTEGRATED)
@@ -898,7 +1458,7 @@ class AikenRunConfiguration(
         writeField(element, "addressModule", addressModule)
         writeField(element, "addressValidator", addressValidator)
         writeField(element, "addressDelegatedTo", addressDelegatedTo)
-        writeField(element, "addressMainnet", addressMainnet.toString())
+        writeField(element, "addressGeneratePolicyId", addressGeneratePolicyId.toString())
 
         writeField(element, "checkSkipTests", checkSkipTests.toString())
         writeField(element, "checkOutputMode", checkOutputMode.name)
@@ -943,7 +1503,6 @@ class AikenRunConfiguration(
                 appendValueOption(parameters, "--module", addressModule)
                 appendValueOption(parameters, "--validator", addressValidator)
                 appendValueOption(parameters, "--delegated-to", addressDelegatedTo)
-                if (addressMainnet) parameters += "--mainnet"
             }
 
             AikenRunCommand.CHECK -> {
@@ -2407,12 +2966,6 @@ class AikenRunConfiguration(
         return value.toBooleanStrictOrNull() ?: defaultValue
     }
 
-    private fun String?.isUnnamedLike(): Boolean {
-        val trimmed = this?.trim().orEmpty()
-        if (trimmed.isEmpty()) return true
-        return UNNAMED_NAME_REGEX.matches(trimmed)
-    }
-
     private fun AikenRunCommand.defaultConfigurationName(): String =
         when (this) {
             AikenRunCommand.CHECK -> "Check"
@@ -2456,7 +3009,8 @@ class AikenRunConfiguration(
         val ANSI_ESCAPE_REGEX = Regex("""(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]""")
         val BROKEN_ANSI_ESCAPE_REGEX = Regex("""\uFFFD\[[0-?]*[ -/]*[@-~]""")
         val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")
-        val UNNAMED_NAME_REGEX = Regex("""^Unnamed(?:\s*\(\d+\))?$""", RegexOption.IGNORE_CASE)
+        val ADDRESS_OUTPUT_LINE_REGEX = Regex("""^addr(?:_test)?1[a-z0-9]+$""")
+        val POLICY_ID_OUTPUT_LINE_REGEX = Regex("""^[0-9a-f]{56}$""")
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
     }
 }

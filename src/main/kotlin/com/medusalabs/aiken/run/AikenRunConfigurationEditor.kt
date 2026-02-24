@@ -25,6 +25,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     private val commandLabel = JBLabel()
     private val commandSpecificPanel = JPanel(CardLayout())
+    private var rootContent: JComponent? = null
 
     private val projectDirectoryField = TextFieldWithBrowseButton(JBTextField())
     private val aikenBinaryField = TextFieldWithBrowseButton(JBTextField())
@@ -49,7 +50,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressModuleField = JBTextField()
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
-    private val addressMainnetCheck = JBCheckBox("Generate mainnet address")
+    private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -85,8 +86,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         buildOutField.emptyText.text = "plutus.json"
 
         addressInField.emptyText.text = "plutus.json"
-        addressModuleField.emptyText.text = "e.g. nse_housing"
-        addressValidatorField.emptyText.text = "e.g. spend"
+        addressModuleField.emptyText.text = "e.g. nse_housing, payments"
+        addressValidatorField.emptyText.text = "e.g. exchange, escrow"
         addressDelegatedToField.emptyText.text = "e.g. stake_test1..."
 
         checkSeedField.emptyText.text = "e.g. 42"
@@ -101,6 +102,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     override fun resetEditorFrom(configuration: AikenRunConfiguration) {
         commandLabel.text = configuration.command.cliValue
         showCommandCard(configuration.command)
+        updatePreferredSize(configuration.command)
         projectDirectoryField.text =
             configuration.projectDirectory.ifBlank { configuration.project.basePath ?: "" }
         aikenBinaryField.text = configuration.aikenBinaryPath.ifBlank { "aiken" }
@@ -125,7 +127,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressModuleField.text = configuration.addressModule
         addressValidatorField.text = configuration.addressValidator
         addressDelegatedToField.text = configuration.addressDelegatedTo
-        addressMainnetCheck.isSelected = configuration.addressMainnet
+        addressGeneratePolicyIdCheck.isSelected = configuration.addressGeneratePolicyId
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -159,7 +161,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
 
             AikenRunCommand.ADDRESS -> {
-                // Not used by `aiken address`; keep existing values untouched.
+                // Not used by `aiken blueprint address`; keep existing values untouched.
             }
         }
 
@@ -177,7 +179,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressModule = addressModuleField.text.trim()
         configuration.addressValidator = addressValidatorField.text.trim()
         configuration.addressDelegatedTo = addressDelegatedToField.text.trim()
-        configuration.addressMainnet = addressMainnetCheck.isSelected
+        configuration.addressGeneratePolicyId = addressGeneratePolicyIdCheck.isSelected
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -239,7 +241,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
         }
 
-        content.preferredSize = Dimension(860, 760)
+        rootContent = content
         return ScrollPaneFactory.createScrollPane(content, true)
     }
 
@@ -307,32 +309,33 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(addressInField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Blueprint JSON file to read validators from.")
+                        .comment("Blueprint JSON file used to resolve validators and produce addresses.")
                 }
 
                 row("Module:") {
                     cell(addressModuleField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Validator module name inside the blueprint.")
+                        .comment("Optional module filter(s). Separate multiple values with comma or space.")
                 }
 
                 row("Validator:") {
                     cell(addressValidatorField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Validator function name in the selected module.")
+                        .comment("Optional top-level validator filter(s), without handler suffixes like spend/mint/else.")
                 }
 
                 row("Delegated stake address:") {
                     cell(addressDelegatedToField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Optional stake address to include in the resulting address.")
+                        .comment("Optional stake key/address attached to both generated addresses (testnet and mainnet).")
                 }
 
                 row {
-                    cell(addressMainnetCheck)
+                    cell(addressGeneratePolicyIdCheck)
+                        .comment("Also compute policy ID for each selected validator.")
                 }
             }
         }
@@ -434,5 +437,16 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 AikenRunCommand.CHECK -> checkCard
             }
         (commandSpecificPanel.layout as? CardLayout)?.show(commandSpecificPanel, card)
+    }
+
+    private fun updatePreferredSize(command: AikenRunCommand) {
+        val preferredHeight =
+            when (command) {
+                AikenRunCommand.ADDRESS -> 640
+                AikenRunCommand.BUILD -> 680
+                AikenRunCommand.CHECK -> 760
+            }
+        rootContent?.preferredSize = Dimension(860, preferredHeight)
+        rootContent?.revalidate()
     }
 }
