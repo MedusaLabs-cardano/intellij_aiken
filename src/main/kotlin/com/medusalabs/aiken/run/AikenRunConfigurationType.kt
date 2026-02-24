@@ -15,6 +15,7 @@ class AikenRunConfigurationType : ConfigurationTypeBase(
     init {
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.BUILD, "Build"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Address"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Apply"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Check"))
     }
 }
@@ -38,6 +39,7 @@ internal class AikenRunConfigurationFactory(
             AikenRunCommand.CHECK -> "AikenRunConfigurationFactory"
             AikenRunCommand.BUILD -> "AikenBuildRunConfigurationFactory"
             AikenRunCommand.ADDRESS -> "AikenAddressRunConfigurationFactory"
+            AikenRunCommand.APPLY -> "AikenApplyRunConfigurationFactory"
         }
 
     override fun getName(): String = displayName

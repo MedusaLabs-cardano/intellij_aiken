@@ -21,6 +21,7 @@ import javax.swing.JPanel
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildCard = "build"
     private val addressCard = "address"
+    private val applyCard = "apply"
     private val checkCard = "check"
 
     private val commandLabel = JBLabel()
@@ -51,6 +52,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
     private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
+
+    private val applyInField = JBTextField()
+    private val applyOutField = JBTextField()
+    private val applyModuleField = JBTextField()
+    private val applyValidatorField = JBTextField()
+    private val applyCborField = JBTextField()
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -86,9 +93,15 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         buildOutField.emptyText.text = "plutus.json"
 
         addressInField.emptyText.text = "plutus.json"
-        addressModuleField.emptyText.text = "e.g. nse_housing, payments"
-        addressValidatorField.emptyText.text = "e.g. exchange, escrow"
+        addressModuleField.emptyText.text = "e.g. my_module, other_module"
+        addressValidatorField.emptyText.text = "e.g. my_validator, other_validator"
         addressDelegatedToField.emptyText.text = "e.g. stake_test1..."
+
+        applyInField.emptyText.text = "plutus.json"
+        applyOutField.emptyText.text = "plutus.json"
+        applyModuleField.emptyText.text = "e.g. my_module"
+        applyValidatorField.emptyText.text = "e.g. my_validator"
+        applyCborField.emptyText.text = "e.g. 182A"
 
         checkSeedField.emptyText.text = "e.g. 42"
         checkMaxSuccessField.emptyText.text = "100"
@@ -129,6 +142,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressDelegatedToField.text = configuration.addressDelegatedTo
         addressGeneratePolicyIdCheck.isSelected = configuration.addressGeneratePolicyId
 
+        applyInField.text = configuration.applyInput.ifBlank { "plutus.json" }
+        applyOutField.text = configuration.applyOut.ifBlank { "plutus.json" }
+        applyModuleField.text = configuration.applyModule
+        applyValidatorField.text = configuration.applyValidator
+        applyCborField.text = configuration.applyCbor
+
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
         checkDebugCheck.isSelected = configuration.checkDebug
@@ -163,6 +182,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             AikenRunCommand.ADDRESS -> {
                 // Not used by `aiken blueprint address`; keep existing values untouched.
             }
+
+            AikenRunCommand.APPLY -> {
+                // No shared toggles used by `aiken blueprint apply`.
+            }
         }
 
         configuration.buildUplc = buildUplcCheck.isSelected
@@ -180,6 +203,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressValidator = addressValidatorField.text.trim()
         configuration.addressDelegatedTo = addressDelegatedToField.text.trim()
         configuration.addressGeneratePolicyId = addressGeneratePolicyIdCheck.isSelected
+
+        configuration.applyInput = applyInField.text.trim()
+        configuration.applyOut = applyOutField.text.trim()
+        configuration.applyModule = applyModuleField.text.trim()
+        configuration.applyValidator = applyValidatorField.text.trim()
+        configuration.applyCbor = applyCborField.text.trim()
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -202,6 +231,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     override fun createEditor(): JComponent {
         commandSpecificPanel.add(createBuildPanel(), buildCard)
         commandSpecificPanel.add(createAddressPanel(), addressCard)
+        commandSpecificPanel.add(createApplyPanel(), applyCard)
         commandSpecificPanel.add(createCheckPanel(), checkCard)
 
         val content = panel {
@@ -429,11 +459,53 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         }
     }
 
+    private fun createApplyPanel(): JComponent {
+        return panel {
+            group("apply options") {
+                row("Input blueprint file:") {
+                    cell(applyInField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Blueprint JSON used as input. Default is plutus.json.")
+                }
+
+                row("Output blueprint file:") {
+                    cell(applyOutField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Output blueprint file path. Default is plutus.json.")
+                }
+
+                row("Module:") {
+                    cell(applyModuleField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Validator module. Optional only if blueprint has a single validator.")
+                }
+
+                row("Validator:") {
+                    cell(applyValidatorField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Validator name in the selected module. Optional only if unique.")
+                }
+
+                row("Parameter CBOR:") {
+                    cell(applyCborField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Plutus Data parameter as hex-encoded CBOR (for example 182A).")
+                }
+            }
+        }
+    }
+
     private fun showCommandCard(command: AikenRunCommand) {
         val card =
             when (command) {
                 AikenRunCommand.BUILD -> buildCard
                 AikenRunCommand.ADDRESS -> addressCard
+                AikenRunCommand.APPLY -> applyCard
                 AikenRunCommand.CHECK -> checkCard
             }
         (commandSpecificPanel.layout as? CardLayout)?.show(commandSpecificPanel, card)
@@ -443,6 +515,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         val preferredHeight =
             when (command) {
                 AikenRunCommand.ADDRESS -> 640
+                AikenRunCommand.APPLY -> 680
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 760
             }

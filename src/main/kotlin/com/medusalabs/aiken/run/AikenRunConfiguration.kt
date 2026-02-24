@@ -18,7 +18,9 @@ import com.intellij.execution.configurations.LocatableConfigurationBase
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RuntimeConfigurationError
 import com.intellij.execution.process.KillableColoredProcessHandler
+import com.intellij.execution.process.KillableProcessHandler
 import com.intellij.execution.process.NopProcessHandler
+import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.runners.ExecutionEnvironment
@@ -83,6 +85,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.intellij.terminal.TerminalExecutionConsole
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -149,6 +152,21 @@ class AikenRunConfiguration(
 
     @JvmField
     var addressGeneratePolicyId: Boolean = true
+
+    @JvmField
+    var applyInput: String = "plutus.json"
+
+    @JvmField
+    var applyOut: String = "plutus.json"
+
+    @JvmField
+    var applyModule: String = ""
+
+    @JvmField
+    var applyValidator: String = ""
+
+    @JvmField
+    var applyCbor: String = ""
 
     @JvmField
     var checkSkipTests: Boolean = false
@@ -221,6 +239,8 @@ class AikenRunConfiguration(
         }
 
         return object : CommandLineState(environment) {
+            private var startedHandler: ProcessHandler? = null
+
             override fun startProcess(): ProcessHandler {
                 val executable = resolveAikenExecutable()
                 val workDir = resolveProjectDirectory()
@@ -232,18 +252,31 @@ class AikenRunConfiguration(
                     (command == AikenRunCommand.CHECK && checkOutputMode == AikenCheckOutputMode.TTY) ||
                     (command == AikenRunCommand.BUILD && buildOutputMode == AikenBuildOutputMode.TTY)
                 ) {
-                    return createPtyProcessHandler(invocation, workDir)
+                    return createPtyProcessHandler(invocation, workDir).also { startedHandler = it }
+                }
+                if (command == AikenRunCommand.APPLY) {
+                    return createPtyTerminalProcessHandler(invocation, workDir).also { startedHandler = it }
                 }
 
                 val commandLine = GeneralCommandLine()
                     .withCharset(StandardCharsets.UTF_8)
                     .withExePath(executable)
                 workDir?.let { commandLine.withWorkDirectory(it) }
-                commandLine.addParameter(command.cliValue)
+                commandLine.addParameters(commandInvocationTokens())
                 commandLine.addParameters(args)
                 workDir?.let { commandLine.addParameter(it) }
 
-                return KillableColoredProcessHandler(commandLine)
+                return KillableColoredProcessHandler(commandLine).also { startedHandler = it }
+            }
+
+            override fun createConsole(executor: Executor): ConsoleView? {
+                if (command == AikenRunCommand.APPLY) {
+                    val handler = startedHandler
+                    if (handler != null && TerminalExecutionConsole.isAcceptable(handler)) {
+                        return TerminalExecutionConsole(project, handler)
+                    }
+                }
+                return super.createConsole(executor)
             }
         }
     }
@@ -1422,6 +1455,12 @@ class AikenRunConfiguration(
         addressDelegatedTo = readString(element, "addressDelegatedTo", addressDelegatedTo)
         addressGeneratePolicyId = readBoolean(element, "addressGeneratePolicyId", true)
 
+        applyInput = readString(element, "applyInput", applyInput)
+        applyOut = readString(element, "applyOut", applyOut)
+        applyModule = readString(element, "applyModule", applyModule)
+        applyValidator = readString(element, "applyValidator", applyValidator)
+        applyCbor = readString(element, "applyCbor", applyCbor)
+
         checkSkipTests = readBoolean(element, "checkSkipTests", false)
         checkOutputMode = readEnum(element, "checkOutputMode", AikenCheckOutputMode.IDE_INTEGRATED)
         checkDebug = readBoolean(element, "checkDebug", false)
@@ -1459,6 +1498,12 @@ class AikenRunConfiguration(
         writeField(element, "addressValidator", addressValidator)
         writeField(element, "addressDelegatedTo", addressDelegatedTo)
         writeField(element, "addressGeneratePolicyId", addressGeneratePolicyId.toString())
+
+        writeField(element, "applyInput", applyInput)
+        writeField(element, "applyOut", applyOut)
+        writeField(element, "applyModule", applyModule)
+        writeField(element, "applyValidator", applyValidator)
+        writeField(element, "applyCbor", applyCbor)
 
         writeField(element, "checkSkipTests", checkSkipTests.toString())
         writeField(element, "checkOutputMode", checkOutputMode.name)
@@ -1503,6 +1548,17 @@ class AikenRunConfiguration(
                 appendValueOption(parameters, "--module", addressModule)
                 appendValueOption(parameters, "--validator", addressValidator)
                 appendValueOption(parameters, "--delegated-to", addressDelegatedTo)
+            }
+
+            AikenRunCommand.APPLY -> {
+                appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
+                appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
+                appendValueOption(parameters, "--module", applyModule)
+                appendValueOption(parameters, "--validator", applyValidator)
+                val cbor = applyCbor.trim()
+                if (cbor.isNotEmpty()) {
+                    parameters += cbor
+                }
             }
 
             AikenRunCommand.CHECK -> {
@@ -1551,12 +1607,37 @@ class AikenRunConfiguration(
         args: List<String>,
         directoryArg: String?
     ): List<String> {
-        val invocation = ArrayList<String>(args.size + 3)
+        val commandTokens = commandInvocationTokens()
+        val invocation = ArrayList<String>(args.size + commandTokens.size + 2)
         invocation += executable
-        invocation += command.cliValue
+        invocation += commandTokens
         invocation += args
-        directoryArg?.let { invocation += it }
+        if (command != AikenRunCommand.APPLY) {
+            directoryArg?.let { invocation += it }
+        }
         return invocation
+    }
+
+    private fun commandInvocationTokens(): List<String> =
+        when (command) {
+            AikenRunCommand.APPLY -> listOf("blueprint", "apply")
+            else -> listOf(command.cliValue)
+        }
+
+    private fun absolutizeApplyPath(rawPath: String): String {
+        val trimmed = rawPath.trim()
+        if (trimmed.isEmpty()) return trimmed
+
+        val path = File(trimmed)
+        if (path.isAbsolute) return trimmed
+
+        val baseDir = resolveProjectDirectory() ?: return trimmed
+        val resolved = File(baseDir, trimmed)
+        return try {
+            resolved.canonicalPath
+        } catch (_: IOException) {
+            resolved.absolutePath
+        }
     }
 
     private data class ParsedCheckReport(
@@ -2690,7 +2771,31 @@ class AikenRunConfiguration(
                 ptyProcess,
                 invocation.joinToString(" "),
                 StandardCharsets.UTF_8
-            )
+            ).also { handler ->
+                (handler as? OSProcessHandler)?.setHasPty(true)
+            }
+        } catch (e: IOException) {
+            throw ExecutionException("Failed to start Aiken via PTY: ${e.message}", e)
+        }
+    }
+
+    private fun createPtyTerminalProcessHandler(invocation: List<String>, workDir: String?): ProcessHandler {
+        try {
+            val ptyProcess =
+                PtyProcessBuilder(invocation.toTypedArray())
+                    .setDirectory(workDir ?: project.basePath)
+                    .setEnvironment(HashMap(System.getenv()))
+                    .setRedirectErrorStream(true)
+                    .setWindowsAnsiColorEnabled(true)
+                    .start()
+
+            return KillableProcessHandler(
+                ptyProcess,
+                invocation.joinToString(" "),
+                StandardCharsets.UTF_8
+            ).also { handler ->
+                handler.setHasPty(true)
+            }
         } catch (e: IOException) {
             throw ExecutionException("Failed to start Aiken via PTY: ${e.message}", e)
         }
@@ -2971,6 +3076,7 @@ class AikenRunConfiguration(
             AikenRunCommand.CHECK -> "Check"
             AikenRunCommand.BUILD -> "Build"
             AikenRunCommand.ADDRESS -> "Address"
+            AikenRunCommand.APPLY -> "Apply"
         }
 
     private inline fun <reified T : Enum<T>> readEnum(
@@ -3018,6 +3124,7 @@ class AikenRunConfiguration(
 enum class AikenRunCommand(val cliValue: String, private val label: String) {
     BUILD("build", "build"),
     ADDRESS("address", "address"),
+    APPLY("blueprint apply", "blueprint apply"),
     CHECK("check", "check");
 
     override fun toString(): String = label
