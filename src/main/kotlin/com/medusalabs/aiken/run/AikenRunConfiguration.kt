@@ -154,6 +154,9 @@ class AikenRunConfiguration(
     var addressGeneratePolicyId: Boolean = true
 
     @JvmField
+    var addressArtifactsBasePath: String = "artifacts"
+
+    @JvmField
     var applyInput: String = "plutus.json"
 
     @JvmField
@@ -167,6 +170,18 @@ class AikenRunConfiguration(
 
     @JvmField
     var applyCbor: String = ""
+
+    @JvmField
+    var convertModule: String = ""
+
+    @JvmField
+    var convertValidator: String = ""
+
+    @JvmField
+    var convertTo: AikenBlueprintConvertTarget = AikenBlueprintConvertTarget.CARDANO_CLI
+
+    @JvmField
+    var convertTerminalOutputFile: String = "artifacts"
 
     @JvmField
     var checkSkipTests: Boolean = false
@@ -224,6 +239,10 @@ class AikenRunConfiguration(
             return AikenAddressRunState(environment)
         }
 
+        if (command == AikenRunCommand.CONVERT) {
+            return AikenConvertRunState()
+        }
+
         if (
             command == AikenRunCommand.BUILD &&
             buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
@@ -277,6 +296,67 @@ class AikenRunConfiguration(
                     }
                 }
                 return super.createConsole(executor)
+            }
+        }
+    }
+
+    private inner class AikenConvertRunState : RunProfileState {
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val processHandler = AikenAsyncProcessHandler()
+            val console = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+            console.attachToProcess(processHandler)
+
+            AppExecutorUtil.getAppExecutorService().execute {
+                runConvert(processHandler)
+            }
+
+            return DefaultExecutionResult(console, processHandler)
+        }
+
+        private fun runConvert(handler: AikenAsyncProcessHandler) {
+            handler.startNotify()
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+            val args = buildCommandParameters()
+            val invocation = buildInvocation(executable, args, workDir)
+
+            try {
+                val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
+                if (run.exitCode != 0) {
+                    val output = stripAnsi(run.output).trim()
+                    if (output.isNotEmpty()) {
+                        handler.notifyTextAvailable(output + "\n", ProcessOutputTypes.STDERR)
+                    }
+                    handler.finish(run.exitCode)
+                    return
+                }
+
+                val outputDirectory = resolveConvertOutputDirectory(workDir)
+                if (outputDirectory == null) {
+                    handler.notifyTextAvailable(
+                        "Failed to resolve output directory for converted script.\n",
+                        ProcessOutputTypes.STDERR
+                    )
+                    handler.finish(1)
+                    return
+                }
+
+                val outputFile = File(outputDirectory, "${resolveConvertArtifactStem(workDir)}.script")
+                val sanitized = sanitizeConvertOutputForScript(run.output, invocation)
+                outputFile.parentFile?.mkdirs()
+                outputFile.writeText(sanitized, StandardCharsets.UTF_8)
+
+                handler.notifyTextAvailable(
+                    "Done! Converted file saved to ${outputFile.absolutePath}\n",
+                    ProcessOutputTypes.STDOUT
+                )
+                handler.finish(0)
+            } catch (e: Exception) {
+                handler.notifyTextAvailable(
+                    "Convert failed: ${e.message.orEmpty()}\n",
+                    ProcessOutputTypes.STDERR
+                )
+                handler.finish(1)
             }
         }
     }
@@ -818,7 +898,9 @@ class AikenRunConfiguration(
                             entry.policyError != null
                     }
                 if (!hasErrors) {
-                    console.showStatus("Address generation completed.")
+                    val artifactSummary = persistAddressArtifacts(entries, workDir)
+                    val suffix = artifactSummary?.let { " $it" }.orEmpty()
+                    console.showStatus("Address generation completed.$suffix")
                     handler.finish(0)
                 } else {
                     console.showStatus("Address generation completed with errors.")
@@ -1044,6 +1126,59 @@ class AikenRunConfiguration(
             val validator = target.validator.orEmpty()
             val combined = listOf(module, validator).filter { it.isNotBlank() }.joinToString(".")
             return combined.ifBlank { "auto-select from blueprint" }
+        }
+
+        private fun persistAddressArtifacts(entries: List<AddressEntry>, workDir: String?): String? {
+            val directory = resolveAddressArtifactsDirectory(workDir) ?: return null
+
+            try {
+                directory.mkdirs()
+                val savedFiles = ArrayList<File>()
+
+                for (entry in entries) {
+                    val stem = buildAddressArtifactStem(entry)
+                    val mainnetAddress = entry.variants.firstOrNull { it.network == AddressNetwork.MAINNET }?.address
+                    val testnetAddress = entry.variants.firstOrNull { it.network == AddressNetwork.TESTNET }?.address
+
+                    if (!mainnetAddress.isNullOrBlank()) {
+                        val file = File(directory, "$stem.addr")
+                        file.writeText(mainnetAddress.trim() + "\n", StandardCharsets.UTF_8)
+                        savedFiles += file
+                    }
+
+                    if (!testnetAddress.isNullOrBlank()) {
+                        val file = File(directory, "$stem.addr_test")
+                        file.writeText(testnetAddress.trim() + "\n", StandardCharsets.UTF_8)
+                        savedFiles += file
+                    }
+
+                    if (addressGeneratePolicyId && !entry.policyId.isNullOrBlank()) {
+                        val file = File(directory, "$stem.policy")
+                        file.writeText(entry.policyId.trim() + "\n", StandardCharsets.UTF_8)
+                        savedFiles += file
+                    }
+                }
+
+                if (savedFiles.isEmpty()) return null
+                return "Saved ${savedFiles.size} artifact file(s) to ${directory.absolutePath}"
+            } catch (e: Exception) {
+                return "Failed to save artifacts: ${e.message.orEmpty()}"
+            }
+        }
+
+        private fun resolveAddressArtifactsDirectory(workDir: String?): File? {
+            val raw = addressArtifactsBasePath.trim().ifEmpty { "artifacts" }
+            val file = File(raw)
+            if (file.isAbsolute) return file
+            val base = workDir ?: resolveProjectDirectory() ?: project.basePath ?: return file
+            return File(base, raw)
+        }
+
+        private fun buildAddressArtifactStem(entry: AddressEntry): String {
+            val fromTitle = parseAddressTargetFromTitle(entry.blueprintTitle.orEmpty())
+            val module = entry.module?.takeIf { it.isNotBlank() } ?: fromTitle?.first ?: "module"
+            val validator = entry.validator?.takeIf { it.isNotBlank() } ?: fromTitle?.second ?: "validator"
+            return "${sanitizeArtifactSegment(module)}.${sanitizeArtifactSegment(validator)}"
         }
     }
 
@@ -1454,12 +1589,19 @@ class AikenRunConfiguration(
         addressValidator = readString(element, "addressValidator", addressValidator)
         addressDelegatedTo = readString(element, "addressDelegatedTo", addressDelegatedTo)
         addressGeneratePolicyId = readBoolean(element, "addressGeneratePolicyId", true)
+        addressArtifactsBasePath = readString(element, "addressArtifactsBasePath", addressArtifactsBasePath)
 
         applyInput = readString(element, "applyInput", applyInput)
         applyOut = readString(element, "applyOut", applyOut)
         applyModule = readString(element, "applyModule", applyModule)
         applyValidator = readString(element, "applyValidator", applyValidator)
         applyCbor = readString(element, "applyCbor", applyCbor)
+
+        convertModule = readString(element, "convertModule", convertModule)
+        convertValidator = readString(element, "convertValidator", convertValidator)
+        convertTo = readEnum(element, "convertTo", AikenBlueprintConvertTarget.CARDANO_CLI)
+        convertTerminalOutputFile =
+            readString(element, "convertTerminalOutputFile", convertTerminalOutputFile)
 
         checkSkipTests = readBoolean(element, "checkSkipTests", false)
         checkOutputMode = readEnum(element, "checkOutputMode", AikenCheckOutputMode.IDE_INTEGRATED)
@@ -1498,12 +1640,18 @@ class AikenRunConfiguration(
         writeField(element, "addressValidator", addressValidator)
         writeField(element, "addressDelegatedTo", addressDelegatedTo)
         writeField(element, "addressGeneratePolicyId", addressGeneratePolicyId.toString())
+        writeField(element, "addressArtifactsBasePath", addressArtifactsBasePath)
 
         writeField(element, "applyInput", applyInput)
         writeField(element, "applyOut", applyOut)
         writeField(element, "applyModule", applyModule)
         writeField(element, "applyValidator", applyValidator)
         writeField(element, "applyCbor", applyCbor)
+
+        writeField(element, "convertModule", convertModule)
+        writeField(element, "convertValidator", convertValidator)
+        writeField(element, "convertTo", convertTo.name)
+        writeField(element, "convertTerminalOutputFile", convertTerminalOutputFile)
 
         writeField(element, "checkSkipTests", checkSkipTests.toString())
         writeField(element, "checkOutputMode", checkOutputMode.name)
@@ -1559,6 +1707,12 @@ class AikenRunConfiguration(
                 if (cbor.isNotEmpty()) {
                     parameters += cbor
                 }
+            }
+
+            AikenRunCommand.CONVERT -> {
+                appendValueOption(parameters, "--module", convertModule)
+                appendValueOption(parameters, "--validator", convertValidator)
+                parameters += listOf("--to", convertTo.cliValue)
             }
 
             AikenRunCommand.CHECK -> {
@@ -1621,6 +1775,7 @@ class AikenRunConfiguration(
     private fun commandInvocationTokens(): List<String> =
         when (command) {
             AikenRunCommand.APPLY -> listOf("blueprint", "apply")
+            AikenRunCommand.CONVERT -> listOf("blueprint", "convert")
             else -> listOf(command.cliValue)
         }
 
@@ -2801,6 +2956,102 @@ class AikenRunConfiguration(
         }
     }
 
+    private fun resolveConvertOutputDirectory(workDir: String?): File? {
+        val trimmed = convertTerminalOutputFile.trim().ifEmpty { "artifacts" }
+        val output = File(trimmed)
+        if (output.isAbsolute) return output
+
+        val base = workDir ?: resolveProjectDirectory() ?: project.basePath ?: return output
+        return File(base, trimmed)
+    }
+
+    private fun resolveConvertArtifactStem(workDir: String?): String {
+        val configuredModule = convertModule.trim()
+        val configuredValidator = convertValidator.trim()
+        if (configuredModule.isNotEmpty() && configuredValidator.isNotEmpty()) {
+            return "${sanitizeArtifactSegment(configuredModule)}.${sanitizeArtifactSegment(configuredValidator)}"
+        }
+
+        val inferred = resolveSingleValidatorFromBlueprint(workDir)
+        val modulePart = sanitizeArtifactSegment(configuredModule.ifEmpty { inferred?.first ?: "module" })
+        val validatorPart = sanitizeArtifactSegment(configuredValidator.ifEmpty { inferred?.second ?: "validator" })
+        return "$modulePart.$validatorPart"
+    }
+
+    private fun sanitizeConvertOutputForScript(raw: String, invocation: List<String>): String {
+        val text = stripAnsi(raw).replace("\r\n", "\n").replace('\r', '\n')
+        val lines = text.lines().toMutableList()
+        val invocationLine = invocation.joinToString(" ").trim()
+
+        while (lines.isNotEmpty()) {
+            val first = lines.first().trim()
+            if (first.isEmpty()) {
+                lines.removeAt(0)
+                continue
+            }
+            if (first == invocationLine || first.startsWith("aiken blueprint convert ")) {
+                lines.removeAt(0)
+                continue
+            }
+            break
+        }
+
+        return lines.joinToString("\n").trimEnd() + "\n"
+    }
+
+    private fun resolveSingleValidatorFromBlueprint(workDir: String?): Pair<String, String>? {
+        val baseDir = workDir ?: resolveProjectDirectory() ?: project.basePath ?: return null
+        val blueprintFile = File(baseDir, "plutus.json")
+        if (!blueprintFile.exists() || !blueprintFile.isFile) return null
+
+        val root =
+            try {
+                JsonParser.parseString(blueprintFile.readText(StandardCharsets.UTF_8)).asJsonObject
+            } catch (_: Exception) {
+                return null
+            }
+
+        val validators = root["validators"]?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+        val parsedTargets = LinkedHashSet<Pair<String, String>>()
+        for (element in validators) {
+            val obj = element.asJsonObjectOrNull() ?: continue
+            val title = obj.getString("title") ?: continue
+            val parsed = parseValidatorTargetFromTitle(title) ?: continue
+            parsedTargets += parsed
+        }
+        if (parsedTargets.isEmpty()) return null
+
+        val moduleFilter = convertModule.trim().ifEmpty { null }
+        val validatorFilter = convertValidator.trim().ifEmpty { null }
+        val filtered =
+            parsedTargets.filter { (module, validator) ->
+                (moduleFilter == null || module == moduleFilter) &&
+                    (validatorFilter == null || validator == validatorFilter)
+            }
+        return filtered.singleOrNull()
+    }
+
+    private fun parseValidatorTargetFromTitle(title: String): Pair<String, String>? {
+        val firstDot = title.indexOf('.')
+        if (firstDot <= 0) return null
+        val secondDot = title.indexOf('.', firstDot + 1)
+        val end = if (secondDot > firstDot + 1) secondDot else title.length
+        if (end <= firstDot + 1) return null
+        val module = title.substring(0, firstDot).trim()
+        val validator = title.substring(firstDot + 1, end).trim()
+        if (module.isEmpty() || validator.isEmpty()) return null
+        return module to validator
+    }
+
+    private fun sanitizeArtifactSegment(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return "value"
+        return trimmed
+            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+            .trim('_')
+            .ifEmpty { "value" }
+    }
+
     private fun appendValueOption(target: MutableList<String>, option: String, value: String) {
         val trimmed = value.trim()
         if (trimmed.isEmpty()) return
@@ -3077,6 +3328,7 @@ class AikenRunConfiguration(
             AikenRunCommand.BUILD -> "Build"
             AikenRunCommand.ADDRESS -> "Address"
             AikenRunCommand.APPLY -> "Apply"
+            AikenRunCommand.CONVERT -> "Convert"
         }
 
     private inline fun <reified T : Enum<T>> readEnum(
@@ -3125,6 +3377,7 @@ enum class AikenRunCommand(val cliValue: String, private val label: String) {
     BUILD("build", "build"),
     ADDRESS("address", "address"),
     APPLY("blueprint apply", "blueprint apply"),
+    CONVERT("blueprint convert", "blueprint convert"),
     CHECK("check", "check");
 
     override fun toString(): String = label
@@ -3164,6 +3417,12 @@ enum class AikenCheckOutputMode(private val label: String) {
 enum class AikenBuildOutputMode(private val label: String) {
     TTY("tty"),
     IDE_INTEGRATED("ide integrated");
+
+    override fun toString(): String = label
+}
+
+enum class AikenBlueprintConvertTarget(val cliValue: String, private val label: String) {
+    CARDANO_CLI("cardano-cli", "cardano-cli");
 
     override fun toString(): String = label
 }

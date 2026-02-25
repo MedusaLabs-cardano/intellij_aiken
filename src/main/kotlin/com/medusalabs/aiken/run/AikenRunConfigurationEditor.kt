@@ -22,6 +22,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildCard = "build"
     private val addressCard = "address"
     private val applyCard = "apply"
+    private val convertCard = "convert"
     private val checkCard = "check"
 
     private val commandLabel = JBLabel()
@@ -52,12 +53,18 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
     private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
+    private val addressArtifactsBasePathField = JBTextField()
 
     private val applyInField = JBTextField()
     private val applyOutField = JBTextField()
     private val applyModuleField = JBTextField()
     private val applyValidatorField = JBTextField()
     private val applyCborField = JBTextField()
+
+    private val convertModuleField = JBTextField()
+    private val convertValidatorField = JBTextField()
+    private val convertToCombo = JComboBox(AikenBlueprintConvertTarget.entries.toTypedArray())
+    private val convertTerminalOutputFileField = JBTextField()
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -103,6 +110,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyValidatorField.emptyText.text = "e.g. my_validator"
         applyCborField.emptyText.text = "e.g. 182A"
 
+        convertModuleField.emptyText.text = "e.g. my_module"
+        convertValidatorField.emptyText.text = "e.g. my_validator"
+        addressArtifactsBasePathField.emptyText.text = "artifacts"
+        convertTerminalOutputFileField.emptyText.text = "artifacts"
+
         checkSeedField.emptyText.text = "e.g. 42"
         checkMaxSuccessField.emptyText.text = "100"
         checkMatchTestsField.emptyText.text = "e.g. list, aiken/list, aiken/list.{map}"
@@ -141,12 +153,19 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressValidatorField.text = configuration.addressValidator
         addressDelegatedToField.text = configuration.addressDelegatedTo
         addressGeneratePolicyIdCheck.isSelected = configuration.addressGeneratePolicyId
+        addressArtifactsBasePathField.text = configuration.addressArtifactsBasePath.ifBlank { "artifacts" }
 
         applyInField.text = configuration.applyInput.ifBlank { "plutus.json" }
         applyOutField.text = configuration.applyOut.ifBlank { "plutus.json" }
         applyModuleField.text = configuration.applyModule
         applyValidatorField.text = configuration.applyValidator
         applyCborField.text = configuration.applyCbor
+
+        convertModuleField.text = configuration.convertModule
+        convertValidatorField.text = configuration.convertValidator
+        convertToCombo.selectedItem = configuration.convertTo
+        convertTerminalOutputFileField.text =
+            configuration.convertTerminalOutputFile.ifBlank { "artifacts" }
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -186,6 +205,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             AikenRunCommand.APPLY -> {
                 // No shared toggles used by `aiken blueprint apply`.
             }
+
+            AikenRunCommand.CONVERT -> {
+                // No shared toggles used by `aiken blueprint convert`.
+            }
         }
 
         configuration.buildUplc = buildUplcCheck.isSelected
@@ -203,12 +226,22 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressValidator = addressValidatorField.text.trim()
         configuration.addressDelegatedTo = addressDelegatedToField.text.trim()
         configuration.addressGeneratePolicyId = addressGeneratePolicyIdCheck.isSelected
+        configuration.addressArtifactsBasePath =
+            addressArtifactsBasePathField.text.trim().ifEmpty { "artifacts" }
 
         configuration.applyInput = applyInField.text.trim()
         configuration.applyOut = applyOutField.text.trim()
         configuration.applyModule = applyModuleField.text.trim()
         configuration.applyValidator = applyValidatorField.text.trim()
         configuration.applyCbor = applyCborField.text.trim()
+
+        configuration.convertModule = convertModuleField.text.trim()
+        configuration.convertValidator = convertValidatorField.text.trim()
+        configuration.convertTo =
+            (convertToCombo.selectedItem as? AikenBlueprintConvertTarget)
+                ?: AikenBlueprintConvertTarget.CARDANO_CLI
+        configuration.convertTerminalOutputFile =
+            convertTerminalOutputFileField.text.trim().ifEmpty { "artifacts" }
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -232,6 +265,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         commandSpecificPanel.add(createBuildPanel(), buildCard)
         commandSpecificPanel.add(createAddressPanel(), addressCard)
         commandSpecificPanel.add(createApplyPanel(), applyCard)
+        commandSpecificPanel.add(createConvertPanel(), convertCard)
         commandSpecificPanel.add(createCheckPanel(), checkCard)
 
         val content = panel {
@@ -367,6 +401,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(addressGeneratePolicyIdCheck)
                         .comment("Also compute policy ID for each selected validator.")
                 }
+
+                row("Artifacts base path:") {
+                    cell(addressArtifactsBasePathField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Output directory for auto-saved files: module.validator.addr/addr_test/policy.")
+                }
             }
         }
     }
@@ -500,12 +541,47 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         }
     }
 
+    private fun createConvertPanel(): JComponent {
+        return panel {
+            group("convert options") {
+                row("Module:") {
+                    cell(convertModuleField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Optional module name. Leave empty when blueprint has a single validator.")
+                }
+
+                row("Validator:") {
+                    cell(convertValidatorField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Optional validator name. Leave empty when blueprint has a single validator.")
+                }
+
+                row("Convert to:") {
+                    cell(convertToCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Output format for conversion.")
+                }
+
+                row("Script output directory:") {
+                    cell(convertTerminalOutputFileField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Directory where converted script is saved as module.validator.script.")
+                }
+            }
+        }
+    }
+
     private fun showCommandCard(command: AikenRunCommand) {
         val card =
             when (command) {
                 AikenRunCommand.BUILD -> buildCard
                 AikenRunCommand.ADDRESS -> addressCard
                 AikenRunCommand.APPLY -> applyCard
+                AikenRunCommand.CONVERT -> convertCard
                 AikenRunCommand.CHECK -> checkCard
             }
         (commandSpecificPanel.layout as? CardLayout)?.show(commandSpecificPanel, card)
@@ -516,6 +592,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             when (command) {
                 AikenRunCommand.ADDRESS -> 640
                 AikenRunCommand.APPLY -> 680
+                AikenRunCommand.CONVERT -> 640
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 760
             }
