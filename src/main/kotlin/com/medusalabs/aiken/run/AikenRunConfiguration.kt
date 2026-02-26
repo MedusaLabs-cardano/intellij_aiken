@@ -21,8 +21,10 @@ import com.intellij.execution.process.KillableColoredProcessHandler
 import com.intellij.execution.process.KillableProcessHandler
 import com.intellij.execution.process.NopProcessHandler
 import com.intellij.execution.process.OSProcessHandler
+import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.execution.process.ProcessHandler
+import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.runners.ExecutionUtil
 import com.intellij.execution.runners.ProgramRunner
@@ -173,6 +175,9 @@ class AikenRunConfiguration(
     var applyCbor: String = ""
 
     @JvmField
+    var applyAutoUntilNoParameters: Boolean = true
+
+    @JvmField
     var convertModule: String = ""
 
     @JvmField
@@ -240,6 +245,10 @@ class AikenRunConfiguration(
             return AikenArtifactsRunState(environment)
         }
 
+        if (command == AikenRunCommand.APPLY && applyAutoUntilNoParameters) {
+            return AikenApplyAutoRunState(environment)
+        }
+
         if (
             command == AikenRunCommand.BUILD &&
             buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
@@ -295,6 +304,63 @@ class AikenRunConfiguration(
                 return super.createConsole(executor)
             }
         }
+    }
+
+    private inner class AikenApplyAutoRunState(
+        private val executionEnvironment: ExecutionEnvironment
+    ) : RunProfileState {
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+            val args = buildCommandParameters()
+            val invocation = buildInvocation(executable, args, workDir)
+            val inspectionFile = resolveApplyInspectionFile(workDir)
+
+            val pendingBeforeStart = inspectionFile?.let { hasPendingApplyParameters(it) }
+            if (pendingBeforeStart == false) {
+                return createCompletedApplyResult("Blueprint has no parameters left to apply\n")
+            }
+
+            val handler = createPtyTerminalProcessHandler(invocation, workDir)
+
+            handler.addProcessListener(
+                object : ProcessListener {
+                    override fun processTerminated(event: ProcessEvent) {
+                        if (event.exitCode != 0) return
+                        val hasPending = inspectionFile?.let { hasPendingApplyParameters(it) }
+                        if (hasPending == false) {
+                            handler.notifyTextAvailable(
+                                "Blueprint has no parameters left to apply\n",
+                                ProcessOutputTypes.STDOUT
+                            )
+                            return
+                        }
+                        ApplicationManager.getApplication().invokeLater {
+                            ExecutionUtil.restart(executionEnvironment)
+                        }
+                    }
+                }
+            )
+
+            val console =
+                if (TerminalExecutionConsole.isAcceptable(handler)) {
+                    TerminalExecutionConsole(project, handler)
+                } else {
+                    TextConsoleBuilderFactory.getInstance().createBuilder(project).console.also { it.attachToProcess(handler) }
+                }
+
+            return DefaultExecutionResult(console, handler)
+        }
+    }
+
+    private fun createCompletedApplyResult(message: String): com.intellij.execution.ExecutionResult {
+        val handler = AikenAsyncProcessHandler()
+        val console = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+        console.attachToProcess(handler)
+        handler.startNotify()
+        handler.notifyTextAvailable(message, ProcessOutputTypes.STDOUT)
+        handler.finish(0)
+        return DefaultExecutionResult(console, handler)
     }
 
     private inner class AikenCheckTestRunState(
@@ -1709,6 +1775,7 @@ class AikenRunConfiguration(
         applyModule = readString(element, "applyModule", applyModule)
         applyValidator = readString(element, "applyValidator", applyValidator)
         applyCbor = readString(element, "applyCbor", applyCbor)
+        applyAutoUntilNoParameters = readBoolean(element, "applyAutoUntilNoParameters", true)
 
         convertModule = readString(element, "convertModule", convertModule)
         convertValidator = readString(element, "convertValidator", convertValidator)
@@ -1760,6 +1827,7 @@ class AikenRunConfiguration(
         writeField(element, "applyModule", applyModule)
         writeField(element, "applyValidator", applyValidator)
         writeField(element, "applyCbor", applyCbor)
+        writeField(element, "applyAutoUntilNoParameters", applyAutoUntilNoParameters.toString())
 
         writeField(element, "convertModule", convertModule)
         writeField(element, "convertValidator", convertValidator)
@@ -3059,7 +3127,7 @@ class AikenRunConfiguration(
 
             return KillableProcessHandler(
                 ptyProcess,
-                invocation.joinToString(" "),
+                "",
                 StandardCharsets.UTF_8
             ).also { handler ->
                 handler.setHasPty(true)
@@ -3067,6 +3135,60 @@ class AikenRunConfiguration(
         } catch (e: IOException) {
             throw ExecutionException("Failed to start Aiken via PTY: ${e.message}", e)
         }
+    }
+
+    private fun resolveApplyInspectionFile(workDir: String?): File? {
+        val preferredOut = absolutizeApplyPath(applyOut).trim()
+        val preferredIn = absolutizeApplyPath(applyInput).trim()
+        val selectedPath = when {
+            preferredOut.isNotEmpty() -> preferredOut
+            preferredIn.isNotEmpty() -> preferredIn
+            else -> return null
+        }
+
+        val file = File(selectedPath)
+        if (file.isAbsolute) return file
+
+        val baseDir = workDir ?: resolveProjectDirectory() ?: project.basePath ?: return null
+        return File(baseDir, selectedPath)
+    }
+
+    private fun hasPendingApplyParameters(blueprintFile: File): Boolean? {
+        if (!blueprintFile.exists() || !blueprintFile.isFile) return null
+
+        val root =
+            try {
+                JsonParser.parseString(blueprintFile.readText(StandardCharsets.UTF_8)).asJsonObject
+            } catch (_: Exception) {
+                return null
+            }
+
+        val validators = root["validators"]?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+        val moduleFilter = applyModule.trim().ifEmpty { null }
+        val validatorFilter = applyValidator.trim().ifEmpty { null }
+        val useAllValidators = moduleFilter == null && validatorFilter == null
+
+        var matchedValidators = 0
+        for (element in validators) {
+            val obj = element.asJsonObjectOrNull() ?: continue
+
+            if (!useAllValidators) {
+                val title = obj.getString("title") ?: continue
+                val parsedTarget = parseValidatorTargetFromTitle(title) ?: continue
+                if (moduleFilter != null && parsedTarget.first != moduleFilter) continue
+                if (validatorFilter != null && parsedTarget.second != validatorFilter) continue
+            }
+
+            matchedValidators += 1
+
+            val parameters = obj["parameters"]
+            if (parameters != null && parameters.isJsonArray && parameters.asJsonArray.size() > 0) {
+                return true
+            }
+        }
+
+        if (matchedValidators == 0) return null
+        return false
     }
 
     private fun resolveConvertOutputDirectory(workDir: String?): File? {
@@ -3478,11 +3600,11 @@ class AikenRunConfiguration(
 
     private fun AikenRunCommand.defaultConfigurationName(): String =
         when (this) {
-            AikenRunCommand.CHECK -> "Check"
-            AikenRunCommand.BUILD -> "Build"
-            AikenRunCommand.ADDRESS -> "Artifacts"
-            AikenRunCommand.APPLY -> "Apply"
-            AikenRunCommand.CONVERT -> "Artifacts"
+            AikenRunCommand.CHECK -> "Run checks"
+            AikenRunCommand.BUILD -> "Build blueprint"
+            AikenRunCommand.ADDRESS -> "Make artifacts"
+            AikenRunCommand.APPLY -> "Parametrize"
+            AikenRunCommand.CONVERT -> "Make artifacts"
         }
 
     private inline fun <reified T : Enum<T>> readEnum(

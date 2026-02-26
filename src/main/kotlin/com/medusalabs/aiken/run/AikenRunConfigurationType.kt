@@ -9,14 +9,14 @@ import com.medusalabs.aiken.icons.AikenIcons
 class AikenRunConfigurationType : ConfigurationTypeBase(
     "AIKEN_RUN_CONFIGURATION",
     "Aiken",
-    "Run Aiken CLI commands (build, artifacts, apply, check)",
+    "Run Aiken workflows (Build blueprint, Run checks, Parametrize, Make artifacts)",
     AikenIcons.AIKEN
 ) {
     init {
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.BUILD, "Build"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Artifacts"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Apply"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Check"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.BUILD, "Build blueprint"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Make artifacts"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Parametrize"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Run checks"))
     }
 }
 

@@ -59,6 +59,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyModuleField = JBTextField()
     private val applyValidatorField = JBTextField()
     private val applyCborField = JBTextField()
+    private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -151,6 +152,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyModuleField.text = configuration.applyModule
         applyValidatorField.text = configuration.applyValidator
         applyCborField.text = configuration.applyCbor
+        applyAutoUntilNoParametersCheck.isSelected = configuration.applyAutoUntilNoParameters
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -220,6 +222,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.applyModule = applyModuleField.text.trim()
         configuration.applyValidator = applyValidatorField.text.trim()
         configuration.applyCbor = applyCborField.text.trim()
+        configuration.applyAutoUntilNoParameters = applyAutoUntilNoParametersCheck.isSelected
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -513,6 +516,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("Plutus Data parameter as hex-encoded CBOR (for example 182A).")
+                }
+
+                row {
+                    cell(applyAutoUntilNoParametersCheck)
+                        .comment("If disabled, run Apply separately for each parameter.")
                 }
             }
         }
