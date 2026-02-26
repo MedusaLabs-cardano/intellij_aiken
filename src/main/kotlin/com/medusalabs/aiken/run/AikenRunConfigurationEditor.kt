@@ -6,12 +6,10 @@ import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.TextBrowseFolderListener
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
-import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Dimension
 import javax.swing.JComponent
@@ -21,10 +19,10 @@ import javax.swing.JPanel
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildCard = "build"
     private val artifactsCard = "artifacts"
+    private val cleanCard = "clean"
     private val applyCard = "apply"
     private val checkCard = "check"
 
-    private val commandLabel = JBLabel()
     private val commandSpecificPanel = JPanel(CardLayout())
     private var rootContent: JComponent? = null
 
@@ -51,8 +49,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressModuleField = JBTextField()
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
+    private val addressIncludeScriptCborCheck = JBCheckBox("Generate script CBOR")
+    private val addressIncludeTestnetAddressCheck = JBCheckBox("Generate testnet address")
+    private val addressIncludeMainnetAddressCheck = JBCheckBox("Generate mainnet address")
     private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
     private val addressArtifactsBasePathField = JBTextField()
+    private val cleanTargetPathField = JBTextField()
 
     private val applyInField = JBTextField()
     private val applyOutField = JBTextField()
@@ -69,7 +71,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val checkPropertyCoverageCombo = JComboBox(AikenPropertyCoverage.entries.toTypedArray())
     private val checkMatchTestsField = JBTextField()
     private val checkExactMatchCheck = JBCheckBox("Exact test name match")
-    private val checkExactMatchPanel = JPanel(BorderLayout())
     private val checkEnvField = JBTextField()
     private val checkTraceFilterCombo = JComboBox(AikenTraceFilter.entries.toTypedArray())
     private val checkTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
@@ -106,18 +107,15 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyCborField.emptyText.text = "e.g. 182A"
 
         addressArtifactsBasePathField.emptyText.text = "artifacts"
+        cleanTargetPathField.emptyText.text = "artifacts"
 
         checkSeedField.emptyText.text = "e.g. 42"
         checkMaxSuccessField.emptyText.text = "100"
         checkMatchTestsField.emptyText.text = "e.g. list, aiken/list, aiken/list.{map}"
         checkEnvField.emptyText.text = "e.g. preprod"
-        checkExactMatchPanel.isOpaque = false
-        checkExactMatchPanel.border = JBUI.Borders.empty(2, 0)
-        checkExactMatchPanel.add(checkExactMatchCheck, BorderLayout.WEST)
     }
 
     override fun resetEditorFrom(configuration: AikenRunConfiguration) {
-        commandLabel.text = commandDisplayName(configuration.command)
         showCommandCard(configuration.command)
         updatePreferredSize(configuration.command)
         projectDirectoryField.text =
@@ -144,8 +142,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressModuleField.text = configuration.addressModule
         addressValidatorField.text = configuration.addressValidator
         addressDelegatedToField.text = configuration.addressDelegatedTo
+        addressIncludeScriptCborCheck.isSelected = configuration.addressIncludeScriptCbor
+        addressIncludeTestnetAddressCheck.isSelected = configuration.addressIncludeTestnetAddress
+        addressIncludeMainnetAddressCheck.isSelected = configuration.addressIncludeMainnetAddress
         addressGeneratePolicyIdCheck.isSelected = configuration.addressGeneratePolicyId
         addressArtifactsBasePathField.text = configuration.addressArtifactsBasePath.ifBlank { "artifacts" }
+        cleanTargetPathField.text = configuration.cleanTargetPath.ifBlank { "artifacts" }
 
         applyInField.text = configuration.applyInput.ifBlank { "plutus.json" }
         applyOutField.text = configuration.applyOut.ifBlank { "plutus.json" }
@@ -189,6 +191,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 // Shared toggles are not used by Artifacts runner.
             }
 
+            AikenRunCommand.CLEAN -> {
+                // Shared toggles are not used by Clean runner.
+            }
+
             AikenRunCommand.APPLY -> {
                 // No shared toggles used by `aiken blueprint apply`.
             }
@@ -213,9 +219,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressModule = addressModuleField.text.trim()
         configuration.addressValidator = addressValidatorField.text.trim()
         configuration.addressDelegatedTo = addressDelegatedToField.text.trim()
+        configuration.addressIncludeScriptCbor = addressIncludeScriptCborCheck.isSelected
+        configuration.addressIncludeTestnetAddress = addressIncludeTestnetAddressCheck.isSelected
+        configuration.addressIncludeMainnetAddress = addressIncludeMainnetAddressCheck.isSelected
         configuration.addressGeneratePolicyId = addressGeneratePolicyIdCheck.isSelected
         configuration.addressArtifactsBasePath =
             addressArtifactsBasePathField.text.trim().ifEmpty { "artifacts" }
+        configuration.cleanTargetPath = cleanTargetPathField.text.trim().ifEmpty { "artifacts" }
 
         configuration.applyInput = applyInField.text.trim()
         configuration.applyOut = applyOutField.text.trim()
@@ -245,17 +255,12 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     override fun createEditor(): JComponent {
         commandSpecificPanel.add(createBuildPanel(), buildCard)
         commandSpecificPanel.add(createArtifactsPanel(), artifactsCard)
+        commandSpecificPanel.add(createCleanPanel(), cleanCard)
         commandSpecificPanel.add(createApplyPanel(), applyCard)
         commandSpecificPanel.add(createCheckPanel(), checkCard)
 
         val content = panel {
             group("General") {
-                row("Command:") {
-                    cell(commandLabel)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                }
-
                 row("Project directory:") {
                     cell(projectDirectoryField)
                         .resizableColumn()
@@ -291,7 +296,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     private fun createBuildPanel(): JComponent {
         return panel {
-            group("build options") {
+            group("Options") {
                 row {
                     cell(buildDenyWarningsCheck)
                 }
@@ -348,7 +353,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     private fun createArtifactsPanel(): JComponent {
         return panel {
-            group("artifacts options") {
+            group("Options") {
                 row("Input blueprint file:") {
                     cell(addressInField)
                         .resizableColumn()
@@ -378,6 +383,21 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 }
 
                 row {
+                    cell(addressIncludeScriptCborCheck)
+                        .comment("Generate script CBOR and save module.validator.script.")
+                }
+
+                row {
+                    cell(addressIncludeTestnetAddressCheck)
+                        .comment("Generate testnet address and save module.validator.addr_test.")
+                }
+
+                row {
+                    cell(addressIncludeMainnetAddressCheck)
+                        .comment("Generate mainnet address and save module.validator.addr.")
+                }
+
+                row {
                     cell(addressGeneratePolicyIdCheck)
                         .comment("Also compute policy ID for each selected validator.")
                 }
@@ -386,7 +406,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(addressArtifactsBasePathField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Output directory for auto-saved files: module.validator.script/addr/addr_test/policy.")
+                        .comment("Output directory for auto-saved selected artifacts.")
                 }
             }
         }
@@ -394,7 +414,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     private fun createCheckPanel(): JComponent {
         return panel {
-            group("check options") {
+            group("Options") {
                 row {
                     cell(checkDenyWarningsCheck)
                 }
@@ -448,12 +468,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("Examples: list, aiken/list, aiken/list.{map}, module. Separate entries with comma or space.")
-                }
-
-                row {
-                    cell(checkExactMatchPanel)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
+                    cell(checkExactMatchCheck)
+                        .align(AlignX.RIGHT)
                 }
 
                 row("Check environment:") {
@@ -480,9 +496,22 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         }
     }
 
+    private fun createCleanPanel(): JComponent {
+        return panel {
+            group("Options") {
+                row("Target directory:") {
+                    cell(cleanTargetPathField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Directory whose contents will be deleted. Relative paths resolve from project directory.")
+                }
+            }
+        }
+    }
+
     private fun createApplyPanel(): JComponent {
         return panel {
-            group("apply options") {
+            group("Options") {
                 row("Input blueprint file:") {
                     cell(applyInField)
                         .resizableColumn()
@@ -531,6 +560,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             when (command) {
                 AikenRunCommand.BUILD -> buildCard
                 AikenRunCommand.ADDRESS -> artifactsCard
+                AikenRunCommand.CLEAN -> cleanCard
                 AikenRunCommand.APPLY -> applyCard
                 AikenRunCommand.CONVERT -> artifactsCard
                 AikenRunCommand.CHECK -> checkCard
@@ -541,20 +571,15 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private fun updatePreferredSize(command: AikenRunCommand) {
         val preferredHeight =
             when (command) {
-                AikenRunCommand.ADDRESS -> 620
+                AikenRunCommand.ADDRESS -> 760
+                AikenRunCommand.CLEAN -> 560
                 AikenRunCommand.APPLY -> 680
-                AikenRunCommand.CONVERT -> 620
+                AikenRunCommand.CONVERT -> 760
                 AikenRunCommand.BUILD -> 680
-                AikenRunCommand.CHECK -> 760
+                AikenRunCommand.CHECK -> 900
             }
         rootContent?.preferredSize = Dimension(860, preferredHeight)
         rootContent?.revalidate()
     }
 
-    private fun commandDisplayName(command: AikenRunCommand): String {
-        return when (command) {
-            AikenRunCommand.ADDRESS -> "artifacts"
-            else -> command.cliValue
-        }
-    }
 }

@@ -157,7 +157,19 @@ class AikenRunConfiguration(
     var addressGeneratePolicyId: Boolean = true
 
     @JvmField
+    var addressIncludeScriptCbor: Boolean = true
+
+    @JvmField
+    var addressIncludeTestnetAddress: Boolean = true
+
+    @JvmField
+    var addressIncludeMainnetAddress: Boolean = true
+
+    @JvmField
     var addressArtifactsBasePath: String = "artifacts"
+
+    @JvmField
+    var cleanTargetPath: String = "artifacts"
 
     @JvmField
     var applyInput: String = "plutus.json"
@@ -243,6 +255,10 @@ class AikenRunConfiguration(
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
         if (command == AikenRunCommand.ADDRESS || command == AikenRunCommand.CONVERT) {
             return AikenArtifactsRunState(environment)
+        }
+
+        if (command == AikenRunCommand.CLEAN) {
+            return AikenCleanRunState(environment)
         }
 
         if (command == AikenRunCommand.APPLY && applyAutoUntilNoParameters) {
@@ -767,6 +783,139 @@ class AikenRunConfiguration(
         }
     }
 
+    private inner class AikenCleanRunState(
+        private val executionEnvironment: ExecutionEnvironment
+    ) : RunProfileState {
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val processHandler = AikenAsyncProcessHandler()
+            val console = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+            console.attachToProcess(processHandler)
+            AppExecutorUtil.getAppExecutorService().execute {
+                runCleanDirectory(processHandler)
+            }
+            return DefaultExecutionResult(console, processHandler)
+        }
+
+        private fun runCleanDirectory(handler: AikenAsyncProcessHandler) {
+            handler.startNotify()
+            val workDir = resolveProjectDirectory()
+            val targetDirectory = resolveCleanTargetDirectory(workDir)
+
+            if (targetDirectory == null) {
+                handler.notifyTextAvailable(
+                    "Unable to resolve clean target directory.\n",
+                    ProcessOutputTypes.STDERR
+                )
+                handler.finish(1)
+                return
+            }
+
+            val targetPath = normalizePathForDisplay(targetDirectory)
+            handler.notifyTextAvailable("Cleaning directory contents: $targetPath\n", ProcessOutputTypes.STDOUT)
+
+            if (!targetDirectory.exists()) {
+                handler.notifyTextAvailable("Directory does not exist. Nothing to clean.\n", ProcessOutputTypes.STDOUT)
+                handler.finish(0)
+                return
+            }
+
+            if (!targetDirectory.isDirectory) {
+                handler.notifyTextAvailable(
+                    "Target path is not a directory: $targetPath\n",
+                    ProcessOutputTypes.STDERR
+                )
+                handler.finish(1)
+                return
+            }
+
+            if (!isSafeCleanTarget(targetDirectory, workDir)) {
+                handler.notifyTextAvailable(
+                    "Refusing to clean this directory for safety reasons: $targetPath\n",
+                    ProcessOutputTypes.STDERR
+                )
+                handler.finish(1)
+                return
+            }
+
+            val children = targetDirectory.listFiles()?.toList().orEmpty()
+            if (children.isEmpty()) {
+                handler.notifyTextAvailable("Directory is already empty.\n", ProcessOutputTypes.STDOUT)
+                handler.finish(0)
+                return
+            }
+
+            var removed = 0
+            val failed = ArrayList<String>()
+            for (child in children) {
+                if (child.deleteRecursively()) {
+                    removed += 1
+                } else {
+                    failed += normalizePathForDisplay(child)
+                }
+            }
+
+            handler.notifyTextAvailable(
+                "Removed $removed ${if (removed == 1) "entry" else "entries"}.\n",
+                ProcessOutputTypes.STDOUT
+            )
+
+            if (failed.isNotEmpty()) {
+                handler.notifyTextAvailable(
+                    "Failed to remove ${failed.size} ${if (failed.size == 1) "entry" else "entries"}:\n",
+                    ProcessOutputTypes.STDERR
+                )
+                failed.forEach { path ->
+                    handler.notifyTextAvailable("  - $path\n", ProcessOutputTypes.STDERR)
+                }
+                handler.finish(1)
+            } else {
+                handler.notifyTextAvailable("Clean finished successfully.\n", ProcessOutputTypes.STDOUT)
+                handler.finish(0)
+            }
+        }
+
+        private fun resolveCleanTargetDirectory(workDir: String?): File? {
+            val configured = cleanTargetPath.trim().ifEmpty {
+                addressArtifactsBasePath.trim().ifEmpty { "artifacts" }
+            }
+            val file = File(configured)
+            if (file.isAbsolute) return file
+            val base = workDir ?: project.basePath ?: return null
+            return File(base, configured)
+        }
+
+        private fun isSafeCleanTarget(target: File, workDir: String?): Boolean {
+            val targetCanonical = canonicalFile(target)
+
+            val projectRoot = (workDir ?: project.basePath)?.let { canonicalFile(File(it)) }
+            if (projectRoot != null && targetCanonical == projectRoot) {
+                return false
+            }
+
+            if (targetCanonical.parentFile == null) {
+                return false
+            }
+
+            return true
+        }
+
+        private fun canonicalFile(file: File): File {
+            return try {
+                file.canonicalFile
+            } catch (_: IOException) {
+                file.absoluteFile
+            }
+        }
+
+        private fun normalizePathForDisplay(file: File): String {
+            return try {
+                file.canonicalPath
+            } catch (_: IOException) {
+                file.absolutePath
+            }
+        }
+    }
+
     private data class AddressTarget(
         val module: String?,
         val validator: String?,
@@ -864,16 +1013,19 @@ class AikenRunConfiguration(
                             )
                     } else {
                         scriptJson = sanitizeConvertOutputForScript(convertRun.output, convertInvocation)
-                        scriptCbor = parseScriptCborFromConvertedScript(scriptJson)
-                        if (scriptCbor.isNullOrBlank()) {
-                            scriptError =
-                                "Unable to parse script CBOR from converted contract output:\n${stripAnsi(convertRun.output).trim()}"
+                        if (addressIncludeScriptCbor) {
+                            scriptCbor = parseScriptCborFromConvertedScript(scriptJson)
+                            if (scriptCbor.isNullOrBlank()) {
+                                scriptError =
+                                    "Unable to parse script CBOR from converted contract output:\n${stripAnsi(convertRun.output).trim()}"
+                            }
                         }
                     }
 
-                    val variants = ArrayList<AddressVariant>(AddressNetwork.entries.size)
+                    val selectedNetworks = selectedAddressNetworks()
+                    val variants = ArrayList<AddressVariant>(selectedNetworks.size)
                     if (commonError == null) {
-                        for (network in AddressNetwork.entries) {
+                        for (network in selectedNetworks) {
                             val args = buildAddressCommandParameters(target, network)
                             val invocation = buildBlueprintInvocation(executable, "address", args, workDir)
                             val run = runBlueprintCommandCollectingOutput(invocation, workDir, handler)
@@ -1096,6 +1248,13 @@ class AikenRunConfiguration(
             return parameters
         }
 
+        private fun selectedAddressNetworks(): List<AddressNetwork> {
+            val selected = ArrayList<AddressNetwork>(2)
+            if (addressIncludeTestnetAddress) selected += AddressNetwork.TESTNET
+            if (addressIncludeMainnetAddress) selected += AddressNetwork.MAINNET
+            return selected
+        }
+
         private fun buildPolicyCommandParameters(target: AddressTarget): List<String> {
             val parameters = ArrayList<String>()
             appendValueOption(parameters, "--in", addressInput)
@@ -1239,7 +1398,7 @@ class AikenRunConfiguration(
                     val savedFiles = ArrayList<File>(4)
 
                     val scriptJson = entry.scriptJson?.trim().orEmpty()
-                    if (scriptJson.isNotEmpty()) {
+                    if (addressIncludeScriptCbor && scriptJson.isNotEmpty()) {
                         val file = File(directory, "$stem.script")
                         file.writeText(scriptJson + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
@@ -1768,7 +1927,11 @@ class AikenRunConfiguration(
         addressValidator = readString(element, "addressValidator", addressValidator)
         addressDelegatedTo = readString(element, "addressDelegatedTo", addressDelegatedTo)
         addressGeneratePolicyId = readBoolean(element, "addressGeneratePolicyId", true)
+        addressIncludeScriptCbor = readBoolean(element, "addressIncludeScriptCbor", true)
+        addressIncludeTestnetAddress = readBoolean(element, "addressIncludeTestnetAddress", true)
+        addressIncludeMainnetAddress = readBoolean(element, "addressIncludeMainnetAddress", true)
         addressArtifactsBasePath = readString(element, "addressArtifactsBasePath", addressArtifactsBasePath)
+        cleanTargetPath = readString(element, "cleanTargetPath", cleanTargetPath)
 
         applyInput = readString(element, "applyInput", applyInput)
         applyOut = readString(element, "applyOut", applyOut)
@@ -1820,7 +1983,11 @@ class AikenRunConfiguration(
         writeField(element, "addressValidator", addressValidator)
         writeField(element, "addressDelegatedTo", addressDelegatedTo)
         writeField(element, "addressGeneratePolicyId", addressGeneratePolicyId.toString())
+        writeField(element, "addressIncludeScriptCbor", addressIncludeScriptCbor.toString())
+        writeField(element, "addressIncludeTestnetAddress", addressIncludeTestnetAddress.toString())
+        writeField(element, "addressIncludeMainnetAddress", addressIncludeMainnetAddress.toString())
         writeField(element, "addressArtifactsBasePath", addressArtifactsBasePath)
+        writeField(element, "cleanTargetPath", cleanTargetPath)
 
         writeField(element, "applyInput", applyInput)
         writeField(element, "applyOut", applyOut)
@@ -1877,6 +2044,10 @@ class AikenRunConfiguration(
                 appendValueOption(parameters, "--module", addressModule)
                 appendValueOption(parameters, "--validator", addressValidator)
                 appendValueOption(parameters, "--delegated-to", addressDelegatedTo)
+            }
+
+            AikenRunCommand.CLEAN -> {
+                // Custom IDE-integrated cleaner does not call Aiken CLI.
             }
 
             AikenRunCommand.APPLY -> {
@@ -3603,6 +3774,7 @@ class AikenRunConfiguration(
             AikenRunCommand.CHECK -> "Run checks"
             AikenRunCommand.BUILD -> "Build blueprint"
             AikenRunCommand.ADDRESS -> "Make artifacts"
+            AikenRunCommand.CLEAN -> "Clean artifacts"
             AikenRunCommand.APPLY -> "Parametrize"
             AikenRunCommand.CONVERT -> "Make artifacts"
         }
@@ -3652,6 +3824,7 @@ class AikenRunConfiguration(
 enum class AikenRunCommand(val cliValue: String, private val label: String) {
     BUILD("build", "build"),
     ADDRESS("address", "artifacts"),
+    CLEAN("clean", "clean"),
     APPLY("blueprint apply", "blueprint apply"),
     CONVERT("blueprint convert", "artifacts"),
     CHECK("check", "check");
