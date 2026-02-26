@@ -9,14 +9,13 @@ import com.medusalabs.aiken.icons.AikenIcons
 class AikenRunConfigurationType : ConfigurationTypeBase(
     "AIKEN_RUN_CONFIGURATION",
     "Aiken",
-    "Run Aiken CLI commands (build, address, apply, convert, check)",
+    "Run Aiken CLI commands (build, artifacts, apply, check)",
     AikenIcons.AIKEN
 ) {
     init {
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.BUILD, "Build"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Address"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Artifacts"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Apply"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CONVERT, "Convert"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Check"))
     }
 }
@@ -39,7 +38,7 @@ internal class AikenRunConfigurationFactory(
         when (presetCommand) {
             AikenRunCommand.CHECK -> "AikenRunConfigurationFactory"
             AikenRunCommand.BUILD -> "AikenBuildRunConfigurationFactory"
-            AikenRunCommand.ADDRESS -> "AikenAddressRunConfigurationFactory"
+            AikenRunCommand.ADDRESS -> "AikenArtifactsRunConfigurationFactory"
             AikenRunCommand.APPLY -> "AikenApplyRunConfigurationFactory"
             AikenRunCommand.CONVERT -> "AikenConvertRunConfigurationFactory"
         }

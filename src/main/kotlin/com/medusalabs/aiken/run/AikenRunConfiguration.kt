@@ -81,6 +81,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import com.intellij.util.messages.MessageBusConnection
 import com.intellij.ui.ScrollPaneFactory
+import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
@@ -235,12 +236,8 @@ class AikenRunConfiguration(
     override fun suggestedName(): String = command.defaultConfigurationName()
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
-        if (command == AikenRunCommand.ADDRESS) {
-            return AikenAddressRunState(environment)
-        }
-
-        if (command == AikenRunCommand.CONVERT) {
-            return AikenConvertRunState()
+        if (command == AikenRunCommand.ADDRESS || command == AikenRunCommand.CONVERT) {
+            return AikenArtifactsRunState(environment)
         }
 
         if (
@@ -296,67 +293,6 @@ class AikenRunConfiguration(
                     }
                 }
                 return super.createConsole(executor)
-            }
-        }
-    }
-
-    private inner class AikenConvertRunState : RunProfileState {
-        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
-            val processHandler = AikenAsyncProcessHandler()
-            val console = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
-            console.attachToProcess(processHandler)
-
-            AppExecutorUtil.getAppExecutorService().execute {
-                runConvert(processHandler)
-            }
-
-            return DefaultExecutionResult(console, processHandler)
-        }
-
-        private fun runConvert(handler: AikenAsyncProcessHandler) {
-            handler.startNotify()
-            val executable = resolveAikenExecutable()
-            val workDir = resolveProjectDirectory()
-            val args = buildCommandParameters()
-            val invocation = buildInvocation(executable, args, workDir)
-
-            try {
-                val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
-                if (run.exitCode != 0) {
-                    val output = stripAnsi(run.output).trim()
-                    if (output.isNotEmpty()) {
-                        handler.notifyTextAvailable(output + "\n", ProcessOutputTypes.STDERR)
-                    }
-                    handler.finish(run.exitCode)
-                    return
-                }
-
-                val outputDirectory = resolveConvertOutputDirectory(workDir)
-                if (outputDirectory == null) {
-                    handler.notifyTextAvailable(
-                        "Failed to resolve output directory for converted script.\n",
-                        ProcessOutputTypes.STDERR
-                    )
-                    handler.finish(1)
-                    return
-                }
-
-                val outputFile = File(outputDirectory, "${resolveConvertArtifactStem(workDir)}.script")
-                val sanitized = sanitizeConvertOutputForScript(run.output, invocation)
-                outputFile.parentFile?.mkdirs()
-                outputFile.writeText(sanitized, StandardCharsets.UTF_8)
-
-                handler.notifyTextAvailable(
-                    "Done! Converted file saved to ${outputFile.absolutePath}\n",
-                    ProcessOutputTypes.STDOUT
-                )
-                handler.finish(0)
-            } catch (e: Exception) {
-                handler.notifyTextAvailable(
-                    "Convert failed: ${e.message.orEmpty()}\n",
-                    ProcessOutputTypes.STDERR
-                )
-                handler.finish(1)
             }
         }
     }
@@ -782,32 +718,43 @@ class AikenRunConfiguration(
         val error: String?
     )
 
-    private data class AddressEntry(
+    private data class ArtifactsEntry(
         val module: String?,
         val validator: String?,
         val blueprintTitle: String?,
         val stakeKey: String?,
         val variants: List<AddressVariant>,
+        val scriptJson: String?,
+        val scriptCbor: String?,
+        val scriptError: String?,
         val policyId: String?,
         val policyError: String?,
-        val commonError: String?
+        val commonError: String?,
+        val savedFiles: List<File> = emptyList()
     )
 
-    private inner class AikenAddressRunState(
+    private data class ArtifactsPersistSummary(
+        val directory: File,
+        val totalFiles: Int,
+        val entriesByStem: Map<String, List<File>>,
+        val saveError: String?
+    )
+
+    private inner class AikenArtifactsRunState(
         private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
-            val console = AikenAddressExecutionConsole()
+            val console = AikenArtifactsExecutionConsole()
             AppExecutorUtil.getAppExecutorService().execute {
-                runAddressIdeIntegrated(processHandler, console)
+                runArtifactsIdeIntegrated(processHandler, console)
             }
             return DefaultExecutionResult(console, processHandler)
         }
 
-        private fun runAddressIdeIntegrated(
+        private fun runArtifactsIdeIntegrated(
             handler: AikenAsyncProcessHandler,
-            console: AikenAddressExecutionConsole
+            console: AikenArtifactsExecutionConsole
         ) {
             handler.startNotify()
             val executable = resolveAikenExecutable()
@@ -816,41 +763,72 @@ class AikenRunConfiguration(
             try {
                 val targets = resolveAddressTargets(workDir)
                 if (targets.isEmpty()) {
-                    console.showFatalError("No validators found in blueprint for address generation.")
+                    console.showFatalError("No validators found in blueprint for artifacts generation.")
                     handler.finish(1)
                     return
                 }
 
-                val entries = ArrayList<AddressEntry>(targets.size)
+                val entries = ArrayList<ArtifactsEntry>(targets.size)
                 val stakeKey = addressDelegatedTo.trim().ifEmpty { null }
 
                 for ((index, target) in targets.withIndex()) {
                     val displayName = buildAddressTargetDisplayName(target)
-                    console.showStatus("Generating addresses (${index + 1}/${targets.size}): $displayName")
+                    console.showStatus("Generating artifacts (${index + 1}/${targets.size}): $displayName")
+
+                    var scriptJson: String? = null
+                    var scriptCbor: String? = null
+                    var scriptError: String? = null
+                    var commonError: String? = null
+
+                    val convertArgs = buildConvertCommandParameters(target)
+                    val convertInvocation = buildBlueprintInvocation(executable, "convert", convertArgs, workDir)
+                    val convertRun =
+                        runBlueprintCommandCollectingOutput(
+                            invocation = convertInvocation,
+                            workDir = workDir,
+                            handler = handler,
+                            preferPty = false
+                        )
+                    if (convertRun.exitCode != 0) {
+                        commonError =
+                            formatCommandFailureDetails(
+                                commandName = "aiken blueprint convert",
+                                exitCode = convertRun.exitCode,
+                                rawOutput = convertRun.output
+                            )
+                    } else {
+                        scriptJson = sanitizeConvertOutputForScript(convertRun.output, convertInvocation)
+                        scriptCbor = parseScriptCborFromConvertedScript(scriptJson)
+                        if (scriptCbor.isNullOrBlank()) {
+                            scriptError =
+                                "Unable to parse script CBOR from converted contract output:\n${stripAnsi(convertRun.output).trim()}"
+                        }
+                    }
 
                     val variants = ArrayList<AddressVariant>(AddressNetwork.entries.size)
-                    var commonError: String? = null
-                    for (network in AddressNetwork.entries) {
-                        val args = buildAddressCommandParameters(target, network)
-                        val invocation = buildBlueprintInvocation(executable, "address", args, workDir)
-                        val run = runAddressLikeCommandCollectingOutput(invocation, workDir, handler)
-                        if (run.exitCode != 0) {
-                            commonError =
-                                formatCommandFailureDetails(
-                                    commandName = "aiken blueprint address",
-                                    exitCode = run.exitCode,
-                                    rawOutput = run.output
-                                )
-                            break
-                        }
+                    if (commonError == null) {
+                        for (network in AddressNetwork.entries) {
+                            val args = buildAddressCommandParameters(target, network)
+                            val invocation = buildBlueprintInvocation(executable, "address", args, workDir)
+                            val run = runBlueprintCommandCollectingOutput(invocation, workDir, handler)
+                            if (run.exitCode != 0) {
+                                commonError =
+                                    formatCommandFailureDetails(
+                                        commandName = "aiken blueprint address",
+                                        exitCode = run.exitCode,
+                                        rawOutput = run.output
+                                    )
+                                break
+                            }
 
-                        val parsedAddress = parseAddressFromOutput(run.output)
-                        if (parsedAddress.isNullOrBlank()) {
-                            commonError = "Unable to parse address from output:\n${stripAnsi(run.output).trim()}"
-                            break
-                        }
+                            val parsedAddress = parseAddressFromOutput(run.output)
+                            if (parsedAddress.isNullOrBlank()) {
+                                commonError = "Unable to parse address from output:\n${stripAnsi(run.output).trim()}"
+                                break
+                            }
 
-                        variants += AddressVariant(network, parsedAddress, null)
+                            variants += AddressVariant(network, parsedAddress, null)
+                        }
                     }
 
                     var policyId: String? = null
@@ -859,7 +837,7 @@ class AikenRunConfiguration(
                         val policyArgs = buildPolicyCommandParameters(target)
                         val policyInvocation = buildBlueprintInvocation(executable, "policy", policyArgs, workDir)
                         val policyRun =
-                            runAddressLikeCommandCollectingOutput(policyInvocation, workDir, handler)
+                            runBlueprintCommandCollectingOutput(policyInvocation, workDir, handler)
                         if (policyRun.exitCode != 0) {
                             policyError =
                                 formatCommandFailureDetails(
@@ -878,36 +856,43 @@ class AikenRunConfiguration(
                         }
                     }
 
-                    entries += AddressEntry(
+                    entries += ArtifactsEntry(
                         module = target.module,
                         validator = target.validator,
                         blueprintTitle = target.blueprintTitle,
                         stakeKey = stakeKey,
                         variants = variants,
+                        scriptJson = scriptJson,
+                        scriptCbor = scriptCbor,
+                        scriptError = scriptError,
                         policyId = policyId,
                         policyError = policyError,
                         commonError = commonError
                     )
                 }
 
-                console.showResults(entries)
+                val persistSummary = persistArtifacts(entries, workDir)
+                val persistedEntries = persistSummary?.entriesByStem ?: emptyMap()
+                val finalizedEntries =
+                    entries.map { entry ->
+                        val stem = buildArtifactStem(entry)
+                        entry.copy(savedFiles = persistedEntries[stem].orEmpty())
+                    }
+
+                console.showResults(finalizedEntries)
                 val hasErrors =
-                    entries.any { entry ->
+                    finalizedEntries.any { entry ->
                         entry.commonError != null ||
+                            entry.scriptError != null ||
                             entry.variants.any { it.error != null } ||
                             entry.policyError != null
                     }
-                if (!hasErrors) {
-                    val artifactSummary = persistAddressArtifacts(entries, workDir)
-                    val suffix = artifactSummary?.let { " $it" }.orEmpty()
-                    console.showStatus("Address generation completed.$suffix")
-                    handler.finish(0)
-                } else {
-                    console.showStatus("Address generation completed with errors.")
-                    handler.finish(1)
-                }
+
+                val status = buildArtifactsStatusMessage(hasErrors, persistSummary)
+                console.showStatus(status)
+                handler.finish(if (hasErrors) 1 else 0)
             } catch (e: Exception) {
-                console.showFatalError("Address generation failed: ${e.message.orEmpty()}")
+                console.showFatalError("Artifacts generation failed: ${e.message.orEmpty()}")
                 handler.finish(-1)
             }
         }
@@ -1053,6 +1038,14 @@ class AikenRunConfiguration(
             return parameters
         }
 
+        private fun buildConvertCommandParameters(target: AddressTarget): List<String> {
+            val parameters = ArrayList<String>()
+            appendValueOption(parameters, "--module", target.module.orEmpty())
+            appendValueOption(parameters, "--validator", target.validator.orEmpty())
+            parameters += listOf("--to", AikenBlueprintConvertTarget.CARDANO_CLI.cliValue)
+            return parameters
+        }
+
         private fun buildBlueprintInvocation(
             executable: String,
             subcommand: String,
@@ -1091,13 +1084,14 @@ class AikenRunConfiguration(
             return lines.lastOrNull { POLICY_ID_OUTPUT_LINE_REGEX.matches(it) }
         }
 
-        private fun runAddressLikeCommandCollectingOutput(
+        private fun runBlueprintCommandCollectingOutput(
             invocation: List<String>,
             workDir: String?,
-            handler: AikenAsyncProcessHandler
+            handler: AikenAsyncProcessHandler,
+            preferPty: Boolean = true
         ): CommandRunResult {
             return try {
-                runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
+                runCommandCollectingOutput(invocation, workDir, handler, usePty = preferPty)
             } catch (_: Exception) {
                 runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
             }
@@ -1128,15 +1122,63 @@ class AikenRunConfiguration(
             return combined.ifBlank { "auto-select from blueprint" }
         }
 
-        private fun persistAddressArtifacts(entries: List<AddressEntry>, workDir: String?): String? {
-            val directory = resolveAddressArtifactsDirectory(workDir) ?: return null
+        private fun parseScriptCborFromConvertedScript(scriptJson: String): String? {
+            val root =
+                try {
+                    JsonParser.parseString(scriptJson)
+                } catch (_: Exception) {
+                    return null
+                }
+            return findScriptCbor(root)
+        }
+
+        private fun findScriptCbor(element: JsonElement?): String? {
+            if (element == null || element.isJsonNull) return null
+            if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
+                return null
+            }
+            if (element.isJsonObject) {
+                val obj = element.asJsonObject
+                listOf("cborHex", "cbor_hex", "cbor").forEach { key ->
+                    val candidate = obj[key]
+                    if (candidate != null && candidate.isJsonPrimitive && candidate.asJsonPrimitive.isString) {
+                        val value = candidate.asString.trim()
+                        if (value.isNotEmpty()) return value
+                    }
+                }
+                for ((_, value) in obj.entrySet()) {
+                    val nested = findScriptCbor(value)
+                    if (!nested.isNullOrBlank()) return nested
+                }
+            }
+            if (element.isJsonArray) {
+                for (value in element.asJsonArray) {
+                    val nested = findScriptCbor(value)
+                    if (!nested.isNullOrBlank()) return nested
+                }
+            }
+            return null
+        }
+
+        private fun persistArtifacts(entries: List<ArtifactsEntry>, workDir: String?): ArtifactsPersistSummary? {
+            val directory = resolveArtifactsDirectory(workDir) ?: return null
+            val entriesByStem = LinkedHashMap<String, List<File>>()
+            var totalSaved = 0
 
             try {
                 directory.mkdirs()
-                val savedFiles = ArrayList<File>()
 
                 for (entry in entries) {
-                    val stem = buildAddressArtifactStem(entry)
+                    val stem = buildArtifactStem(entry)
+                    val savedFiles = ArrayList<File>(4)
+
+                    val scriptJson = entry.scriptJson?.trim().orEmpty()
+                    if (scriptJson.isNotEmpty()) {
+                        val file = File(directory, "$stem.script")
+                        file.writeText(scriptJson + "\n", StandardCharsets.UTF_8)
+                        savedFiles += file
+                    }
+
                     val mainnetAddress = entry.variants.firstOrNull { it.network == AddressNetwork.MAINNET }?.address
                     val testnetAddress = entry.variants.firstOrNull { it.network == AddressNetwork.TESTNET }?.address
 
@@ -1157,16 +1199,50 @@ class AikenRunConfiguration(
                         file.writeText(entry.policyId.trim() + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
                     }
+
+                    entriesByStem[stem] = savedFiles
+                    totalSaved += savedFiles.size
                 }
 
-                if (savedFiles.isEmpty()) return null
-                return "Saved ${savedFiles.size} artifact file(s) to ${directory.absolutePath}"
+                return ArtifactsPersistSummary(
+                    directory = directory,
+                    totalFiles = totalSaved,
+                    entriesByStem = entriesByStem,
+                    saveError = null
+                )
             } catch (e: Exception) {
-                return "Failed to save artifacts: ${e.message.orEmpty()}"
+                return ArtifactsPersistSummary(
+                    directory = directory,
+                    totalFiles = totalSaved,
+                    entriesByStem = entriesByStem,
+                    saveError = "Failed to save artifacts: ${e.message.orEmpty()}"
+                )
             }
         }
 
-        private fun resolveAddressArtifactsDirectory(workDir: String?): File? {
+        private fun buildArtifactsStatusMessage(hasErrors: Boolean, summary: ArtifactsPersistSummary?): String {
+            val headline =
+                if (hasErrors) {
+                    "Artifacts generation completed with errors."
+                } else {
+                    "Artifacts generation completed."
+                }
+            if (summary == null) return headline
+
+            val body = ArrayList<String>()
+            body += headline
+            for ((stem, files) in summary.entriesByStem) {
+                if (files.isNotEmpty()) {
+                    body += "$stem: saved ${files.size} files to ${summary.directory.absolutePath}"
+                }
+            }
+            if (!summary.saveError.isNullOrBlank()) {
+                body += summary.saveError
+            }
+            return body.joinToString("\n")
+        }
+
+        private fun resolveArtifactsDirectory(workDir: String?): File? {
             val raw = addressArtifactsBasePath.trim().ifEmpty { "artifacts" }
             val file = File(raw)
             if (file.isAbsolute) return file
@@ -1174,7 +1250,7 @@ class AikenRunConfiguration(
             return File(base, raw)
         }
 
-        private fun buildAddressArtifactStem(entry: AddressEntry): String {
+        private fun buildArtifactStem(entry: ArtifactsEntry): String {
             val fromTitle = parseAddressTargetFromTitle(entry.blueprintTitle.orEmpty())
             val module = entry.module?.takeIf { it.isNotBlank() } ?: fromTitle?.first ?: "module"
             val validator = entry.validator?.takeIf { it.isNotBlank() } ?: fromTitle?.second ?: "validator"
@@ -1182,9 +1258,17 @@ class AikenRunConfiguration(
         }
     }
 
-    private inner class AikenAddressExecutionConsole : ExecutionConsole {
+    private inner class AikenArtifactsExecutionConsole : ExecutionConsole {
         private val rootPanel = JPanel(BorderLayout())
-        private val statusLabel = JBLabel("Preparing address generation...")
+        private val statusLabel =
+            JBTextArea("Preparing artifacts generation...").apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                border = JBUI.Borders.empty()
+                alignmentX = JComponent.LEFT_ALIGNMENT
+                isOpaque = false
+            }
         private val contentPanel = JPanel()
         private val contentHolder = JPanel(BorderLayout())
         private val disposed = AtomicBoolean(false)
@@ -1219,18 +1303,18 @@ class AikenRunConfiguration(
 
         fun showFatalError(message: String) {
             updateUi {
-                statusLabel.text = "Address generation failed."
+                statusLabel.text = "Artifacts generation failed."
                 contentPanel.removeAll()
                 contentPanel.add(createMessageBlock(message))
                 refreshUi()
             }
         }
 
-        fun showResults(entries: List<AddressEntry>) {
+        fun showResults(entries: List<ArtifactsEntry>) {
             updateUi {
                 contentPanel.removeAll()
                 if (entries.isEmpty()) {
-                    contentPanel.add(createMessageBlock("No address results produced."))
+                    contentPanel.add(createMessageBlock("No artifacts were produced."))
                     refreshUi()
                     return@updateUi
                 }
@@ -1247,7 +1331,7 @@ class AikenRunConfiguration(
             }
         }
 
-        private fun createAddressEntryPanel(entry: AddressEntry): JComponent {
+        private fun createAddressEntryPanel(entry: ArtifactsEntry): JComponent {
             val panel = JPanel()
             panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
             panel.alignmentX = JComponent.LEFT_ALIGNMENT
@@ -1259,9 +1343,17 @@ class AikenRunConfiguration(
 
             val commonError = entry.commonError
             if (!commonError.isNullOrBlank()) {
-                panel.add(createErrorRow("address generation", commonError))
+                panel.add(createErrorRow("artifact generation", commonError))
                 panel.maximumSize = Dimension(Int.MAX_VALUE, panel.preferredSize.height)
                 return panel
+            }
+
+            val scriptCbor = entry.scriptCbor
+            val scriptError = entry.scriptError
+            if (!scriptCbor.isNullOrBlank()) {
+                panel.add(createCopyableValueRow("script CBOR", scriptCbor))
+            } else if (!scriptError.isNullOrBlank()) {
+                panel.add(createErrorRow("script CBOR", scriptError))
             }
 
             val policyId = entry.policyId
@@ -1282,6 +1374,11 @@ class AikenRunConfiguration(
                 }
             }
 
+            val savedFiles = entry.savedFiles
+            if (savedFiles.isNotEmpty()) {
+                panel.add(createMetaRow("Saved", savedFiles.joinToString(", ") { it.name }))
+            }
+
             panel.maximumSize = Dimension(Int.MAX_VALUE, panel.preferredSize.height)
             return panel
         }
@@ -1298,19 +1395,35 @@ class AikenRunConfiguration(
             row.alignmentX = JComponent.LEFT_ALIGNMENT
             row.border = JBUI.Borders.emptyTop(4)
 
-            val field = JBTextField(value)
-            field.isEditable = false
-            field.caretPosition = 0
+            val field =
+                object : EditorTextField() {
+                    override fun getPreferredSize(): Dimension {
+                        val size = super.getPreferredSize()
+                        return Dimension(JBUI.scale(420), size.height + JBUI.scale(5))
+                    }
+                }.apply {
+                    text = value
+                    setOneLineMode(true)
+                    isViewer = true
+                    minimumSize = Dimension(0, JBUI.scale(31))
+                }
 
             val copyButton = JButton(AllIcons.Actions.Copy).apply {
                 toolTipText = "Copy $label"
+                margin = JBUI.emptyInsets()
+                isFocusable = false
+                val width = JBUI.scale(33)
+                val height = JBUI.scale(31)
+                preferredSize = Dimension(width, height)
+                minimumSize = Dimension(width, height)
+                maximumSize = Dimension(width, height)
                 addActionListener {
                     CopyPasteManager.getInstance().setContents(StringSelection(value))
                 }
             }
 
             val labelComponent = JBLabel("$label:")
-            val labelColumnWidth = JBUI.scale(180)
+            val labelColumnWidth = JBUI.scale(130)
             labelComponent.preferredSize = Dimension(labelColumnWidth, labelComponent.preferredSize.height)
             labelComponent.minimumSize = Dimension(labelColumnWidth, labelComponent.minimumSize.height)
             labelComponent.maximumSize = Dimension(labelColumnWidth, Int.MAX_VALUE)
@@ -2980,6 +3093,11 @@ class AikenRunConfiguration(
 
     private fun sanitizeConvertOutputForScript(raw: String, invocation: List<String>): String {
         val text = stripAnsi(raw).replace("\r\n", "\n").replace('\r', '\n')
+        val extractedJson = extractConvertJsonObject(text)
+        if (!extractedJson.isNullOrBlank()) {
+            return extractedJson.trimEnd() + "\n"
+        }
+
         val lines = text.lines().toMutableList()
         val invocationLine = invocation.joinToString(" ").trim()
 
@@ -2997,6 +3115,42 @@ class AikenRunConfiguration(
         }
 
         return lines.joinToString("\n").trimEnd() + "\n"
+    }
+
+    private fun extractConvertJsonObject(rawOutput: String): String? {
+        var best: String? = null
+        var start = rawOutput.indexOf('{')
+        while (start >= 0) {
+            val endInclusive = findJsonObjectEnd(rawOutput, start)
+            if (endInclusive != null) {
+                val candidate = rawOutput.substring(start, endInclusive + 1)
+                try {
+                    val parsed = JsonParser.parseString(candidate)
+                    if (parsed.isJsonObject) {
+                        val obj = parsed.asJsonObject
+                        if (looksLikeConvertScriptJson(obj)) {
+                            best = candidate
+                        } else if (best == null) {
+                            best = candidate
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Ignore malformed candidates and continue.
+                }
+            }
+            start = rawOutput.indexOf('{', start + 1)
+        }
+        return best
+    }
+
+    private fun looksLikeConvertScriptJson(root: JsonObject): Boolean {
+        if (root["cborHex"]?.isJsonPrimitive == true) return true
+        if (root["script"]?.isJsonObject == true) {
+            val scriptObject = root["script"].asJsonObject
+            if (scriptObject["cborHex"]?.isJsonPrimitive == true) return true
+        }
+        val type = root.getString("type")
+        return !type.isNullOrBlank() && type.contains("PlutusScript", ignoreCase = true)
     }
 
     private fun resolveSingleValidatorFromBlueprint(workDir: String?): Pair<String, String>? {
@@ -3326,9 +3480,9 @@ class AikenRunConfiguration(
         when (this) {
             AikenRunCommand.CHECK -> "Check"
             AikenRunCommand.BUILD -> "Build"
-            AikenRunCommand.ADDRESS -> "Address"
+            AikenRunCommand.ADDRESS -> "Artifacts"
             AikenRunCommand.APPLY -> "Apply"
-            AikenRunCommand.CONVERT -> "Convert"
+            AikenRunCommand.CONVERT -> "Artifacts"
         }
 
     private inline fun <reified T : Enum<T>> readEnum(
@@ -3375,9 +3529,9 @@ class AikenRunConfiguration(
 
 enum class AikenRunCommand(val cliValue: String, private val label: String) {
     BUILD("build", "build"),
-    ADDRESS("address", "address"),
+    ADDRESS("address", "artifacts"),
     APPLY("blueprint apply", "blueprint apply"),
-    CONVERT("blueprint convert", "blueprint convert"),
+    CONVERT("blueprint convert", "artifacts"),
     CHECK("check", "check");
 
     override fun toString(): String = label

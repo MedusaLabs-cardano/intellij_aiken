@@ -20,9 +20,8 @@ import javax.swing.JPanel
 
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildCard = "build"
-    private val addressCard = "address"
+    private val artifactsCard = "artifacts"
     private val applyCard = "apply"
-    private val convertCard = "convert"
     private val checkCard = "check"
 
     private val commandLabel = JBLabel()
@@ -60,11 +59,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyModuleField = JBTextField()
     private val applyValidatorField = JBTextField()
     private val applyCborField = JBTextField()
-
-    private val convertModuleField = JBTextField()
-    private val convertValidatorField = JBTextField()
-    private val convertToCombo = JComboBox(AikenBlueprintConvertTarget.entries.toTypedArray())
-    private val convertTerminalOutputFileField = JBTextField()
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -110,10 +104,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyValidatorField.emptyText.text = "e.g. my_validator"
         applyCborField.emptyText.text = "e.g. 182A"
 
-        convertModuleField.emptyText.text = "e.g. my_module"
-        convertValidatorField.emptyText.text = "e.g. my_validator"
         addressArtifactsBasePathField.emptyText.text = "artifacts"
-        convertTerminalOutputFileField.emptyText.text = "artifacts"
 
         checkSeedField.emptyText.text = "e.g. 42"
         checkMaxSuccessField.emptyText.text = "100"
@@ -125,7 +116,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     }
 
     override fun resetEditorFrom(configuration: AikenRunConfiguration) {
-        commandLabel.text = configuration.command.cliValue
+        commandLabel.text = commandDisplayName(configuration.command)
         showCommandCard(configuration.command)
         updatePreferredSize(configuration.command)
         projectDirectoryField.text =
@@ -161,12 +152,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyValidatorField.text = configuration.applyValidator
         applyCborField.text = configuration.applyCbor
 
-        convertModuleField.text = configuration.convertModule
-        convertValidatorField.text = configuration.convertValidator
-        convertToCombo.selectedItem = configuration.convertTo
-        convertTerminalOutputFileField.text =
-            configuration.convertTerminalOutputFile.ifBlank { "artifacts" }
-
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
         checkDebugCheck.isSelected = configuration.checkDebug
@@ -199,7 +184,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
 
             AikenRunCommand.ADDRESS -> {
-                // Not used by `aiken blueprint address`; keep existing values untouched.
+                // Shared toggles are not used by Artifacts runner.
             }
 
             AikenRunCommand.APPLY -> {
@@ -207,8 +192,9 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
 
             AikenRunCommand.CONVERT -> {
-                // No shared toggles used by `aiken blueprint convert`.
+                // Legacy Convert configs are handled by Artifacts behavior.
             }
+
         }
 
         configuration.buildUplc = buildUplcCheck.isSelected
@@ -235,14 +221,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.applyValidator = applyValidatorField.text.trim()
         configuration.applyCbor = applyCborField.text.trim()
 
-        configuration.convertModule = convertModuleField.text.trim()
-        configuration.convertValidator = convertValidatorField.text.trim()
-        configuration.convertTo =
-            (convertToCombo.selectedItem as? AikenBlueprintConvertTarget)
-                ?: AikenBlueprintConvertTarget.CARDANO_CLI
-        configuration.convertTerminalOutputFile =
-            convertTerminalOutputFileField.text.trim().ifEmpty { "artifacts" }
-
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
             (checkOutputModeCombo.selectedItem as? AikenCheckOutputMode) ?: AikenCheckOutputMode.IDE_INTEGRATED
@@ -263,9 +241,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     override fun createEditor(): JComponent {
         commandSpecificPanel.add(createBuildPanel(), buildCard)
-        commandSpecificPanel.add(createAddressPanel(), addressCard)
+        commandSpecificPanel.add(createArtifactsPanel(), artifactsCard)
         commandSpecificPanel.add(createApplyPanel(), applyCard)
-        commandSpecificPanel.add(createConvertPanel(), convertCard)
         commandSpecificPanel.add(createCheckPanel(), checkCard)
 
         val content = panel {
@@ -366,14 +343,14 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         }
     }
 
-    private fun createAddressPanel(): JComponent {
+    private fun createArtifactsPanel(): JComponent {
         return panel {
-            group("address options") {
+            group("artifacts options") {
                 row("Input blueprint file:") {
                     cell(addressInField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Blueprint JSON file used to resolve validators and produce addresses.")
+                        .comment("Blueprint JSON file used to produce script, addresses, and policy IDs.")
                 }
 
                 row("Module:") {
@@ -406,7 +383,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(addressArtifactsBasePathField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Output directory for auto-saved files: module.validator.addr/addr_test/policy.")
+                        .comment("Output directory for auto-saved files: module.validator.script/addr/addr_test/policy.")
                 }
             }
         }
@@ -541,47 +518,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         }
     }
 
-    private fun createConvertPanel(): JComponent {
-        return panel {
-            group("convert options") {
-                row("Module:") {
-                    cell(convertModuleField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Optional module name. Leave empty when blueprint has a single validator.")
-                }
-
-                row("Validator:") {
-                    cell(convertValidatorField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Optional validator name. Leave empty when blueprint has a single validator.")
-                }
-
-                row("Convert to:") {
-                    cell(convertToCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Output format for conversion.")
-                }
-
-                row("Script output directory:") {
-                    cell(convertTerminalOutputFileField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Directory where converted script is saved as module.validator.script.")
-                }
-            }
-        }
-    }
-
     private fun showCommandCard(command: AikenRunCommand) {
         val card =
             when (command) {
                 AikenRunCommand.BUILD -> buildCard
-                AikenRunCommand.ADDRESS -> addressCard
+                AikenRunCommand.ADDRESS -> artifactsCard
                 AikenRunCommand.APPLY -> applyCard
-                AikenRunCommand.CONVERT -> convertCard
+                AikenRunCommand.CONVERT -> artifactsCard
                 AikenRunCommand.CHECK -> checkCard
             }
         (commandSpecificPanel.layout as? CardLayout)?.show(commandSpecificPanel, card)
@@ -590,13 +533,20 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private fun updatePreferredSize(command: AikenRunCommand) {
         val preferredHeight =
             when (command) {
-                AikenRunCommand.ADDRESS -> 640
+                AikenRunCommand.ADDRESS -> 620
                 AikenRunCommand.APPLY -> 680
-                AikenRunCommand.CONVERT -> 640
+                AikenRunCommand.CONVERT -> 620
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 760
             }
         rootContent?.preferredSize = Dimension(860, preferredHeight)
         rootContent?.revalidate()
+    }
+
+    private fun commandDisplayName(command: AikenRunCommand): String {
+        return when (command) {
+            AikenRunCommand.ADDRESS -> "artifacts"
+            else -> command.cliValue
+        }
     }
 }
