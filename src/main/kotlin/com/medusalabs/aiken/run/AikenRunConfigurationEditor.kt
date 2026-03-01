@@ -34,8 +34,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildSilentWarningsCheck = JBCheckBox("Hide warnings output")
     private val buildWatchCheck = JBCheckBox("Re-run on file changes")
 
-    private val checkDenyWarningsCheck = JBCheckBox("Treat warnings as errors")
-    private val checkSilentWarningsCheck = JBCheckBox("Hide warnings output")
+    private val checkWarningsHandlingCombo = JComboBox(CheckWarningsHandling.entries.toTypedArray())
     private val checkWatchCheck = JBCheckBox("Re-run on file changes")
 
     private val buildUplcCheck = JBCheckBox("Dump textual UPLC")
@@ -127,8 +126,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         buildSilentWarningsCheck.isSelected = configuration.silentWarnings
         buildWatchCheck.isSelected = configuration.watch
 
-        checkDenyWarningsCheck.isSelected = configuration.denyWarnings
-        checkSilentWarningsCheck.isSelected = configuration.silentWarnings
+        checkWarningsHandlingCombo.selectedItem =
+            CheckWarningsHandling.fromFlags(
+                denyWarnings = configuration.denyWarnings,
+                silentWarnings = configuration.silentWarnings
+            )
         checkWatchCheck.isSelected = configuration.watch
 
         buildUplcCheck.isSelected = configuration.buildUplc
@@ -182,8 +184,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
 
             AikenRunCommand.CHECK -> {
-                configuration.denyWarnings = checkDenyWarningsCheck.isSelected
-                configuration.silentWarnings = checkSilentWarningsCheck.isSelected
+                val mode = (checkWarningsHandlingCombo.selectedItem as? CheckWarningsHandling)
+                    ?: CheckWarningsHandling.NORMAL
+                configuration.denyWarnings = mode == CheckWarningsHandling.TREAT_AS_ERRORS
+                configuration.silentWarnings = mode == CheckWarningsHandling.IGNORE
                 configuration.watch = checkWatchCheck.isSelected
             }
 
@@ -415,12 +419,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private fun createCheckPanel(): JComponent {
         return panel {
             group("Options") {
-                row {
-                    cell(checkDenyWarningsCheck)
-                }
-
-                row {
-                    cell(checkSilentWarningsCheck)
+                row("Warnings handling:") {
+                    cell(checkWarningsHandlingCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Ignore warnings, keep normal behavior, or treat warnings as errors.")
                 }
 
                 row {
@@ -580,6 +583,24 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
         rootContent?.preferredSize = Dimension(860, preferredHeight)
         rootContent?.revalidate()
+    }
+
+    private enum class CheckWarningsHandling(private val label: String) {
+        IGNORE("Ignore"),
+        NORMAL("Normal"),
+        TREAT_AS_ERRORS("Treat as errors");
+
+        override fun toString(): String = label
+
+        companion object {
+            fun fromFlags(denyWarnings: Boolean, silentWarnings: Boolean): CheckWarningsHandling {
+                return when {
+                    denyWarnings -> TREAT_AS_ERRORS
+                    silentWarnings -> IGNORE
+                    else -> NORMAL
+                }
+            }
+        }
     }
 
 }
