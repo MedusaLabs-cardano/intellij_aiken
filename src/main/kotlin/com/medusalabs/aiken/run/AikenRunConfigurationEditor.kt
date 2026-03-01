@@ -71,6 +71,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyValidatorField = JBTextField()
     private val applyDefaultCborParametersField = JBTextField()
     private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
+    private val applyOutputModeCombo = JComboBox(AikenApplyOutputMode.entries.toTypedArray())
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -175,6 +176,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyValidatorField.text = configuration.applyValidator
         applyDefaultCborParametersField.text = configuration.applyDefaultCborParameters
         applyAutoUntilNoParametersCheck.isSelected = configuration.applyAutoUntilNoParameters
+        applyOutputModeCombo.selectedItem = configuration.applyOutputMode
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -259,6 +261,8 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.applyValidator = applyValidatorField.text.trim()
         configuration.applyDefaultCborParameters = applyDefaultCborParametersField.text.trim()
         configuration.applyAutoUntilNoParameters = applyAutoUntilNoParametersCheck.isSelected
+        configuration.applyOutputMode =
+            (applyOutputModeCombo.selectedItem as? AikenApplyOutputMode) ?: AikenApplyOutputMode.IDE_INTEGRATED
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -639,6 +643,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 row {
                     cell(applyAutoUntilNoParametersCheck)
                         .comment("If disabled, run Apply separately for each parameter.")
+                }
+
+                row("Output mode:") {
+                    cell(applyOutputModeCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("TTY for native interactive prompts, IDE integrated for structured GUI parameterization.")
                 }
             }
         }
