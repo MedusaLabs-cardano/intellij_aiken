@@ -74,6 +74,7 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
 import java.nio.charset.StandardCharsets
+import java.nio.file.Paths
 import java.util.Base64
 import java.util.LinkedHashMap
 import java.util.LinkedHashSet
@@ -164,6 +165,18 @@ class AikenRunConfiguration(
 
     @JvmField
     var addressIncludeMainnetAddress: Boolean = true
+
+    @JvmField
+    var addressScriptTemplate: String = DEFAULT_ARTIFACT_SCRIPT_TEMPLATE
+
+    @JvmField
+    var addressMainnetTemplate: String = DEFAULT_ARTIFACT_MAINNET_TEMPLATE
+
+    @JvmField
+    var addressTestnetTemplate: String = DEFAULT_ARTIFACT_TESTNET_TEMPLATE
+
+    @JvmField
+    var addressPolicyTemplate: String = DEFAULT_ARTIFACT_POLICY_TEMPLATE
 
     @JvmField
     var addressArtifactsBasePath: String = "artifacts"
@@ -955,6 +968,11 @@ class AikenRunConfiguration(
         val saveError: String?
     )
 
+    private data class ArtifactNameContext(
+        val module: String,
+        val validator: String
+    )
+
     private inner class AikenArtifactsRunState(
         private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
@@ -1395,11 +1413,18 @@ class AikenRunConfiguration(
 
                 for (entry in entries) {
                     val stem = buildArtifactStem(entry)
+                    val nameContext = resolveArtifactNameContext(entry)
                     val savedFiles = ArrayList<File>(4)
 
                     val scriptJson = entry.scriptJson?.trim().orEmpty()
                     if (addressIncludeScriptCbor && scriptJson.isNotEmpty()) {
-                        val file = File(directory, "$stem.script")
+                        val file = resolveArtifactOutputFile(
+                            directory = directory,
+                            template = addressScriptTemplate,
+                            defaultTemplate = DEFAULT_ARTIFACT_SCRIPT_TEMPLATE,
+                            context = nameContext
+                        ) ?: throw IOException("Invalid script template: $addressScriptTemplate")
+                        file.parentFile?.mkdirs()
                         file.writeText(scriptJson + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
                     }
@@ -1408,19 +1433,37 @@ class AikenRunConfiguration(
                     val testnetAddress = entry.variants.firstOrNull { it.network == AddressNetwork.TESTNET }?.address
 
                     if (!mainnetAddress.isNullOrBlank()) {
-                        val file = File(directory, "$stem.addr")
+                        val file = resolveArtifactOutputFile(
+                            directory = directory,
+                            template = addressMainnetTemplate,
+                            defaultTemplate = DEFAULT_ARTIFACT_MAINNET_TEMPLATE,
+                            context = nameContext
+                        ) ?: throw IOException("Invalid mainnet address template: $addressMainnetTemplate")
+                        file.parentFile?.mkdirs()
                         file.writeText(mainnetAddress.trim() + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
                     }
 
                     if (!testnetAddress.isNullOrBlank()) {
-                        val file = File(directory, "$stem.addr_test")
+                        val file = resolveArtifactOutputFile(
+                            directory = directory,
+                            template = addressTestnetTemplate,
+                            defaultTemplate = DEFAULT_ARTIFACT_TESTNET_TEMPLATE,
+                            context = nameContext
+                        ) ?: throw IOException("Invalid testnet address template: $addressTestnetTemplate")
+                        file.parentFile?.mkdirs()
                         file.writeText(testnetAddress.trim() + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
                     }
 
                     if (addressGeneratePolicyId && !entry.policyId.isNullOrBlank()) {
-                        val file = File(directory, "$stem.policy")
+                        val file = resolveArtifactOutputFile(
+                            directory = directory,
+                            template = addressPolicyTemplate,
+                            defaultTemplate = DEFAULT_ARTIFACT_POLICY_TEMPLATE,
+                            context = nameContext
+                        ) ?: throw IOException("Invalid policy template: $addressPolicyTemplate")
+                        file.parentFile?.mkdirs()
                         file.writeText(entry.policyId.trim() + "\n", StandardCharsets.UTF_8)
                         savedFiles += file
                     }
@@ -1476,10 +1519,46 @@ class AikenRunConfiguration(
         }
 
         private fun buildArtifactStem(entry: ArtifactsEntry): String {
+            val context = resolveArtifactNameContext(entry)
+            return "${context.module}.${context.validator}"
+        }
+
+        private fun resolveArtifactNameContext(entry: ArtifactsEntry): ArtifactNameContext {
             val fromTitle = parseAddressTargetFromTitle(entry.blueprintTitle.orEmpty())
             val module = entry.module?.takeIf { it.isNotBlank() } ?: fromTitle?.first ?: "module"
             val validator = entry.validator?.takeIf { it.isNotBlank() } ?: fromTitle?.second ?: "validator"
-            return "${sanitizeArtifactSegment(module)}.${sanitizeArtifactSegment(validator)}"
+            return ArtifactNameContext(
+                module = sanitizeArtifactSegment(module),
+                validator = sanitizeArtifactSegment(validator)
+            )
+        }
+
+        private fun resolveArtifactOutputFile(
+            directory: File,
+            template: String,
+            defaultTemplate: String,
+            context: ArtifactNameContext
+        ): File? {
+            val effectiveTemplate = template.trim().ifEmpty { defaultTemplate }
+            val rendered =
+                effectiveTemplate
+                    .replace("%module%", context.module)
+                    .replace("%validator%", context.validator)
+                    .replace('\\', '/')
+                    .trim()
+            if (rendered.isEmpty()) return null
+
+            val relativePath =
+                try {
+                    Paths.get(rendered).normalize()
+                } catch (_: Exception) {
+                    return null
+                }
+            if (relativePath.isAbsolute) return null
+            if (relativePath.toString().isBlank()) return null
+            if (relativePath.startsWith("..")) return null
+
+            return directory.toPath().resolve(relativePath).normalize().toFile()
         }
     }
 
@@ -1930,6 +2009,14 @@ class AikenRunConfiguration(
         addressIncludeScriptCbor = readBoolean(element, "addressIncludeScriptCbor", true)
         addressIncludeTestnetAddress = readBoolean(element, "addressIncludeTestnetAddress", true)
         addressIncludeMainnetAddress = readBoolean(element, "addressIncludeMainnetAddress", true)
+        addressScriptTemplate =
+            readString(element, "addressScriptTemplate", DEFAULT_ARTIFACT_SCRIPT_TEMPLATE)
+        addressMainnetTemplate =
+            readString(element, "addressMainnetTemplate", DEFAULT_ARTIFACT_MAINNET_TEMPLATE)
+        addressTestnetTemplate =
+            readString(element, "addressTestnetTemplate", DEFAULT_ARTIFACT_TESTNET_TEMPLATE)
+        addressPolicyTemplate =
+            readString(element, "addressPolicyTemplate", DEFAULT_ARTIFACT_POLICY_TEMPLATE)
         addressArtifactsBasePath = readString(element, "addressArtifactsBasePath", addressArtifactsBasePath)
         cleanTargetPath = readString(element, "cleanTargetPath", cleanTargetPath)
 
@@ -1986,6 +2073,10 @@ class AikenRunConfiguration(
         writeField(element, "addressIncludeScriptCbor", addressIncludeScriptCbor.toString())
         writeField(element, "addressIncludeTestnetAddress", addressIncludeTestnetAddress.toString())
         writeField(element, "addressIncludeMainnetAddress", addressIncludeMainnetAddress.toString())
+        writeField(element, "addressScriptTemplate", addressScriptTemplate)
+        writeField(element, "addressMainnetTemplate", addressMainnetTemplate)
+        writeField(element, "addressTestnetTemplate", addressTestnetTemplate)
+        writeField(element, "addressPolicyTemplate", addressPolicyTemplate)
         writeField(element, "addressArtifactsBasePath", addressArtifactsBasePath)
         writeField(element, "cleanTargetPath", cleanTargetPath)
 
@@ -3817,6 +3908,10 @@ class AikenRunConfiguration(
         val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")
         val ADDRESS_OUTPUT_LINE_REGEX = Regex("""^addr(?:_test)?1[a-z0-9]+$""")
         val POLICY_ID_OUTPUT_LINE_REGEX = Regex("""^[0-9a-f]{56}$""")
+        const val DEFAULT_ARTIFACT_SCRIPT_TEMPLATE = "%module%.%validator%.script"
+        const val DEFAULT_ARTIFACT_MAINNET_TEMPLATE = "%module%.%validator%.addr"
+        const val DEFAULT_ARTIFACT_TESTNET_TEMPLATE = "%module%.%validator%.addr_test"
+        const val DEFAULT_ARTIFACT_POLICY_TEMPLATE = "%module%.%validator%.policy"
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
     }
 }

@@ -10,13 +10,19 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.Color
+import java.awt.Component
 import java.awt.Dimension
 import javax.swing.JComponent
 import javax.swing.JComboBox
+import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.text.JTextComponent
 
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
+    private val descriptionFontScale = 0.9f
     private val buildCard = "build"
     private val artifactsCard = "artifacts"
     private val cleanCard = "clean"
@@ -48,10 +54,14 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressModuleField = JBTextField()
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
-    private val addressIncludeScriptCborCheck = JBCheckBox("Generate script CBOR")
+    private val addressIncludeScriptCborCheck = JBCheckBox("Generate script file")
     private val addressIncludeTestnetAddressCheck = JBCheckBox("Generate testnet address")
     private val addressIncludeMainnetAddressCheck = JBCheckBox("Generate mainnet address")
     private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
+    private val addressScriptTemplateField = JBTextField()
+    private val addressMainnetTemplateField = JBTextField()
+    private val addressTestnetTemplateField = JBTextField()
+    private val addressPolicyTemplateField = JBTextField()
     private val addressArtifactsBasePathField = JBTextField()
     private val cleanTargetPathField = JBTextField()
 
@@ -98,6 +108,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressModuleField.emptyText.text = "e.g. my_module, other_module"
         addressValidatorField.emptyText.text = "e.g. my_validator, other_validator"
         addressDelegatedToField.emptyText.text = "e.g. stake_test1..."
+        addressScriptTemplateField.emptyText.text = "%module%.%validator%.script"
+        addressMainnetTemplateField.emptyText.text = "%module%.%validator%.addr"
+        addressTestnetTemplateField.emptyText.text = "%module%.%validator%.addr_test"
+        addressPolicyTemplateField.emptyText.text = "%module%.%validator%.policy"
 
         applyInField.emptyText.text = "plutus.json"
         applyOutField.emptyText.text = "plutus.json"
@@ -148,6 +162,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         addressIncludeTestnetAddressCheck.isSelected = configuration.addressIncludeTestnetAddress
         addressIncludeMainnetAddressCheck.isSelected = configuration.addressIncludeMainnetAddress
         addressGeneratePolicyIdCheck.isSelected = configuration.addressGeneratePolicyId
+        addressScriptTemplateField.text = configuration.addressScriptTemplate.ifBlank { "%module%.%validator%.script" }
+        addressMainnetTemplateField.text = configuration.addressMainnetTemplate.ifBlank { "%module%.%validator%.addr" }
+        addressTestnetTemplateField.text = configuration.addressTestnetTemplate.ifBlank { "%module%.%validator%.addr_test" }
+        addressPolicyTemplateField.text = configuration.addressPolicyTemplate.ifBlank { "%module%.%validator%.policy" }
         addressArtifactsBasePathField.text = configuration.addressArtifactsBasePath.ifBlank { "artifacts" }
         cleanTargetPathField.text = configuration.cleanTargetPath.ifBlank { "artifacts" }
 
@@ -227,6 +245,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.addressIncludeTestnetAddress = addressIncludeTestnetAddressCheck.isSelected
         configuration.addressIncludeMainnetAddress = addressIncludeMainnetAddressCheck.isSelected
         configuration.addressGeneratePolicyId = addressGeneratePolicyIdCheck.isSelected
+        configuration.addressScriptTemplate = addressScriptTemplateField.text.trim()
+        configuration.addressMainnetTemplate = addressMainnetTemplateField.text.trim()
+        configuration.addressTestnetTemplate = addressTestnetTemplateField.text.trim()
+        configuration.addressPolicyTemplate = addressPolicyTemplateField.text.trim()
         configuration.addressArtifactsBasePath =
             addressArtifactsBasePathField.text.trim().ifEmpty { "artifacts" }
         configuration.cleanTargetPath = cleanTargetPathField.text.trim().ifEmpty { "artifacts" }
@@ -257,6 +279,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     }
 
     override fun createEditor(): JComponent {
+        commandSpecificPanel.removeAll()
         commandSpecificPanel.add(createBuildPanel(), buildCard)
         commandSpecificPanel.add(createArtifactsPanel(), artifactsCard)
         commandSpecificPanel.add(createCleanPanel(), cleanCard)
@@ -294,6 +317,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             }
         }
 
+        applyUnifiedDescriptionFont(content)
         rootContent = content
         return ScrollPaneFactory.createScrollPane(content, true)
     }
@@ -356,6 +380,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     }
 
     private fun createArtifactsPanel(): JComponent {
+        val toggleColumnWidth = artifactsToggleColumnWidth()
         return panel {
             group("Options") {
                 row("Input blueprint file:") {
@@ -385,25 +410,39 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .align(AlignX.FILL)
                         .comment("Optional stake key/address attached to both generated addresses (testnet and mainnet).")
                 }
+            }
 
+            group("Artifacts") {
                 row {
-                    cell(addressIncludeScriptCborCheck)
-                        .comment("Generate script CBOR and save module.validator.script.")
+                    cell(createFixedWidthToggleCell(addressIncludeScriptCborCheck, toggleColumnWidth))
+                    cell(addressScriptTemplateField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Template for script file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
-                    cell(addressIncludeTestnetAddressCheck)
-                        .comment("Generate testnet address and save module.validator.addr_test.")
+                    cell(createFixedWidthToggleCell(addressIncludeTestnetAddressCheck, toggleColumnWidth))
+                    cell(addressTestnetTemplateField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Template for testnet address file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
-                    cell(addressIncludeMainnetAddressCheck)
-                        .comment("Generate mainnet address and save module.validator.addr.")
+                    cell(createFixedWidthToggleCell(addressIncludeMainnetAddressCheck, toggleColumnWidth))
+                    cell(addressMainnetTemplateField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Template for mainnet address file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
-                    cell(addressGeneratePolicyIdCheck)
-                        .comment("Also compute policy ID for each selected validator.")
+                    cell(createFixedWidthToggleCell(addressGeneratePolicyIdCheck, toggleColumnWidth))
+                    cell(addressPolicyTemplateField)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("Template for policy file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row("Artifacts base path:") {
@@ -414,6 +453,53 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 }
             }
         }
+    }
+
+    private fun createFixedWidthToggleCell(checkBox: JBCheckBox, width: Int): JComponent {
+        return JPanel(BorderLayout()).apply {
+            isOpaque = false
+            preferredSize = Dimension(width, checkBox.preferredSize.height)
+            minimumSize = Dimension(width, checkBox.preferredSize.height)
+            add(checkBox, BorderLayout.WEST)
+        }
+    }
+
+    private fun applyUnifiedDescriptionFont(component: Component) {
+        when (component) {
+            is JLabel -> {
+                if (isContextHelpColor(component.foreground)) {
+                    component.font = component.font.deriveFont(component.font.size2D * descriptionFontScale)
+                }
+            }
+
+            is JTextComponent -> {
+                if (isContextHelpColor(component.foreground)) {
+                    component.font = component.font.deriveFont(component.font.size2D * descriptionFontScale)
+                }
+            }
+        }
+        if (component is java.awt.Container) {
+            component.components.forEach(::applyUnifiedDescriptionFont)
+        }
+    }
+
+    private fun isContextHelpColor(color: Color?): Boolean {
+        val contextHelp = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        return color != null &&
+            color.red == contextHelp.red &&
+            color.green == contextHelp.green &&
+            color.blue == contextHelp.blue &&
+            color.alpha == contextHelp.alpha
+    }
+
+    private fun artifactsToggleColumnWidth(): Int {
+        val maxToggleWidth = listOf(
+            addressIncludeScriptCborCheck,
+            addressIncludeTestnetAddressCheck,
+            addressIncludeMainnetAddressCheck,
+            addressGeneratePolicyIdCheck
+        ).maxOf { it.preferredSize.width }
+        return maxToggleWidth + JBUI.scale(8)
     }
 
     private fun createCheckPanel(): JComponent {
@@ -574,10 +660,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private fun updatePreferredSize(command: AikenRunCommand) {
         val preferredHeight =
             when (command) {
-                AikenRunCommand.ADDRESS -> 760
-                AikenRunCommand.CLEAN -> 560
+                AikenRunCommand.ADDRESS -> 840
+                AikenRunCommand.CLEAN -> 420
                 AikenRunCommand.APPLY -> 680
-                AikenRunCommand.CONVERT -> 760
+                AikenRunCommand.CONVERT -> 840
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 900
             }
