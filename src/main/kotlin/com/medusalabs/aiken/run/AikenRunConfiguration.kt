@@ -76,9 +76,11 @@ import java.awt.datatransfer.StringSelection
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.util.Base64
+import java.util.ArrayDeque
 import java.util.LinkedHashMap
 import java.util.LinkedHashSet
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -197,7 +199,7 @@ class AikenRunConfiguration(
     var applyValidator: String = ""
 
     @JvmField
-    var applyCbor: String = ""
+    var applyDefaultCborParameters: String = ""
 
     @JvmField
     var applyAutoUntilNoParameters: Boolean = true
@@ -341,27 +343,103 @@ class AikenRunConfiguration(
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val args = buildCommandParameters()
-            val invocation = buildInvocation(executable, args, workDir)
             val inspectionFile = resolveApplyInspectionFile(workDir)
+            val sessionKey = applyAutoSessionKey(inspectionFile, workDir)
+            val accumulatedParameters =
+                APPLY_AUTO_CBOR_ACCUMULATOR.computeIfAbsent(sessionKey) { mutableListOf() }
+            val cborQueue =
+                APPLY_AUTO_CBOR_QUEUE.computeIfAbsent(sessionKey) {
+                    ArrayDeque(configuredApplyCborParameters())
+                }
+            val hasNonConfiguredApplied =
+                APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.computeIfAbsent(sessionKey) { AtomicBoolean(false) }
 
             val pendingBeforeStart = inspectionFile?.let { hasPendingApplyParameters(it) }
             if (pendingBeforeStart == false) {
-                return createCompletedApplyResult("Blueprint has no parameters left to apply\n")
+                val completion = buildString {
+                    append("Blueprint has no parameters left to apply\n")
+                    val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                    if (snapshot.isNotEmpty()) {
+                        append(formatAppliedCborParametersLine(snapshot))
+                        append('\n')
+                        if (hasNonConfiguredApplied.get()) {
+                            append(APPLY_PARAMETERS_HINT_LINE)
+                            append('\n')
+                        }
+                    }
+                }
+                APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                return createCompletedApplyResult(completion)
             }
 
+            val cborForRun =
+                synchronized(cborQueue) {
+                    if (cborQueue.isEmpty()) null else cborQueue.removeFirst()
+                }
+            val args = buildApplyCommandParameters(cborForRun)
+            val invocation = buildInvocation(executable, args, workDir)
             val handler = createPtyTerminalProcessHandler(invocation, workDir)
+            val runOutput = StringBuilder()
 
             handler.addProcessListener(
                 object : ProcessListener {
+                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                        runOutput.append(event.text)
+                    }
+
                     override fun processTerminated(event: ProcessEvent) {
-                        if (event.exitCode != 0) return
+                        val appliedInRun = extractLastAppliedCborFromApplyOutput(runOutput.toString())
+                        if (!appliedInRun.isNullOrBlank()) {
+                            synchronized(accumulatedParameters) {
+                                accumulatedParameters += appliedInRun
+                            }
+                            if (cborForRun.isNullOrBlank()) {
+                                hasNonConfiguredApplied.set(true)
+                            }
+                        }
+
+                        if (event.exitCode != 0) {
+                            val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                            if (snapshot.isNotEmpty()) {
+                                val hintSuffix =
+                                    if (hasNonConfiguredApplied.get()) {
+                                        "\n$APPLY_PARAMETERS_HINT_LINE"
+                                    } else {
+                                        ""
+                                    }
+                                handler.notifyTextAvailable(
+                                    "\n${formatAppliedCborParametersLine(snapshot)}$hintSuffix\n",
+                                    ProcessOutputTypes.STDOUT
+                                )
+                            }
+                            APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                            APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                            APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                            return
+                        }
                         val hasPending = inspectionFile?.let { hasPendingApplyParameters(it) }
                         if (hasPending == false) {
-                            handler.notifyTextAvailable(
-                                "Blueprint has no parameters left to apply\n",
-                                ProcessOutputTypes.STDOUT
-                            )
+                            val completion = buildString {
+                                append(ANSI_CLEAR_SCREEN_AND_HOME)
+                                append("\rBlueprint has no parameters left to apply\r\n")
+                                val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                                if (snapshot.isNotEmpty()) {
+                                    append("\r")
+                                    append(formatAppliedCborParametersLine(snapshot))
+                                    append("\r\n")
+                                    if (hasNonConfiguredApplied.get()) {
+                                        append("\r")
+                                        append(APPLY_PARAMETERS_HINT_LINE)
+                                        append("\r\n")
+                                    }
+                                }
+                            }
+                            handler.notifyTextAvailable(completion, ProcessOutputTypes.STDOUT)
+                            APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                            APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                            APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
                             return
                         }
                         ApplicationManager.getApplication().invokeLater {
@@ -2024,7 +2102,7 @@ class AikenRunConfiguration(
         applyOut = readString(element, "applyOut", applyOut)
         applyModule = readString(element, "applyModule", applyModule)
         applyValidator = readString(element, "applyValidator", applyValidator)
-        applyCbor = readString(element, "applyCbor", applyCbor)
+        applyDefaultCborParameters = readString(element, "applyDefaultCborParameters", applyDefaultCborParameters)
         applyAutoUntilNoParameters = readBoolean(element, "applyAutoUntilNoParameters", true)
 
         convertModule = readString(element, "convertModule", convertModule)
@@ -2084,7 +2162,7 @@ class AikenRunConfiguration(
         writeField(element, "applyOut", applyOut)
         writeField(element, "applyModule", applyModule)
         writeField(element, "applyValidator", applyValidator)
-        writeField(element, "applyCbor", applyCbor)
+        writeField(element, "applyDefaultCborParameters", applyDefaultCborParameters)
         writeField(element, "applyAutoUntilNoParameters", applyAutoUntilNoParameters.toString())
 
         writeField(element, "convertModule", convertModule)
@@ -2142,14 +2220,8 @@ class AikenRunConfiguration(
             }
 
             AikenRunCommand.APPLY -> {
-                appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
-                appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
-                appendValueOption(parameters, "--module", applyModule)
-                appendValueOption(parameters, "--validator", applyValidator)
-                val cbor = applyCbor.trim()
-                if (cbor.isNotEmpty()) {
-                    parameters += cbor
-                }
+                val cbor = configuredApplyCborParameters().firstOrNull()
+                parameters += buildApplyCommandParameters(cbor, includeExtraArgs = false)
             }
 
             AikenRunCommand.CONVERT -> {
@@ -2196,6 +2268,110 @@ class AikenRunConfiguration(
             0 -> ""
             1 -> parts.first()
             else -> parts.joinToString(",")
+        }
+    }
+
+    private fun configuredApplyCborParameters(): List<String> {
+        return parseCborValues(applyDefaultCborParameters)
+    }
+
+    private fun parseCborValues(raw: String): List<String> {
+        return raw
+            .trim()
+            .split(Regex("[,\\s]+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    private fun buildApplyCommandParameters(
+        singleCborParameter: String?,
+        includeExtraArgs: Boolean = true
+    ): List<String> {
+        val parameters = ArrayList<String>()
+        appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
+        appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
+        appendValueOption(parameters, "--module", applyModule)
+        appendValueOption(parameters, "--validator", applyValidator)
+        singleCborParameter?.trim()?.takeIf { it.isNotEmpty() }?.let { parameters += it }
+
+        if (includeExtraArgs) {
+            val extra = extraArgs.trim()
+            if (extra.isNotEmpty()) {
+                parameters += ParametersListUtil.parse(extra)
+            }
+        }
+        return parameters
+    }
+
+    private fun formatAppliedCborParametersLine(parameters: List<String>): String {
+        return "Applied CBOR parameters: ${parameters.joinToString(" ")}"
+    }
+
+    private fun extractLastAppliedCborFromApplyOutput(rawOutput: String): String? {
+        val lines = stripAnsi(rawOutput).replace("\r\n", "\n").replace('\r', '\n').lines()
+        var index = 0
+        var lastApplied: String? = null
+
+        while (index < lines.size) {
+            val line = lines[index]
+            val applyingMatch = APPLYING_LINE_REGEX.find(line)
+            if (applyingMatch == null) {
+                index += 1
+                continue
+            }
+
+            val chunks = ArrayList<String>()
+            val firstChunk = applyingMatch.groupValues.getOrNull(1).orEmpty().trim()
+            if (firstChunk.isNotEmpty() && APPLY_HEX_CHUNK_REGEX.matches(firstChunk)) {
+                chunks += firstChunk
+            }
+
+            var cursor = index + 1
+            while (cursor < lines.size) {
+                val raw = lines[cursor]
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty()) break
+                val isContinuation =
+                    raw.startsWith(" ") &&
+                        trimmed.split(Regex("\\s+")).all { APPLY_HEX_CHUNK_REGEX.matches(it) }
+                if (!isContinuation) break
+
+                chunks += trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                cursor += 1
+            }
+
+            if (chunks.isNotEmpty()) {
+                lastApplied = chunks.joinToString("")
+            }
+            index = cursor
+        }
+
+        return lastApplied
+    }
+
+    private fun applyAutoSessionKey(inspectionFile: File?, workDir: String?): String {
+        val blueprintPath =
+            when {
+                inspectionFile != null -> {
+                    try {
+                        inspectionFile.canonicalPath
+                    } catch (_: IOException) {
+                        inspectionFile.absolutePath
+                    }
+                }
+                !workDir.isNullOrBlank() -> workDir
+                else -> project.basePath.orEmpty()
+            }
+        return buildString {
+            append(project.locationHash)
+            append("::")
+            append(name)
+            append("::")
+            append(blueprintPath)
+            append("::")
+            append(applyModule.trim())
+            append("::")
+            append(applyValidator.trim())
         }
     }
 
@@ -3885,6 +4061,9 @@ class AikenRunConfiguration(
         const val ANSI_GREEN = "\u001B[32m"
         const val ANSI_BLUE = "\u001B[34m"
         const val ANSI_CYAN = "\u001B[36m"
+        const val ANSI_CLEAR_SCREEN_AND_HOME = "\u001B[2J\u001B[H"
+        const val APPLY_PARAMETERS_HINT_LINE =
+            "Tip: paste these values into 'Auto aplied CBOR parameters' to automate parameterization in future runs."
         const val AIKEN_TEST_LOCATION_PROTOCOL = "aiken-test"
         val TEST_DECLARATION_REGEX = Regex("""^\s*(pub\s+)?test\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
         val DIAGNOSTIC_BLOCK_SEPARATOR_REGEX = Regex("""\n{2,}""")
@@ -3908,11 +4087,16 @@ class AikenRunConfiguration(
         val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")
         val ADDRESS_OUTPUT_LINE_REGEX = Regex("""^addr(?:_test)?1[a-z0-9]+$""")
         val POLICY_ID_OUTPUT_LINE_REGEX = Regex("""^[0-9a-f]{56}$""")
+        val APPLYING_LINE_REGEX = Regex("""^\s*Applying(?:\s+([0-9a-fA-F]+))?\s*$""", RegexOption.IGNORE_CASE)
+        val APPLY_HEX_CHUNK_REGEX = Regex("""^[0-9a-fA-F]+$""")
         const val DEFAULT_ARTIFACT_SCRIPT_TEMPLATE = "%module%.%validator%.script"
         const val DEFAULT_ARTIFACT_MAINNET_TEMPLATE = "%module%.%validator%.addr"
         const val DEFAULT_ARTIFACT_TESTNET_TEMPLATE = "%module%.%validator%.addr_test"
         const val DEFAULT_ARTIFACT_POLICY_TEMPLATE = "%module%.%validator%.policy"
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
+        val APPLY_AUTO_CBOR_ACCUMULATOR = ConcurrentHashMap<String, MutableList<String>>()
+        val APPLY_AUTO_CBOR_QUEUE = ConcurrentHashMap<String, ArrayDeque<String>>()
+        val APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES = ConcurrentHashMap<String, AtomicBoolean>()
     }
 }
 
