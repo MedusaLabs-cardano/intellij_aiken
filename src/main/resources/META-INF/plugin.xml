@@ -1,4 +1,4 @@
-<idea-plugin>
+<idea-plugin require-restart="true">
     <id>com.medusalabs.aiken</id>
     <name>Aiken</name>
     <vendor email="" url="https://github.com/MedusaLabs-cardano">MedusaLabs</vendor>
@@ -46,6 +46,7 @@
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
 
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
         <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
@@ -59,6 +60,7 @@
         <gotoDeclarationHandler implementation="com.medusalabs.aiken.navigation.AikenGotoDeclarationHandler"/>
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>
+        <newProjectWizard.languageGenerator implementation="com.medusalabs.aiken.project.AikenNewProjectWizard"/>
 
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenImportIndex"/>

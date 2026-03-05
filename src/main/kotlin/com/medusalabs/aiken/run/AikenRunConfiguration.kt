@@ -2342,11 +2342,26 @@ class AikenRunConfiguration(
             val targetCanonical = canonicalFile(target)
 
             val projectRoot = (workDir ?: project.basePath)?.let { canonicalFile(File(it)) }
-            if (projectRoot != null && targetCanonical == projectRoot) {
+            if (projectRoot == null) {
+                return false
+            }
+
+            if (targetCanonical == projectRoot) {
                 return false
             }
 
             if (targetCanonical.parentFile == null) {
+                return false
+            }
+
+            val projectPath = projectRoot.toPath()
+            val targetPath = targetCanonical.toPath()
+            if (!targetPath.startsWith(projectPath)) {
+                return false
+            }
+
+            val targetPathText = targetCanonical.path.replace('\\', '/')
+            if (targetPathText.contains("/.git") || targetPathText.contains("/.idea")) {
                 return false
             }
 
@@ -4306,14 +4321,19 @@ class AikenRunConfiguration(
                 )
             } else {
                 val warningSuiteId = "$diagnosticId-suite"
-                emitServiceMessage(
-                    handler,
-                    "testSuiteStarted",
+                val startedAttributes =
                     linkedMapOf(
                         "name" to title,
                         "nodeId" to warningSuiteId,
                         "parentNodeId" to sectionId
                     )
+                extractDiagnosticLocationHint(block, workDir)?.let { locationHint ->
+                    startedAttributes["locationHint"] = locationHint
+                }
+                emitServiceMessage(
+                    handler,
+                    "testSuiteStarted",
+                    startedAttributes
                 )
                 emitServiceMessage(
                     handler,
