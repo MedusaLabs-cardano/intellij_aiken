@@ -85,4 +85,14 @@
         <listener class="com.medusalabs.aiken.format.AikenSaveFormatter"
                   topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
     </applicationListeners>
+
+    <actions>
+        <action id="com.medusalabs.aiken.actions.AikenNewFileAction"
+                class="com.medusalabs.aiken.actions.AikenNewFileAction"
+                text="Aiken File"
+                description="Create a new Aiken file"
+                icon="/icons/aiken.png">
+            <add-to-group group-id="NewGroup" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
