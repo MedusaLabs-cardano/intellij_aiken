@@ -69,8 +69,9 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyOutField = JBTextField()
     private val applyModuleField = JBTextField()
     private val applyValidatorField = JBTextField()
-    private val applyCborField = JBTextField()
+    private val applyDefaultCborParametersField = JBTextField()
     private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
+    private val applyOutputModeCombo = JComboBox(AikenApplyOutputMode.entries.toTypedArray())
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -117,7 +118,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyOutField.emptyText.text = "plutus.json"
         applyModuleField.emptyText.text = "e.g. my_module"
         applyValidatorField.emptyText.text = "e.g. my_validator"
-        applyCborField.emptyText.text = "e.g. 182A"
+        applyDefaultCborParametersField.emptyText.text = "e.g. 182A, d8799f0102ff"
 
         addressArtifactsBasePathField.emptyText.text = "artifacts"
         cleanTargetPathField.emptyText.text = "artifacts"
@@ -173,8 +174,9 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyOutField.text = configuration.applyOut.ifBlank { "plutus.json" }
         applyModuleField.text = configuration.applyModule
         applyValidatorField.text = configuration.applyValidator
-        applyCborField.text = configuration.applyCbor
+        applyDefaultCborParametersField.text = configuration.applyDefaultCborParameters
         applyAutoUntilNoParametersCheck.isSelected = configuration.applyAutoUntilNoParameters
+        applyOutputModeCombo.selectedItem = configuration.applyOutputMode
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -257,8 +259,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         configuration.applyOut = applyOutField.text.trim()
         configuration.applyModule = applyModuleField.text.trim()
         configuration.applyValidator = applyValidatorField.text.trim()
-        configuration.applyCbor = applyCborField.text.trim()
+        configuration.applyDefaultCborParameters = applyDefaultCborParametersField.text.trim()
         configuration.applyAutoUntilNoParameters = applyAutoUntilNoParametersCheck.isSelected
+        configuration.applyOutputMode =
+            (applyOutputModeCombo.selectedItem as? AikenApplyOutputMode) ?: AikenApplyOutputMode.IDE_INTEGRATED
 
         configuration.checkSkipTests = checkSkipTestsCheck.isSelected
         configuration.checkOutputMode =
@@ -629,16 +633,23 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .comment("Validator name in the selected module. Optional only if unique.")
                 }
 
-                row("Parameter CBOR:") {
-                    cell(applyCborField)
+                row("Auto aplied CBOR parameters:") {
+                    cell(applyDefaultCborParametersField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Plutus Data parameter as hex-encoded CBOR (for example 182A).")
+                        .comment("Tip: run manual parameterization first, then paste those CBOR values here. Separate values with comma or space.")
                 }
 
                 row {
                     cell(applyAutoUntilNoParametersCheck)
                         .comment("If disabled, run Apply separately for each parameter.")
+                }
+
+                row("Output mode:") {
+                    cell(applyOutputModeCombo)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                        .comment("TTY for native interactive prompts, IDE integrated for structured GUI parameterization.")
                 }
             }
         }
@@ -662,7 +673,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             when (command) {
                 AikenRunCommand.ADDRESS -> 840
                 AikenRunCommand.CLEAN -> 420
-                AikenRunCommand.APPLY -> 680
+                AikenRunCommand.APPLY -> 740
                 AikenRunCommand.CONVERT -> 840
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 900

@@ -55,6 +55,7 @@ import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.pty4j.PtyProcessBuilder
+import com.medusalabs.aiken.icons.AikenIcons
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -71,14 +72,17 @@ import org.jdom.Element
 import java.io.File
 import java.io.IOException
 import java.awt.BorderLayout
+import java.awt.Component
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.util.Base64
+import java.util.ArrayDeque
 import java.util.LinkedHashMap
 import java.util.LinkedHashSet
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -86,16 +90,28 @@ import com.intellij.util.messages.MessageBusConnection
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBComboBoxLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.intellij.terminal.TerminalExecutionConsole
+import javax.swing.Box
 import javax.swing.BoxLayout
+import javax.swing.BorderFactory
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComponent
+import javax.swing.JComboBox
 import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextField
 import javax.swing.JTree
 import javax.swing.tree.TreeCellRenderer
+import java.awt.FlowLayout
+import java.awt.Font
+import java.io.ByteArrayOutputStream
+import java.math.BigInteger
 
 class AikenRunConfiguration(
     project: com.intellij.openapi.project.Project,
@@ -197,10 +213,13 @@ class AikenRunConfiguration(
     var applyValidator: String = ""
 
     @JvmField
-    var applyCbor: String = ""
+    var applyDefaultCborParameters: String = ""
 
     @JvmField
     var applyAutoUntilNoParameters: Boolean = true
+
+    @JvmField
+    var applyOutputMode: AikenApplyOutputMode = AikenApplyOutputMode.IDE_INTEGRATED
 
     @JvmField
     var convertModule: String = ""
@@ -274,8 +293,8 @@ class AikenRunConfiguration(
             return AikenCleanRunState(environment)
         }
 
-        if (command == AikenRunCommand.APPLY && applyAutoUntilNoParameters) {
-            return AikenApplyAutoRunState(environment)
+        if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.IDE_INTEGRATED) {
+            return AikenApplyGuiRunState(this, environment)
         }
 
         if (
@@ -308,10 +327,9 @@ class AikenRunConfiguration(
                 ) {
                     return createPtyProcessHandler(invocation, workDir).also { startedHandler = it }
                 }
-                if (command == AikenRunCommand.APPLY) {
+                if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.TTY) {
                     return createPtyTerminalProcessHandler(invocation, workDir).also { startedHandler = it }
                 }
-
                 val commandLine = GeneralCommandLine()
                     .withCharset(StandardCharsets.UTF_8)
                     .withExePath(executable)
@@ -324,7 +342,7 @@ class AikenRunConfiguration(
             }
 
             override fun createConsole(executor: Executor): ConsoleView? {
-                if (command == AikenRunCommand.APPLY) {
+                if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.TTY) {
                     val handler = startedHandler
                     if (handler != null && TerminalExecutionConsole.isAcceptable(handler)) {
                         return TerminalExecutionConsole(project, handler)
@@ -335,33 +353,1456 @@ class AikenRunConfiguration(
         }
     }
 
+    private class AikenApplyGuiRunState(
+        private val configuration: AikenRunConfiguration,
+        private val executionEnvironment: ExecutionEnvironment
+    ) : RunProfileState {
+        private val applyStarted = AtomicBoolean(false)
+        private val project: Project
+            get() = configuration.project
+
+        private fun resolveAikenExecutable(): String = configuration.resolveAikenExecutable()
+
+        private fun resolveProjectDirectory(): String? = configuration.resolveProjectDirectory()
+
+        private fun resolveApplyInspectionFile(workDir: String?): File? =
+            configuration.resolveApplyInspectionFile(workDir)
+
+        private fun parseValidatorTargetFromTitle(title: String): Pair<String, String>? =
+            configuration.parseValidatorTargetFromTitle(title)
+
+        private fun configuredApplyCborParameters(): List<String> =
+            configuration.configuredApplyCborParameters()
+
+        private fun buildApplyCommandParameters(
+            singleCborParameter: String?,
+            includeExtraArgs: Boolean = true
+        ): List<String> = configuration.buildApplyCommandParameters(singleCborParameter, includeExtraArgs)
+
+        private fun buildInvocation(
+            executable: String,
+            args: List<String>,
+            directoryArg: String?
+        ): List<String> = configuration.buildInvocation(executable, args, directoryArg)
+
+        private fun runCommandCollectingOutput(
+            invocation: List<String>,
+            workDir: String?,
+            handler: AikenAsyncProcessHandler,
+            usePty: Boolean
+        ): CommandRunResult = configuration.runCommandCollectingOutput(invocation, workDir, handler, usePty)
+
+        private fun stripAnsi(text: String): String = configuration.stripAnsi(text)
+
+        private fun extractLastAppliedCborFromApplyOutput(rawOutput: String): String? =
+            configuration.extractLastAppliedCborFromApplyOutput(rawOutput)
+
+        private fun formatAppliedCborParametersLine(parameters: List<String>): String =
+            configuration.formatAppliedCborParametersLine(parameters)
+
+        private fun JsonElement?.asJsonObjectOrNull(): JsonObject? {
+            return if (this != null && this.isJsonObject) this.asJsonObject else null
+        }
+
+        private fun JsonObject.getString(name: String): String? {
+            val value = this[name] ?: return null
+            if (!value.isJsonPrimitive || !value.asJsonPrimitive.isString) return null
+            return value.asString
+        }
+
+        private fun JsonObject.getLong(name: String): Long? {
+            val value = this[name] ?: return null
+            if (!value.isJsonPrimitive || !value.asJsonPrimitive.isNumber) return null
+            return value.asLong
+        }
+
+        override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
+            val handler = AikenAsyncProcessHandler()
+            val console = AikenApplyExecutionConsole()
+            handler.startNotify()
+
+            console.showStatus("Analyzing blueprint...")
+            AppExecutorUtil.getAppExecutorService().execute task@{
+                try {
+                    val context = loadApplyContext()
+
+                    if (context.parameters.isEmpty()) {
+                        console.showStatus("Blueprint has no parameters left to apply")
+                        handler.finish(0)
+                        return@task
+                    }
+
+                    val sections = context.parameters.mapIndexed { index, parameter ->
+                        val label = parameter.title.ifBlank { "Parameter ${index + 1}" }
+                        ApplyParameterSection(
+                            title = label,
+                            editor = createEditor(parameter.schema, label, depth = 0)
+                        )
+                    }.toMutableList()
+
+                    console.showForm(
+                        module = context.module,
+                        validator = context.validator,
+                        blueprintPath = context.blueprintFile.absolutePath,
+                        sections = sections
+                    )
+                    console.setApplyAction {
+                        if (!applyStarted.compareAndSet(false, true)) return@setApplyAction
+                        AppExecutorUtil.getAppExecutorService().execute {
+                            runApplySequence(context, console, handler)
+                        }
+                    }
+                } catch (e: Exception) {
+                    console.showError(e.message ?: "Failed to build Apply form.")
+                    handler.finish(1)
+                }
+            }
+
+            return DefaultExecutionResult(console, handler)
+        }
+
+        private fun loadApplyContext(): ApplyContext {
+            val workDir = resolveProjectDirectory()
+            val inspectionFile = resolveApplyInspectionFile(workDir)
+            if (inspectionFile == null) {
+                throw ExecutionException("Unable to resolve blueprint file path.")
+            }
+            if (!inspectionFile.exists() || !inspectionFile.isFile) {
+                throw ExecutionException("Blueprint file does not exist: ${inspectionFile.absolutePath}")
+            }
+
+            val root =
+                try {
+                    JsonParser.parseString(inspectionFile.readText(StandardCharsets.UTF_8)).asJsonObject
+                } catch (e: Exception) {
+                    throw ExecutionException("Failed to parse blueprint JSON: ${e.message.orEmpty()}")
+                }
+
+            val validators = root["validators"]?.asJsonArray
+                ?: throw ExecutionException("Blueprint does not contain validators.")
+
+            val moduleFilter = configuration.applyModule.trim().ifEmpty { null }
+            val validatorFilter = configuration.applyValidator.trim().ifEmpty { null }
+            val grouped = LinkedHashMap<String, JsonObject>()
+
+            for (entry in validators) {
+                val obj = entry.asJsonObjectOrNull() ?: continue
+                val title = obj.getString("title") ?: continue
+                val target = parseValidatorTargetFromTitle(title) ?: continue
+                val matches =
+                    (moduleFilter == null || target.first == moduleFilter) &&
+                        (validatorFilter == null || target.second == validatorFilter)
+                if (!matches) continue
+                grouped.putIfAbsent("${target.first}.${target.second}", obj)
+            }
+
+            if (grouped.isEmpty()) {
+                val filters =
+                    listOfNotNull(
+                        moduleFilter?.let { "module=$it" },
+                        validatorFilter?.let { "validator=$it" }
+                    ).joinToString(", ")
+                throw ExecutionException(
+                    if (filters.isNotBlank()) {
+                        "No validator found for $filters."
+                    } else {
+                        "No validators found in blueprint."
+                    }
+                )
+            }
+
+            if (grouped.size > 1) {
+                val candidates = grouped.keys.joinToString(", ")
+                throw ExecutionException("More than one validator matches filters: $candidates")
+            }
+
+            val selectedKey = grouped.keys.first()
+            val selected = grouped.values.first()
+            val parsed = parseValidatorTargetFromTitle(selected.getString("title").orEmpty())
+                ?: throw ExecutionException("Unable to resolve validator target from blueprint.")
+
+            val definitions = LinkedHashMap<String, JsonObject>()
+            root["definitions"]?.asJsonObjectOrNull()?.entrySet()?.forEach { (name, value) ->
+                value.asJsonObjectOrNull()?.let { definitions[name] = it }
+            }
+            selected["definitions"]?.asJsonObjectOrNull()?.entrySet()?.forEach { (name, value) ->
+                value.asJsonObjectOrNull()?.let { definitions[name] = it }
+            }
+
+            val parametersArray = selected["parameters"]?.asJsonArray ?: JsonArray()
+            val parameters = ArrayList<ApplyResolvedParameter>(parametersArray.size())
+            for ((index, parameterElement) in parametersArray.withIndex()) {
+                val parameterObject = parameterElement.asJsonObjectOrNull() ?: continue
+                val declaration = parameterObject["schema"]?.asJsonObjectOrNull()
+                    ?: throw ExecutionException("Parameter #${index + 1} has no schema.")
+                val title = parameterObject.getString("title").orEmpty()
+                val schema = resolveSchemaFromDeclaration(declaration, definitions, LinkedHashSet())
+                    ?: throw ExecutionException("Unable to resolve schema for parameter #${index + 1}.")
+                parameters += ApplyResolvedParameter(
+                    title = title,
+                    schema = schema
+                )
+            }
+
+            return ApplyContext(
+                blueprintFile = inspectionFile,
+                module = parsed.first,
+                validator = parsed.second,
+                selectedValidator = selectedKey,
+                parameters = parameters
+            )
+        }
+
+        private fun runApplySequence(
+            context: ApplyContext,
+            console: AikenApplyExecutionConsole,
+            handler: AikenAsyncProcessHandler
+        ) {
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+            val configuredQueue = ArrayDeque(configuredApplyCborParameters())
+            val applied = ArrayList<String>()
+            var usedManualValues = false
+            var appliedCount = 0
+
+            try {
+                while (!handler.isProcessTerminated && !handler.isProcessTerminating) {
+                    val section = console.peekFirstSection() ?: break
+
+                    val cborHex =
+                        if (configuredQueue.isNotEmpty()) {
+                            normalizeCborHex(configuredQueue.removeFirst())
+                        } else {
+                            usedManualValues = true
+                            val encoded = encodeDataAsHex(section.editor.encodeData(section.title))
+                            normalizeCborHex(encoded)
+                        }
+
+                    if (cborHex == null) {
+                        console.showError("Invalid CBOR value for '${section.title}'.")
+                        handler.finish(1)
+                        return
+                    }
+
+                    console.showStatus("Applying parameter '${section.title}'...")
+                    val args = buildApplyCommandParameters(cborHex, includeExtraArgs = true)
+                    val invocation = buildInvocation(executable, args, workDir)
+                    val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
+
+                    if (run.exitCode != 0) {
+                        val stripped = stripAnsi(run.output)
+                        if (stripped.contains("aiken::blueprint::apply::no_parameters")) {
+                            break
+                        }
+
+                        console.showError(
+                            buildString {
+                                append("Failed applying '${section.title}'.")
+                                if (stripped.isNotBlank()) {
+                                    append("\n\n")
+                                    append(stripped.trim())
+                                }
+                            }
+                        )
+                        if (applied.isNotEmpty()) {
+                            console.showAppliedParameters(applied, usedManualValues)
+                        }
+                        handler.finish(run.exitCode)
+                        return
+                    }
+
+                    applied += extractLastAppliedCborFromApplyOutput(run.output) ?: cborHex
+                    appliedCount += 1
+                    console.removeFirstSection()
+
+                    if (!configuration.applyAutoUntilNoParameters) {
+                        break
+                    }
+                }
+
+                val remaining = console.sectionCount()
+                if (remaining == 0) {
+                    console.showStatus("Blueprint has no parameters left to apply")
+                } else {
+                    console.showStatus("Applied $appliedCount parameter(s). $remaining remaining.")
+                }
+                if (applied.isNotEmpty()) {
+                    console.showAppliedParameters(applied, usedManualValues)
+                }
+                handler.finish(0)
+            } catch (e: Exception) {
+                console.showError("Apply failed: ${e.message.orEmpty()}")
+                if (applied.isNotEmpty()) {
+                    console.showAppliedParameters(applied, usedManualValues)
+                }
+                handler.finish(1)
+            }
+        }
+
+        private fun normalizeCborHex(raw: String?): String? {
+            val cleaned = raw?.trim()?.replace(Regex("\\s+"), "") ?: return null
+            if (cleaned.isEmpty()) return null
+            if (cleaned.length % 2 != 0) return null
+            if (!cleaned.matches(Regex("[0-9a-fA-F]+"))) return null
+            return cleaned.lowercase(Locale.US)
+        }
+
+        private fun resolveSchemaFromDeclaration(
+            declaration: JsonObject,
+            definitions: Map<String, JsonObject>,
+            referenceStack: LinkedHashSet<String>
+        ): ApplySchema? {
+            declaration["schema"]?.asJsonObjectOrNull()?.let { nestedSchema ->
+                return resolveSchemaFromDeclaration(nestedSchema, definitions, referenceStack)
+            }
+            val ref = declaration.getString("\$ref")
+            if (!ref.isNullOrBlank()) {
+                val name = ref.removePrefix("#/definitions/")
+                    .replace("~1", "/")
+                    .replace("~0", "~")
+                val resolved = definitions[name] ?: return null
+                if (!referenceStack.add(name)) {
+                    return ApplySchema.Opaque("recursive reference $name")
+                }
+                val schema = resolveSchema(resolved, definitions, referenceStack)
+                referenceStack.remove(name)
+                return schema
+            }
+            return resolveSchema(declaration, definitions, referenceStack)
+        }
+
+        private fun resolveSchema(
+            schemaObject: JsonObject,
+            definitions: Map<String, JsonObject>,
+            referenceStack: LinkedHashSet<String>
+        ): ApplySchema? {
+            schemaObject["anyOf"]?.takeIf { it.isJsonArray }?.let { constructors ->
+                return parseAnyOfSchema(
+                    constructors.asJsonArray,
+                    definitions,
+                    referenceStack,
+                    schemaObject.getString("title")
+                )
+            }
+            schemaObject["oneOf"]?.takeIf { it.isJsonArray }?.let { constructors ->
+                return parseAnyOfSchema(
+                    constructors.asJsonArray,
+                    definitions,
+                    referenceStack,
+                    schemaObject.getString("title")
+                )
+            }
+
+            val dataType = schemaObject.getString("dataType")
+            return when (dataType) {
+                null -> ApplySchema.Opaque("opaque")
+                "bytes", "#bytes" -> ApplySchema.Bytes
+                "integer", "#integer" -> ApplySchema.Integer
+                "list", "#list" -> parseListSchema(schemaObject, definitions, referenceStack)
+                "map" -> parseMapSchema(schemaObject, definitions, referenceStack)
+                "constructor" -> {
+                    val index = schemaObject.getLong("index") ?: 0L
+                    val fieldsArray = schemaObject["fields"]?.asJsonArray ?: JsonArray()
+                    val fields = ArrayList<ApplyNamedSchema>(fieldsArray.size())
+                    for (field in fieldsArray) {
+                        val fieldObj = field.asJsonObjectOrNull() ?: continue
+                        val title = fieldObj.getString("title")
+                        val fieldSchema = resolveSchemaFromDeclaration(fieldObj, definitions, LinkedHashSet(referenceStack))
+                            ?: return null
+                        fields += ApplyNamedSchema(title, fieldSchema)
+                    }
+                    ApplySchema.AnyOf(
+                        typeName = schemaObject.getString("title"),
+                        listOf(
+                            ApplyConstructor(
+                                title = schemaObject.getString("title") ?: "Constructor",
+                                index = index,
+                                fields = fields
+                            )
+                        )
+                    )
+                }
+                "#boolean" -> ApplySchema.AnyOf(
+                    typeName = "bool",
+                    listOf(
+                        ApplyConstructor("False", 0, emptyList()),
+                        ApplyConstructor("True", 1, emptyList())
+                    )
+                )
+                "#unit" -> ApplySchema.AnyOf(typeName = "unit", constructors = listOf(ApplyConstructor("Unit", 0, emptyList())))
+                "#pair" -> {
+                    val leftDecl = schemaObject["left"]?.asJsonObjectOrNull() ?: return null
+                    val rightDecl = schemaObject["right"]?.asJsonObjectOrNull() ?: return null
+                    val left = resolveSchemaFromDeclaration(leftDecl, definitions, LinkedHashSet(referenceStack))
+                        ?: return null
+                    val right = resolveSchemaFromDeclaration(rightDecl, definitions, LinkedHashSet(referenceStack))
+                        ?: return null
+                    ApplySchema.ListMany(
+                        listOf(
+                            ApplyNamedSchema("left", left),
+                            ApplyNamedSchema("right", right)
+                        )
+                    )
+                }
+                else -> ApplySchema.Opaque(dataType)
+            }
+        }
+
+        private fun parseAnyOfSchema(
+            constructorsArray: JsonArray,
+            definitions: Map<String, JsonObject>,
+            referenceStack: LinkedHashSet<String>,
+            typeName: String?
+        ): ApplySchema? {
+            val constructors = ArrayList<ApplyConstructor>(constructorsArray.size())
+            for ((index, constructorElement) in constructorsArray.withIndex()) {
+                val constructor = constructorElement.asJsonObjectOrNull() ?: continue
+                val constructorIndex = constructor.getLong("index") ?: index.toLong()
+                val title = constructor.getString("title") ?: "Constructor $constructorIndex"
+                val fieldsArray = constructor["fields"]?.asJsonArray ?: JsonArray()
+                val fields = ArrayList<ApplyNamedSchema>(fieldsArray.size())
+                for (field in fieldsArray) {
+                    val fieldObj = field.asJsonObjectOrNull() ?: continue
+                    val fieldTitle = fieldObj.getString("title")
+                    val schema = resolveSchemaFromDeclaration(fieldObj, definitions, LinkedHashSet(referenceStack))
+                        ?: return null
+                    fields += ApplyNamedSchema(fieldTitle, schema)
+                }
+                constructors += ApplyConstructor(
+                    title = title,
+                    index = constructorIndex,
+                    fields = fields
+                )
+            }
+            return ApplySchema.AnyOf(typeName = typeName, constructors = constructors)
+        }
+
+        private fun parseListSchema(
+            schemaObject: JsonObject,
+            definitions: Map<String, JsonObject>,
+            referenceStack: LinkedHashSet<String>
+        ): ApplySchema? {
+            val items = schemaObject["items"] ?: return null
+            return when {
+                items.isJsonArray -> {
+                    val resolved = ArrayList<ApplyNamedSchema>(items.asJsonArray.size())
+                    for (item in items.asJsonArray) {
+                        val itemObj = item.asJsonObjectOrNull() ?: continue
+                        val title = itemObj.getString("title")
+                        val schema = resolveSchemaFromDeclaration(itemObj, definitions, LinkedHashSet(referenceStack))
+                            ?: return null
+                        resolved += ApplyNamedSchema(title, schema)
+                    }
+                    ApplySchema.ListMany(resolved)
+                }
+                items.isJsonObject -> {
+                    val schema = resolveSchemaFromDeclaration(items.asJsonObject, definitions, LinkedHashSet(referenceStack))
+                        ?: return null
+                    ApplySchema.ListOne(schema)
+                }
+                else -> null
+            }
+        }
+
+        private fun parseMapSchema(
+            schemaObject: JsonObject,
+            definitions: Map<String, JsonObject>,
+            referenceStack: LinkedHashSet<String>
+        ): ApplySchema? {
+            val keyDecl = schemaObject["keys"]?.asJsonObjectOrNull() ?: return null
+            val valueDecl = schemaObject["values"]?.asJsonObjectOrNull() ?: return null
+            val key = resolveSchemaFromDeclaration(keyDecl, definitions, LinkedHashSet(referenceStack)) ?: return null
+            val value = resolveSchemaFromDeclaration(valueDecl, definitions, LinkedHashSet(referenceStack)) ?: return null
+            return ApplySchema.Map(key, value)
+        }
+
+        private fun createEditor(
+            schema: ApplySchema,
+            name: String,
+            depth: Int
+        ): ApplyValueEditor {
+            return when (schema) {
+                is ApplySchema.Integer -> ApplyIntegerEditor(name, depth)
+                is ApplySchema.Bytes -> ApplyBytesEditor(name, depth)
+                is ApplySchema.ListOne -> ApplyListEditor(name, schemaDisplayType(schema), depth, schema.item) { childName, childDepth ->
+                    createEditor(schema.item, childName, childDepth)
+                }
+                is ApplySchema.ListMany -> ApplyTupleEditor(name, schemaDisplayType(schema), depth, schema.items) { childName, childSchema, childDepth ->
+                    createEditor(childSchema, childName, childDepth)
+                }
+                is ApplySchema.Map -> ApplyMapEditor(name, schemaDisplayType(schema), depth, schema.key, schema.value) { childName, childSchema, childDepth ->
+                    createEditor(childSchema, childName, childDepth)
+                }
+                is ApplySchema.AnyOf -> createAnyOfEditor(name, depth, schemaDisplayType(schema), schema.typeName, schema.constructors)
+                is ApplySchema.Opaque -> ApplyOpaqueEditor(name, depth, schema.reason)
+            }
+        }
+
+        private fun createAnyOfEditor(
+            name: String,
+            depth: Int,
+            typeLabel: String,
+            typeName: String?,
+            constructors: List<ApplyConstructor>
+        ): ApplyValueEditor {
+            if (constructors.isEmpty()) {
+                return ApplyOpaqueEditor(name, depth, "empty constructor set")
+            }
+
+            if (constructors.size == 1) {
+                return ApplySingleConstructorEditor(name, depth, typeName ?: typeLabel, constructors.first()) { childName, childSchema, childDepth ->
+                    createEditor(childSchema, childName, childDepth)
+                }
+            }
+
+            if (looksLikeBoolConstructors(constructors)) {
+                return ApplyBoolEditor(name, depth, constructors)
+            }
+
+            val option = detectOptionConstructors(constructors)
+            if (option != null) {
+                return ApplyOptionEditor(name, typeLabel, depth, option) { childName, childSchema, childDepth ->
+                    createEditor(childSchema, childName, childDepth)
+                }
+            }
+
+            return ApplyAnyOfEditor(name, depth, typeLabel, constructors) { childName, childSchema, childDepth ->
+                createEditor(childSchema, childName, childDepth)
+            }
+        }
+
+        private fun schemaDisplayType(schema: ApplySchema): String {
+            return when (schema) {
+                is ApplySchema.Integer -> "Int"
+                is ApplySchema.Bytes -> "ByteArray"
+                is ApplySchema.Opaque -> "Data"
+                is ApplySchema.ListOne -> "List<${schemaDisplayType(schema.item)}>"
+                is ApplySchema.ListMany -> {
+                    val inner = schema.items.joinToString(", ") { schemaDisplayType(it.schema) }
+                    "Tuple<$inner>"
+                }
+                is ApplySchema.Map -> "Map<${schemaDisplayType(schema.key)}, ${schemaDisplayType(schema.value)}>"
+                is ApplySchema.AnyOf -> {
+                    val explicit = schema.typeName?.trim().orEmpty()
+                    when {
+                        explicit.isNotEmpty() -> normalizeTypeLabel(explicit)
+                        looksLikeBoolConstructors(schema.constructors) -> "Bool"
+                        else -> {
+                            val option = detectOptionConstructors(schema.constructors)
+                            if (option != null) {
+                                val inner = option.some.fields.firstOrNull()?.schema?.let { schemaDisplayType(it) } ?: "Data"
+                                "Option<$inner>"
+                            } else {
+                                "DataType"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private fun normalizeTypeLabel(raw: String): String {
+            val resolvedRefs = raw.replace("~1", "/").replace("~0", "~")
+            val withoutModules = resolvedRefs.replace(Regex("([A-Za-z0-9_]+/)+([A-Za-z0-9_]+)")) {
+                it.groupValues[2]
+            }
+            return when (withoutModules.lowercase(Locale.US)) {
+                "integer" -> "Int"
+                "bytes" -> "ByteArray"
+                "bool", "boolean" -> "Bool"
+                "list" -> "List"
+                "map" -> "Map"
+                "option" -> "Option"
+                else -> withoutModules
+            }
+        }
+
+        private fun looksLikeBoolConstructors(constructors: List<ApplyConstructor>): Boolean {
+            if (constructors.size != 2) return false
+            val sorted = constructors.sortedBy { it.index }
+            return sorted[0].index == 0L &&
+                sorted[1].index == 1L &&
+                sorted[0].fields.isEmpty() &&
+                sorted[1].fields.isEmpty() &&
+                sorted[0].title.equals("False", ignoreCase = true) &&
+                sorted[1].title.equals("True", ignoreCase = true)
+        }
+
+        private fun detectOptionConstructors(constructors: List<ApplyConstructor>): OptionConstructors? {
+            if (constructors.size != 2) return null
+            val none = constructors.firstOrNull { it.fields.isEmpty() && it.title.equals("None", ignoreCase = true) }
+            val some = constructors.firstOrNull { it.fields.size == 1 && it.title.equals("Some", ignoreCase = true) }
+            if (none == null || some == null) return null
+            return OptionConstructors(none = none, some = some)
+        }
+
+        private inner class AikenApplyExecutionConsole : ExecutionConsole {
+            private val rootPanel = JPanel(BorderLayout())
+            private val statusArea =
+                JBTextArea("Preparing Apply form...").apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    border = JBUI.Borders.empty()
+                    isOpaque = false
+                }
+            private val messagesArea =
+                JBTextArea().apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    border = JBUI.Borders.emptyTop(8)
+                    isOpaque = false
+                }
+            private val sectionsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                border = JBUI.Borders.empty(8)
+            }
+            private val applyButton = JButton("Apply")
+            private val disposed = AtomicBoolean(false)
+            private val sections = ArrayList<ApplyParameterSection>()
+            private var onApply: (() -> Unit)? = null
+
+            init {
+                val top = JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    border = JBUI.Borders.empty(8)
+                    add(statusArea)
+                    add(messagesArea)
+                }
+
+                val scroll = ScrollPaneFactory.createScrollPane(sectionsPanel, true).apply {
+                    border = JBUI.Borders.empty()
+                }
+
+                applyButton.isEnabled = false
+                applyButton.addActionListener {
+                    onApply?.invoke()
+                }
+                val controls = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                    border = JBUI.Borders.empty(8)
+                    add(applyButton)
+                }
+
+                rootPanel.add(top, BorderLayout.NORTH)
+                rootPanel.add(scroll, BorderLayout.CENTER)
+                rootPanel.add(controls, BorderLayout.SOUTH)
+            }
+
+            override fun getComponent(): JComponent = rootPanel
+
+            override fun getPreferredFocusableComponent(): JComponent = rootPanel
+
+            override fun dispose() {
+                disposed.set(true)
+            }
+
+            fun showStatus(text: String) {
+                updateUi {
+                    statusArea.text = text
+                }
+            }
+
+            fun showError(text: String) {
+                updateUi {
+                    appendMessage(text)
+                    applyButton.isEnabled = false
+                }
+            }
+
+            fun showAppliedParameters(parameters: List<String>, includeHint: Boolean) {
+                updateUi {
+                    if (parameters.isEmpty()) return@updateUi
+                    appendMessage(formatAppliedCborParametersLine(parameters))
+                    if (includeHint) {
+                        appendMessage(APPLY_PARAMETERS_HINT_LINE)
+                    }
+                }
+            }
+
+            fun showForm(
+                module: String,
+                validator: String,
+                blueprintPath: String,
+                sections: MutableList<ApplyParameterSection>
+            ) {
+                updateUi {
+                    statusArea.text = "Ready to apply parameters for $module.$validator"
+                    appendMessage("Blueprint: $blueprintPath")
+                    sectionsPanel.removeAll()
+                    synchronized(this.sections) {
+                        this.sections.clear()
+                        this.sections += sections
+                    }
+                    for (section in sections) {
+                        sectionsPanel.add(section.editor.component)
+                        sectionsPanel.add(JBUI.Panels.simplePanel().apply { border = JBUI.Borders.empty(4) })
+                    }
+                    applyButton.isEnabled = synchronized(this.sections) { this.sections.isNotEmpty() }
+                    sectionsPanel.revalidate()
+                    sectionsPanel.repaint()
+                }
+            }
+
+            fun setApplyAction(action: () -> Unit) {
+                updateUi {
+                    onApply = action
+                    applyButton.isEnabled = sections.isNotEmpty()
+                }
+            }
+
+            fun sectionCount(): Int = synchronized(sections) { sections.size }
+
+            fun peekFirstSection(): ApplyParameterSection? = synchronized(sections) { sections.firstOrNull() }
+
+            fun removeFirstSection() {
+                val removed = synchronized(sections) {
+                    if (sections.isEmpty()) false
+                    else {
+                        sections.removeAt(0)
+                        true
+                    }
+                }
+                if (!removed) return
+                updateUi {
+                    if (sectionsPanel.componentCount > 0) sectionsPanel.remove(0)
+                    if (sectionsPanel.componentCount > 0) sectionsPanel.remove(0)
+                    applyButton.isEnabled = synchronized(sections) { sections.isNotEmpty() }
+                    sectionsPanel.revalidate()
+                    sectionsPanel.repaint()
+                }
+            }
+
+            private fun appendMessage(text: String) {
+                if (messagesArea.text.isNotBlank()) {
+                    messagesArea.append("\n")
+                }
+                messagesArea.append(text.trimEnd())
+            }
+
+            private fun updateUi(block: () -> Unit) {
+                if (disposed.get()) return
+                ApplicationManager.getApplication().invokeLater {
+                    if (disposed.get()) return@invokeLater
+                    block()
+                }
+            }
+        }
+
+        private interface ApplyValueEditor {
+            val component: JComponent
+
+            @Throws(ExecutionException::class)
+            fun encodeData(fieldPath: String): ApplyData
+        }
+
+        private inner class ApplyIntegerEditor(
+            name: String,
+            depth: Int
+        ) : BaseApplyEditor(name, "Int", depth) {
+            private val field = JBTextField()
+
+            init {
+                field.emptyText.text = "e.g. 42"
+                addContent(field)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val raw = field.text.trim()
+                if (raw.isEmpty()) throw ExecutionException("$fieldPath must be an integer.")
+                val value = raw.toBigIntegerOrNull()
+                    ?: throw ExecutionException("$fieldPath must be an integer.")
+                return ApplyData.Integer(value)
+            }
+        }
+
+        private inner class ApplyBytesEditor(
+            name: String,
+            depth: Int
+        ) : BaseApplyEditor(name, "ByteArray", depth) {
+            private val field = JBTextField()
+
+            init {
+                field.emptyText.text = "hex bytes (without 0x)"
+                addContent(field)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val bytes = parseHexBytes(field.text.trim(), fieldPath)
+                return ApplyData.Bytes(bytes)
+            }
+        }
+
+        private inner class ApplyOpaqueEditor(
+            name: String,
+            depth: Int,
+            reason: String
+        ) : BaseApplyEditor(name, "Data", depth) {
+            private val field = JBTextField()
+
+            init {
+                field.emptyText.text = "raw CBOR hex"
+                addContent(field)
+                addContent(
+                    JBLabel("Data structure is not known in blueprint ($reason). Enter full CBOR hex.")
+                        .apply { border = JBUI.Borders.emptyTop(2) }
+                )
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val normalized = normalizeCborHex(field.text)
+                    ?: throw ExecutionException("$fieldPath must be valid CBOR hex.")
+                return ApplyData.RawCbor(parseHexBytes(normalized, fieldPath))
+            }
+        }
+
+        private inner class ApplyBoolEditor(
+            name: String,
+            depth: Int,
+            constructors: List<ApplyConstructor>
+        ) : BaseApplyEditor(name, "Bool", depth) {
+            private val falseCtor = constructors.first { it.title.equals("False", ignoreCase = true) }
+            private val trueCtor = constructors.first { it.title.equals("True", ignoreCase = true) }
+            private val field = JBCheckBox()
+
+            init {
+                updateLabel()
+                field.addActionListener { updateLabel() }
+                addCompact(field)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val selected = if (field.isSelected) trueCtor else falseCtor
+                return ApplyData.Constr(selected.index, emptyList())
+            }
+
+            private fun updateLabel() {
+                field.text = if (field.isSelected) "True" else "False"
+            }
+        }
+
+        private inner class ApplyOptionEditor(
+            name: String,
+            typeLabel: String,
+            depth: Int,
+            private val optionConstructors: OptionConstructors,
+            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val noneCheck = JBCheckBox("None")
+            private val someField = optionConstructors.some.fields.first()
+            private val someEditor = editorFactory(someField.title ?: "Some", someField.schema, depth + 1)
+
+            init {
+                headerActionsPanel.add(noneCheck)
+                noneCheck.isSelected = true
+                noneCheck.addActionListener {
+                    updateSomeVisibility()
+                }
+                addContent(someEditor.component)
+                updateSomeVisibility()
+            }
+
+            private fun updateSomeVisibility() {
+                val showSome = !noneCheck.isSelected
+                someEditor.component.isVisible = showSome
+                someEditor.component.isEnabled = showSome
+                component.revalidate()
+                component.repaint()
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                return if (noneCheck.isSelected) {
+                    ApplyData.Constr(optionConstructors.none.index, emptyList())
+                } else {
+                    val someData = someEditor.encodeData("$fieldPath.Some")
+                    ApplyData.Constr(optionConstructors.some.index, listOf(someData))
+                }
+            }
+        }
+
+        private inner class ApplySingleConstructorEditor(
+            name: String,
+            depth: Int,
+            private val typeName: String?,
+            private val constructor: ApplyConstructor,
+            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, (typeName ?: constructor.title).ifBlank { "DataType" }, depth) {
+            private val fields = constructor.fields.mapIndexed { index, field ->
+                val childName = field.title ?: "field${index + 1}"
+                childName to editorFactory(childName, field.schema, depth + 1)
+            }
+
+            init {
+                for ((_, editor) in fields) {
+                    addContent(editor.component)
+                }
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val encodedFields = ArrayList<ApplyData>(fields.size)
+                for ((childName, editor) in fields) {
+                    encodedFields += editor.encodeData("$fieldPath.$childName")
+                }
+                return ApplyData.Constr(constructor.index, encodedFields)
+            }
+        }
+
+        private inner class ApplyAnyOfEditor(
+            name: String,
+            depth: Int,
+            typeLabel: String,
+            private val constructors: List<ApplyConstructor>,
+            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val constructorCombo = JComboBox(constructors.map { it.title }.toTypedArray())
+            private val fieldsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val editorsByConstructor = LinkedHashMap<Int, List<Pair<String, ApplyValueEditor>>>()
+
+            init {
+                makeComboCompact(constructorCombo)
+                addCompact(constructorCombo)
+                addContent(fieldsPanel)
+                constructorCombo.addActionListener {
+                    refreshFields(editorsByConstructor, constructors, editorFactory, depth)
+                }
+                refreshFields(editorsByConstructor, constructors, editorFactory, depth)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val selectedIndex = constructorCombo.selectedIndex.coerceAtLeast(0)
+                val ctor = constructors[selectedIndex]
+                val editors = editorsByConstructor[selectedIndex].orEmpty()
+                val fields = ArrayList<ApplyData>(editors.size)
+                for ((childName, editor) in editors) {
+                    fields += editor.encodeData("$fieldPath.$childName")
+                }
+                return ApplyData.Constr(ctor.index, fields)
+            }
+
+            private fun refreshFields(
+                editorsByConstructor: LinkedHashMap<Int, List<Pair<String, ApplyValueEditor>>>,
+                constructors: List<ApplyConstructor>,
+                editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor,
+                depth: Int
+            ) {
+                val selectedIndex = constructorCombo.selectedIndex.coerceAtLeast(0)
+                val ctor = constructors[selectedIndex]
+                val existing = editorsByConstructor[selectedIndex]
+                val editors =
+                    existing ?: ctor.fields.mapIndexed { index, field ->
+                        val childName = field.title ?: "field${index + 1}"
+                        childName to editorFactory(childName, field.schema, depth + 1)
+                    }.also { created ->
+                        editorsByConstructor[selectedIndex] = created
+                    }
+
+                fieldsPanel.removeAll()
+                for ((_, editor) in editors) {
+                    fieldsPanel.add(editor.component)
+                }
+                fieldsPanel.revalidate()
+                fieldsPanel.repaint()
+            }
+        }
+
+        private inner class ApplyTupleEditor(
+            name: String,
+            typeLabel: String,
+            depth: Int,
+            items: List<ApplyNamedSchema>,
+            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val fields = items.mapIndexed { index, item ->
+                val childName = item.title ?: "item${index + 1}"
+                childName to editorFactory(childName, item.schema, depth + 1)
+            }
+
+            init {
+                for ((_, editor) in fields) {
+                    addContent(editor.component)
+                }
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val values = ArrayList<ApplyData>(fields.size)
+                for ((childName, editor) in fields) {
+                    values += editor.encodeData("$fieldPath.$childName")
+                }
+                return ApplyData.List(values)
+            }
+        }
+
+        private inner class ApplyListEditor(
+            name: String,
+            typeLabel: String,
+            depth: Int,
+            private val itemSchema: ApplySchema,
+            editorFactory: (String, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val addButton = JButton("Add item")
+            private val rows = ArrayList<ApplyValueEditor>()
+
+            init {
+                addButton.addActionListener {
+                    addRow(editorFactory("item${rows.size + 1}", depth + 1))
+                }
+                addContent(rowsPanel)
+                addCompact(addButton)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val values = ArrayList<ApplyData>(rows.size)
+                for ((index, editor) in rows.withIndex()) {
+                    values += editor.encodeData("$fieldPath[${index + 1}]")
+                }
+                return ApplyData.List(values)
+            }
+
+            private fun addRow(editor: ApplyValueEditor) {
+                rows += editor
+                val rowPanel = JPanel(BorderLayout(8, 0)).apply {
+                    border = JBUI.Borders.emptyTop(4)
+                    add(editor.component, BorderLayout.CENTER)
+                }
+                val removeButton = JButton(AikenIcons.DELETE).apply {
+                    isFocusable = false
+                    addActionListener {
+                        rows.remove(editor)
+                        rowsPanel.remove(rowPanel)
+                        rowsPanel.revalidate()
+                        rowsPanel.repaint()
+                    }
+                }
+                rowPanel.add(removeButton, BorderLayout.EAST)
+                rowsPanel.add(rowPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+        }
+
+        private fun <T> makeComboCompact(combo: JComboBox<T>) {
+            combo.maximumSize = combo.preferredSize
+            combo.alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        private inner class ApplyMapEditor(
+            name: String,
+            typeLabel: String,
+            depth: Int,
+            private val keySchema: ApplySchema,
+            private val valueSchema: ApplySchema,
+            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+        ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val addButton = JButton("Add pair")
+            private val rows = ArrayList<Pair<ApplyValueEditor, ApplyValueEditor>>()
+            private val keyFactory = editorFactory
+            private val valueFactory = editorFactory
+
+            init {
+                addButton.addActionListener {
+                    addRow(
+                        keyFactory("key${rows.size + 1}", keySchema, depth + 1),
+                        valueFactory("value${rows.size + 1}", valueSchema, depth + 1)
+                    )
+                }
+                addCompact(addButton)
+                addContent(rowsPanel)
+            }
+
+            override fun encodeData(fieldPath: String): ApplyData {
+                val pairs = ArrayList<Pair<ApplyData, ApplyData>>(rows.size)
+                for ((index, row) in rows.withIndex()) {
+                    val key = row.first.encodeData("$fieldPath.key${index + 1}")
+                    val value = row.second.encodeData("$fieldPath.value${index + 1}")
+                    pairs += key to value
+                }
+                return ApplyData.Map(pairs)
+            }
+
+            private fun addRow(keyEditor: ApplyValueEditor, valueEditor: ApplyValueEditor) {
+                rows += keyEditor to valueEditor
+                val rowPanel = JPanel(BorderLayout(8, 0)).apply {
+                    border = JBUI.Borders.emptyTop(4)
+                }
+                val keyAndValue = JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    add(keyEditor.component)
+                    add(valueEditor.component)
+                }
+                rowPanel.add(keyAndValue, BorderLayout.CENTER)
+                val removeButton = JButton(AikenIcons.DELETE).apply {
+                    isFocusable = false
+                    addActionListener {
+                        rows.remove(keyEditor to valueEditor)
+                        rowsPanel.remove(rowPanel)
+                        rowsPanel.revalidate()
+                        rowsPanel.repaint()
+                    }
+                }
+                rowPanel.add(removeButton, BorderLayout.EAST)
+                rowsPanel.add(rowPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+        }
+
+        private abstract inner class BaseApplyEditor(
+            name: String,
+            type: String,
+            depth: Int
+        ) : ApplyValueEditor {
+            override val component = JPanel(BorderLayout()).apply {
+                border =
+                    JBUI.Borders.compound(
+                        BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
+                        JBUI.Borders.empty(6, 8 + depth * 12, 6, 8)
+                    )
+            }
+
+            protected val contentPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                isOpaque = false
+            }
+
+            init {
+                val title = JBLabel("$name ($type)").apply {
+                    font = font.deriveFont(Font.BOLD)
+                    border = JBUI.Borders.emptyBottom(4)
+                }
+                val top = JPanel().apply {
+                    isOpaque = false
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    add(title)
+                    add(Box.createHorizontalStrut(8))
+                    add(headerActionsPanel)
+                    add(Box.createHorizontalGlue())
+                }
+                component.add(top, BorderLayout.NORTH)
+                component.add(contentPanel, BorderLayout.CENTER)
+            }
+
+            protected fun addContent(child: JComponent) {
+                child.alignmentX = Component.LEFT_ALIGNMENT
+                contentPanel.add(child)
+            }
+
+            protected fun addCompact(child: JComponent) {
+                child.alignmentX = Component.LEFT_ALIGNMENT
+                child.maximumSize = child.preferredSize
+                val row =
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = false
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        border = JBUI.Borders.emptyTop(4)
+                        maximumSize = Dimension(Int.MAX_VALUE, child.preferredSize.height)
+                        add(child, BorderLayout.WEST)
+                    }
+                contentPanel.add(row)
+            }
+        }
+
+        private fun encodeDataAsHex(data: ApplyData): String {
+            val bytes = ByteArrayOutputStream()
+            encodePlutusData(bytes, data)
+            return bytes.toByteArray().toHex()
+        }
+
+        private fun parseHexBytes(raw: String, fieldPath: String): ByteArray {
+            val normalized = normalizeCborHex(raw)
+                ?: throw ExecutionException("$fieldPath must be valid hex.")
+            val out = ByteArray(normalized.length / 2)
+            var i = 0
+            while (i < normalized.length) {
+                out[i / 2] = normalized.substring(i, i + 2).toInt(16).toByte()
+                i += 2
+            }
+            return out
+        }
+
+        private fun ByteArray.toHex(): String {
+            val chars = CharArray(size * 2)
+            val alphabet = "0123456789abcdef".toCharArray()
+            for (index in indices) {
+                val value = this[index].toInt() and 0xff
+                chars[index * 2] = alphabet[value ushr 4]
+                chars[index * 2 + 1] = alphabet[value and 0x0f]
+            }
+            return String(chars)
+        }
+
+        private fun encodePlutusData(output: ByteArrayOutputStream, data: ApplyData) {
+            when (data) {
+                is ApplyData.RawCbor -> output.write(data.bytes)
+                is ApplyData.Integer -> encodeInteger(output, data.value)
+                is ApplyData.Bytes -> {
+                    writeTypeAndLength(output, major = 2, value = data.value.size.toLong())
+                    output.write(data.value)
+                }
+                is ApplyData.List -> {
+                    if (data.items.isEmpty()) {
+                        writeTypeAndLength(output, major = 4, value = 0)
+                    } else {
+                        output.write(0x9f)
+                        data.items.forEach { encodePlutusData(output, it) }
+                        output.write(0xff)
+                    }
+                }
+                is ApplyData.Map -> {
+                    writeTypeAndLength(output, major = 5, value = data.items.size.toLong())
+                    data.items.forEach { (key, value) ->
+                        encodePlutusData(output, key)
+                        encodePlutusData(output, value)
+                    }
+                }
+                is ApplyData.Constr -> {
+                    val index = data.index
+                    if (index < 7) {
+                        writeTypeAndLength(output, major = 6, value = 121 + index)
+                        encodeConstrFields(output, data.fields)
+                    } else if (index < 128) {
+                        writeTypeAndLength(output, major = 6, value = 1280 + index - 7)
+                        encodeConstrFields(output, data.fields)
+                    } else {
+                        writeTypeAndLength(output, major = 6, value = 102)
+                        writeTypeAndLength(output, major = 4, value = 2)
+                        encodeInteger(output, BigInteger.valueOf(index))
+                        encodeConstrFields(output, data.fields)
+                    }
+                }
+            }
+        }
+
+        private fun encodeConstrFields(output: ByteArrayOutputStream, fields: List<ApplyData>) {
+            if (fields.isEmpty()) {
+                writeTypeAndLength(output, major = 4, value = 0)
+            } else {
+                output.write(0x9f)
+                fields.forEach { encodePlutusData(output, it) }
+                output.write(0xff)
+            }
+        }
+
+        private fun encodeInteger(output: ByteArrayOutputStream, value: BigInteger) {
+            val zero = BigInteger.ZERO
+            if (value >= zero) {
+                if (value.bitLength() <= 63) {
+                    writeTypeAndLength(output, major = 0, value = value.toLong())
+                    return
+                }
+                writeTypeAndLength(output, major = 6, value = 2)
+                val bytes = unsignedBytes(value)
+                writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+                output.write(bytes)
+                return
+            }
+
+            val transformed = value.negate().subtract(BigInteger.ONE)
+            if (transformed.bitLength() <= 63) {
+                writeTypeAndLength(output, major = 1, value = transformed.toLong())
+                return
+            }
+            writeTypeAndLength(output, major = 6, value = 3)
+            val bytes = unsignedBytes(transformed)
+            writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+            output.write(bytes)
+        }
+
+        private fun unsignedBytes(value: BigInteger): ByteArray {
+            val bytes = value.toByteArray()
+            return if (bytes.size > 1 && bytes[0] == 0.toByte()) {
+                bytes.copyOfRange(1, bytes.size)
+            } else {
+                bytes
+            }
+        }
+
+        private fun writeTypeAndLength(output: ByteArrayOutputStream, major: Int, value: Long) {
+            when {
+                value < 24 -> output.write((major shl 5) or value.toInt())
+                value <= 0xff -> {
+                    output.write((major shl 5) or 24)
+                    output.write(value.toInt())
+                }
+                value <= 0xffff -> {
+                    output.write((major shl 5) or 25)
+                    output.write((value ushr 8).toInt() and 0xff)
+                    output.write(value.toInt() and 0xff)
+                }
+                value <= 0xffff_ffffL -> {
+                    output.write((major shl 5) or 26)
+                    output.write((value ushr 24).toInt() and 0xff)
+                    output.write((value ushr 16).toInt() and 0xff)
+                    output.write((value ushr 8).toInt() and 0xff)
+                    output.write(value.toInt() and 0xff)
+                }
+                else -> {
+                    output.write((major shl 5) or 27)
+                    for (shift in 56 downTo 0 step 8) {
+                        output.write((value ushr shift).toInt() and 0xff)
+                    }
+                }
+            }
+        }
+
+        private data class ApplyContext(
+            val blueprintFile: File,
+            val module: String,
+            val validator: String,
+            val selectedValidator: String,
+            val parameters: List<ApplyResolvedParameter>
+        )
+
+        private data class ApplyResolvedParameter(
+            val title: String,
+            val schema: ApplySchema
+        )
+
+        private data class ApplyParameterSection(
+            val title: String,
+            val editor: ApplyValueEditor
+        )
+
+        private data class ApplyNamedSchema(
+            val title: String?,
+            val schema: ApplySchema
+        )
+
+        private data class ApplyConstructor(
+            val title: String,
+            val index: Long,
+            val fields: List<ApplyNamedSchema>
+        )
+
+        private data class OptionConstructors(
+            val none: ApplyConstructor,
+            val some: ApplyConstructor
+        )
+
+        private sealed class ApplySchema {
+            data object Integer : ApplySchema()
+            data object Bytes : ApplySchema()
+            data class ListOne(val item: ApplySchema) : ApplySchema()
+            data class ListMany(val items: List<ApplyNamedSchema>) : ApplySchema()
+            data class Map(val key: ApplySchema, val value: ApplySchema) : ApplySchema()
+            data class AnyOf(val typeName: String?, val constructors: List<ApplyConstructor>) : ApplySchema()
+            data class Opaque(val reason: String) : ApplySchema()
+        }
+
+        private sealed class ApplyData {
+            data class RawCbor(val bytes: ByteArray) : ApplyData()
+            data class Integer(val value: BigInteger) : ApplyData()
+            data class Bytes(val value: ByteArray) : ApplyData()
+            data class List(val items: kotlin.collections.List<ApplyData>) : ApplyData()
+            data class Map(val items: kotlin.collections.List<Pair<ApplyData, ApplyData>>) : ApplyData()
+            data class Constr(val index: Long, val fields: kotlin.collections.List<ApplyData>) : ApplyData()
+        }
+    }
+
     private inner class AikenApplyAutoRunState(
         private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val args = buildCommandParameters()
-            val invocation = buildInvocation(executable, args, workDir)
             val inspectionFile = resolveApplyInspectionFile(workDir)
+            val sessionKey = applyAutoSessionKey(inspectionFile, workDir)
+            val accumulatedParameters =
+                APPLY_AUTO_CBOR_ACCUMULATOR.computeIfAbsent(sessionKey) { mutableListOf() }
+            val cborQueue =
+                APPLY_AUTO_CBOR_QUEUE.computeIfAbsent(sessionKey) {
+                    ArrayDeque(configuredApplyCborParameters())
+                }
+            val hasNonConfiguredApplied =
+                APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.computeIfAbsent(sessionKey) { AtomicBoolean(false) }
 
             val pendingBeforeStart = inspectionFile?.let { hasPendingApplyParameters(it) }
             if (pendingBeforeStart == false) {
-                return createCompletedApplyResult("Blueprint has no parameters left to apply\n")
+                val completion = buildString {
+                    append("Blueprint has no parameters left to apply\n")
+                    val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                    if (snapshot.isNotEmpty()) {
+                        append(formatAppliedCborParametersLine(snapshot))
+                        append('\n')
+                        if (hasNonConfiguredApplied.get()) {
+                            append(APPLY_PARAMETERS_HINT_LINE)
+                            append('\n')
+                        }
+                    }
+                }
+                APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                return createCompletedApplyResult(completion)
             }
 
+            val cborForRun =
+                synchronized(cborQueue) {
+                    if (cborQueue.isEmpty()) null else cborQueue.removeFirst()
+                }
+            val args = buildApplyCommandParameters(cborForRun)
+            val invocation = buildInvocation(executable, args, workDir)
             val handler = createPtyTerminalProcessHandler(invocation, workDir)
+            val runOutput = StringBuilder()
 
             handler.addProcessListener(
                 object : ProcessListener {
+                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                        runOutput.append(event.text)
+                    }
+
                     override fun processTerminated(event: ProcessEvent) {
-                        if (event.exitCode != 0) return
+                        val appliedInRun = extractLastAppliedCborFromApplyOutput(runOutput.toString())
+                        if (!appliedInRun.isNullOrBlank()) {
+                            synchronized(accumulatedParameters) {
+                                accumulatedParameters += appliedInRun
+                            }
+                            if (cborForRun.isNullOrBlank()) {
+                                hasNonConfiguredApplied.set(true)
+                            }
+                        }
+
+                        if (event.exitCode != 0) {
+                            val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                            if (snapshot.isNotEmpty()) {
+                                val hintSuffix =
+                                    if (hasNonConfiguredApplied.get()) {
+                                        "\n$APPLY_PARAMETERS_HINT_LINE"
+                                    } else {
+                                        ""
+                                    }
+                                handler.notifyTextAvailable(
+                                    "\n${formatAppliedCborParametersLine(snapshot)}$hintSuffix\n",
+                                    ProcessOutputTypes.STDOUT
+                                )
+                            }
+                            APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                            APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                            APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                            return
+                        }
                         val hasPending = inspectionFile?.let { hasPendingApplyParameters(it) }
                         if (hasPending == false) {
-                            handler.notifyTextAvailable(
-                                "Blueprint has no parameters left to apply\n",
-                                ProcessOutputTypes.STDOUT
-                            )
+                            val completion = buildString {
+                                append(ANSI_CLEAR_SCREEN_AND_HOME)
+                                append("\rBlueprint has no parameters left to apply\r\n")
+                                val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
+                                if (snapshot.isNotEmpty()) {
+                                    append("\r")
+                                    append(formatAppliedCborParametersLine(snapshot))
+                                    append("\r\n")
+                                    if (hasNonConfiguredApplied.get()) {
+                                        append("\r")
+                                        append(APPLY_PARAMETERS_HINT_LINE)
+                                        append("\r\n")
+                                    }
+                                }
+                            }
+                            handler.notifyTextAvailable(completion, ProcessOutputTypes.STDOUT)
+                            APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
+                            APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
+                            APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
                             return
                         }
                         ApplicationManager.getApplication().invokeLater {
@@ -901,11 +2342,26 @@ class AikenRunConfiguration(
             val targetCanonical = canonicalFile(target)
 
             val projectRoot = (workDir ?: project.basePath)?.let { canonicalFile(File(it)) }
-            if (projectRoot != null && targetCanonical == projectRoot) {
+            if (projectRoot == null) {
+                return false
+            }
+
+            if (targetCanonical == projectRoot) {
                 return false
             }
 
             if (targetCanonical.parentFile == null) {
+                return false
+            }
+
+            val projectPath = projectRoot.toPath()
+            val targetPath = targetCanonical.toPath()
+            if (!targetPath.startsWith(projectPath)) {
+                return false
+            }
+
+            val targetPathText = targetCanonical.path.replace('\\', '/')
+            if (targetPathText.contains("/.git") || targetPathText.contains("/.idea")) {
                 return false
             }
 
@@ -2024,8 +3480,9 @@ class AikenRunConfiguration(
         applyOut = readString(element, "applyOut", applyOut)
         applyModule = readString(element, "applyModule", applyModule)
         applyValidator = readString(element, "applyValidator", applyValidator)
-        applyCbor = readString(element, "applyCbor", applyCbor)
+        applyDefaultCborParameters = readString(element, "applyDefaultCborParameters", applyDefaultCborParameters)
         applyAutoUntilNoParameters = readBoolean(element, "applyAutoUntilNoParameters", true)
+        applyOutputMode = readEnum(element, "applyOutputMode", AikenApplyOutputMode.IDE_INTEGRATED)
 
         convertModule = readString(element, "convertModule", convertModule)
         convertValidator = readString(element, "convertValidator", convertValidator)
@@ -2084,8 +3541,9 @@ class AikenRunConfiguration(
         writeField(element, "applyOut", applyOut)
         writeField(element, "applyModule", applyModule)
         writeField(element, "applyValidator", applyValidator)
-        writeField(element, "applyCbor", applyCbor)
+        writeField(element, "applyDefaultCborParameters", applyDefaultCborParameters)
         writeField(element, "applyAutoUntilNoParameters", applyAutoUntilNoParameters.toString())
+        writeField(element, "applyOutputMode", applyOutputMode.name)
 
         writeField(element, "convertModule", convertModule)
         writeField(element, "convertValidator", convertValidator)
@@ -2142,14 +3600,8 @@ class AikenRunConfiguration(
             }
 
             AikenRunCommand.APPLY -> {
-                appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
-                appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
-                appendValueOption(parameters, "--module", applyModule)
-                appendValueOption(parameters, "--validator", applyValidator)
-                val cbor = applyCbor.trim()
-                if (cbor.isNotEmpty()) {
-                    parameters += cbor
-                }
+                val cbor = configuredApplyCborParameters().firstOrNull()
+                parameters += buildApplyCommandParameters(cbor, includeExtraArgs = false)
             }
 
             AikenRunCommand.CONVERT -> {
@@ -2196,6 +3648,110 @@ class AikenRunConfiguration(
             0 -> ""
             1 -> parts.first()
             else -> parts.joinToString(",")
+        }
+    }
+
+    private fun configuredApplyCborParameters(): List<String> {
+        return parseCborValues(applyDefaultCborParameters)
+    }
+
+    private fun parseCborValues(raw: String): List<String> {
+        return raw
+            .trim()
+            .split(Regex("[,\\s]+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    private fun buildApplyCommandParameters(
+        singleCborParameter: String?,
+        includeExtraArgs: Boolean = true
+    ): List<String> {
+        val parameters = ArrayList<String>()
+        appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
+        appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
+        appendValueOption(parameters, "--module", applyModule)
+        appendValueOption(parameters, "--validator", applyValidator)
+        singleCborParameter?.trim()?.takeIf { it.isNotEmpty() }?.let { parameters += it }
+
+        if (includeExtraArgs) {
+            val extra = extraArgs.trim()
+            if (extra.isNotEmpty()) {
+                parameters += ParametersListUtil.parse(extra)
+            }
+        }
+        return parameters
+    }
+
+    private fun formatAppliedCborParametersLine(parameters: List<String>): String {
+        return "Applied CBOR parameters: ${parameters.joinToString(" ")}"
+    }
+
+    private fun extractLastAppliedCborFromApplyOutput(rawOutput: String): String? {
+        val lines = stripAnsi(rawOutput).replace("\r\n", "\n").replace('\r', '\n').lines()
+        var index = 0
+        var lastApplied: String? = null
+
+        while (index < lines.size) {
+            val line = lines[index]
+            val applyingMatch = APPLYING_LINE_REGEX.find(line)
+            if (applyingMatch == null) {
+                index += 1
+                continue
+            }
+
+            val chunks = ArrayList<String>()
+            val firstChunk = applyingMatch.groupValues.getOrNull(1).orEmpty().trim()
+            if (firstChunk.isNotEmpty() && APPLY_HEX_CHUNK_REGEX.matches(firstChunk)) {
+                chunks += firstChunk
+            }
+
+            var cursor = index + 1
+            while (cursor < lines.size) {
+                val raw = lines[cursor]
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty()) break
+                val isContinuation =
+                    raw.startsWith(" ") &&
+                        trimmed.split(Regex("\\s+")).all { APPLY_HEX_CHUNK_REGEX.matches(it) }
+                if (!isContinuation) break
+
+                chunks += trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                cursor += 1
+            }
+
+            if (chunks.isNotEmpty()) {
+                lastApplied = chunks.joinToString("")
+            }
+            index = cursor
+        }
+
+        return lastApplied
+    }
+
+    private fun applyAutoSessionKey(inspectionFile: File?, workDir: String?): String {
+        val blueprintPath =
+            when {
+                inspectionFile != null -> {
+                    try {
+                        inspectionFile.canonicalPath
+                    } catch (_: IOException) {
+                        inspectionFile.absolutePath
+                    }
+                }
+                !workDir.isNullOrBlank() -> workDir
+                else -> project.basePath.orEmpty()
+            }
+        return buildString {
+            append(project.locationHash)
+            append("::")
+            append(name)
+            append("::")
+            append(blueprintPath)
+            append("::")
+            append(applyModule.trim())
+            append("::")
+            append(applyValidator.trim())
         }
     }
 
@@ -2765,14 +4321,19 @@ class AikenRunConfiguration(
                 )
             } else {
                 val warningSuiteId = "$diagnosticId-suite"
-                emitServiceMessage(
-                    handler,
-                    "testSuiteStarted",
+                val startedAttributes =
                     linkedMapOf(
                         "name" to title,
                         "nodeId" to warningSuiteId,
                         "parentNodeId" to sectionId
                     )
+                extractDiagnosticLocationHint(block, workDir)?.let { locationHint ->
+                    startedAttributes["locationHint"] = locationHint
+                }
+                emitServiceMessage(
+                    handler,
+                    "testSuiteStarted",
+                    startedAttributes
                 )
                 emitServiceMessage(
                     handler,
@@ -3885,6 +5446,9 @@ class AikenRunConfiguration(
         const val ANSI_GREEN = "\u001B[32m"
         const val ANSI_BLUE = "\u001B[34m"
         const val ANSI_CYAN = "\u001B[36m"
+        const val ANSI_CLEAR_SCREEN_AND_HOME = "\u001B[2J\u001B[H"
+        const val APPLY_PARAMETERS_HINT_LINE =
+            "Tip: paste these values into 'Auto aplied CBOR parameters' to automate parameterization in future runs."
         const val AIKEN_TEST_LOCATION_PROTOCOL = "aiken-test"
         val TEST_DECLARATION_REGEX = Regex("""^\s*(pub\s+)?test\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
         val DIAGNOSTIC_BLOCK_SEPARATOR_REGEX = Regex("""\n{2,}""")
@@ -3908,11 +5472,16 @@ class AikenRunConfiguration(
         val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")
         val ADDRESS_OUTPUT_LINE_REGEX = Regex("""^addr(?:_test)?1[a-z0-9]+$""")
         val POLICY_ID_OUTPUT_LINE_REGEX = Regex("""^[0-9a-f]{56}$""")
+        val APPLYING_LINE_REGEX = Regex("""^\s*Applying(?:\s+([0-9a-fA-F]+))?\s*$""", RegexOption.IGNORE_CASE)
+        val APPLY_HEX_CHUNK_REGEX = Regex("""^[0-9a-fA-F]+$""")
         const val DEFAULT_ARTIFACT_SCRIPT_TEMPLATE = "%module%.%validator%.script"
         const val DEFAULT_ARTIFACT_MAINNET_TEMPLATE = "%module%.%validator%.addr"
         const val DEFAULT_ARTIFACT_TESTNET_TEMPLATE = "%module%.%validator%.addr_test"
         const val DEFAULT_ARTIFACT_POLICY_TEMPLATE = "%module%.%validator%.policy"
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
+        val APPLY_AUTO_CBOR_ACCUMULATOR = ConcurrentHashMap<String, MutableList<String>>()
+        val APPLY_AUTO_CBOR_QUEUE = ConcurrentHashMap<String, ArrayDeque<String>>()
+        val APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES = ConcurrentHashMap<String, AtomicBoolean>()
     }
 }
 
@@ -3959,6 +5528,13 @@ enum class AikenCheckOutputMode(private val label: String) {
 }
 
 enum class AikenBuildOutputMode(private val label: String) {
+    TTY("tty"),
+    IDE_INTEGRATED("ide integrated");
+
+    override fun toString(): String = label
+}
+
+enum class AikenApplyOutputMode(private val label: String) {
     TTY("tty"),
     IDE_INTEGRATED("ide integrated");
 
