@@ -3,39 +3,22 @@ package com.medusalabs.aiken.project
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.progress.ProgressManager
+import com.medusalabs.aiken.naming.AikenNamingRules
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Locale
 import java.util.concurrent.ExecutionException
 import kotlin.io.path.deleteIfExists
 
 internal object AikenProjectScaffolder {
-    private val tokenRegex = Regex("^[a-z0-9_-]+$")
     private data class CommandResult(val exitCode: Int, val output: String)
 
-    fun normalizeToken(raw: String): String {
-        val lowered = raw.lowercase(Locale.US)
-        val mapped = lowered.map { ch ->
-            when {
-                ch in 'a'..'z' -> ch
-                ch in '0'..'9' -> ch
-                ch == '_' || ch == '-' -> ch
-                else -> '-'
-            }
-        }.joinToString("")
-        return mapped.replace(Regex("-+"), "-").trim('-')
-    }
+    fun normalizeToken(raw: String): String = AikenNamingRules.normalizePackageToken(raw)
 
     fun requireValidToken(label: String, value: String) {
-        if (value.isBlank()) {
-            throw IllegalStateException("$label is required")
-        }
-        if (!tokenRegex.matches(value)) {
-            throw IllegalStateException("$label must match [a-z0-9_-]+ (lowercase, no spaces)")
-        }
+        AikenNamingRules.requireValidPackageToken(label, value)
     }
 
     fun resolveTargetDirectoryPath(projectPath: String, projectName: String): String {

@@ -20,11 +20,14 @@ import com.intellij.psi.PsiDirectory
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.panel
 import com.medusalabs.aiken.icons.AikenIcons
+import com.medusalabs.aiken.naming.AikenNamingRules
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ExecutionException
 import javax.swing.JComponent
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 import kotlin.io.path.deleteIfExists
 
 class AikenNewFileAction : AnAction("Aiken File", "Create a new Aiken file", AikenIcons.AIKEN), DumbAware {
@@ -119,6 +122,15 @@ private class AikenNewFileDialog(project: Project) : DialogWrapper(project) {
         templateCombo.prototypeDisplayValue = AikenTemplateKind.VALIDATOR
         setHorizontalStretch(0.9f)
         init()
+        initValidation()
+        nameField.document.addDocumentListener(
+            object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = refreshValidationState()
+                override fun removeUpdate(e: DocumentEvent?) = refreshValidationState()
+                override fun changedUpdate(e: DocumentEvent?) = refreshValidationState()
+            }
+        )
+        refreshValidationState()
     }
 
     override fun createCenterPanel(): JComponent = panel {
@@ -132,13 +144,19 @@ private class AikenNewFileDialog(project: Project) : DialogWrapper(project) {
     }
 
     override fun doValidate(): ValidationInfo? {
+        return validationInfo()
+    }
+
+    private fun refreshValidationState() {
+        val info = validationInfo()
+        isOKActionEnabled = info == null
+        setErrorText(info?.message, info?.component)
+    }
+
+    private fun validationInfo(): ValidationInfo? {
         val value = fileName.trim()
-        if (value.isBlank()) return ValidationInfo("File name is required.", nameField)
-        if (value == "." || value == "..") return ValidationInfo("Invalid file name.", nameField)
-        if (value.contains('/') || value.contains('\\')) {
-            return ValidationInfo("File name must not contain path separators.", nameField)
-        }
-        return null
+        val message = AikenNamingRules.validateAikenFileName(value) ?: return null
+        return ValidationInfo(message, nameField)
     }
 }
 
