@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiken What's New</title>
+  <style>
+    :root {
+      --jb-bg: #ffffff;
+      --jb-fg: #1f2328;
+      --jb-border: rgba(31, 35, 40, 0.22);
+      --jb-soft-bg: rgba(31, 35, 40, 0.05);
+      --jb-soft-bg-2: rgba(31, 35, 40, 0.08);
+      --jb-code-bg: rgba(31, 35, 40, 0.12);
+      --jb-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
+      --jb-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    {{IDE_THEME_VARS}}
+
+    html {
+      background: var(--jb-bg);
+      color: var(--jb-fg);
+    }
+    body {
+      margin: 0;
+      padding: 28px;
+      font-family: var(--jb-font-sans);
+      line-height: 1.5;
+      max-width: 1080px;
+      background: var(--jb-bg);
+      color: var(--jb-fg);
+    }
+    h1 { margin: 0 0 6px; font-size: 34px; line-height: 1.2; }
+    h2 { margin: 0 0 20px; font-size: 16px; font-weight: 500; opacity: 0.82; }
+    h3 { margin: 24px 0 10px; font-size: 22px; line-height: 1.25; }
+    p { margin: 8px 0; }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    li { margin: 7px 0; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-family: var(--jb-font-mono);
+      font-size: 12px;
+      background: var(--jb-code-bg);
+    }
+    .hero {
+      margin: 6px 0 18px;
+      font-size: 16px;
+      opacity: 0.95;
+      max-width: 900px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin: 14px 0 8px;
+    }
+    .card {
+      border: 1px solid var(--jb-border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: var(--jb-soft-bg);
+    }
+    .card b { display: inline-block; margin-bottom: 4px; }
+    .runner {
+      border: 1px solid var(--jb-border);
+      border-radius: 10px;
+      padding: 14px;
+      margin: 12px 0;
+      background: var(--jb-soft-bg);
+    }
+    .runner-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+    .shot {
+      margin: 12px 0 6px;
+      border: 1px dashed var(--jb-border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      opacity: 0.82;
+      background: var(--jb-soft-bg);
+    }
+    .note {
+      margin: 12px 0;
+      padding: 10px 12px;
+      border-left: 3px solid var(--jb-border);
+      background: var(--jb-soft-bg-2);
+      border-radius: 8px;
+    }
+    .divider {
+      margin: 22px 0 4px;
+      border: 0;
+      border-top: 1px solid var(--jb-border);
+    }
+  </style>
+</head>
+<body>
+  <h1>What's New in Aiken Plugin</h1>
+  <h2>Version {{VERSION}}</h2>
+
+  <p class="hero">
+    This release turns Aiken support into a complete in-IDE workflow:
+    project scaffolding, deep navigation, rich run integrations, artifact generation,
+    parameterization flows, and polished daily UX from first file to final build output.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <b>End-to-End Integration</b><br/>
+      Full loop inside JetBrains IDEs: edit, run, test, parametrize, and build artifacts.
+    </div>
+    <div class="card">
+      <b>Dedicated Runner Stack</b><br/>
+      <code>Run checks</code>, <code>Build blueprint</code>, <code>Parametrize</code>, <code>Make artifacts</code>, <code>Clean artifacts</code>.
+    </div>
+    <div class="card">
+      <b>Scaffold + Templates</b><br/>
+      New Project Wizard and New Aiken File templates ready for immediate coding.
+    </div>
+  </div>
+
+  <div class="shot">[Screenshot placeholder: Full IDE workflow overview]</div>
+
+  <hr class="divider"/>
+  <h3>Runner Integrations</h3>
+
+  <div class="runner">
+    <p class="runner-title">Run checks</p>
+    <ul>
+      <li>Output modes: <code>tty</code>, <code>json</code>, and <code>ide integrated</code>.</li>
+      <li>Structured tree by modules and tests with better labels and counters.</li>
+      <li>Warnings and errors are grouped as dedicated sections.</li>
+      <li>Detailed diagnostics are preserved with full context.</li>
+      <li>Selected test rerun and richer per-test details (including mem/cpu).</li>
+      <li>Improved match pattern UX and parser behavior for real CLI output streams.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Run checks with tests + warnings/errors tree]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Build blueprint</p>
+    <ul>
+      <li>Supports <code>tty</code> and IDE-integrated reporting.</li>
+      <li>Build-style result handling without running tests.</li>
+      <li>Clear success and failure messages with warning/error visibility.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Build blueprint integrated output]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Parametrize</p>
+    <ul>
+      <li>Both <code>tty</code> and IDE-integrated modes are supported.</li>
+      <li>Auto-repeat parameterization until no undefined parameters are left.</li>
+      <li>Smart completion handling for "no parameters left" terminal state.</li>
+      <li>Applied CBOR parameters are collected and shown for reuse.</li>
+      <li>Queue-based auto-applied CBOR input with comma/space parsing.</li>
+      <li>Rich GUI handling for nested data, constructors, lists, options, booleans, and opaque data input.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Parametrize GUI with nested structures]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Make artifacts</p>
+    <ul>
+      <li>Unified pipeline for script conversion, addresses, and policy output.</li>
+      <li>Per-artifact generation toggles (script, testnet address, mainnet address, policy).</li>
+      <li>Dynamic file templates with <code>%module%</code> and <code>%validator%</code>.</li>
+      <li>Template paths support subdirectories for advanced artifact layout.</li>
+      <li>Aggregates multiple module/validator targets in one run.</li>
+      <li>Result panel with copy-friendly fields and saved-file summary.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Make artifacts result view + saved files]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Clean artifacts</p>
+    <ul>
+      <li>Dedicated cleanup runner for artifact directories.</li>
+      <li>Safer target validation and predictable cleanup scope.</li>
+      <li>Completes the full artifact lifecycle directly in IDE.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Clean artifacts runner]</div>
+  </div>
+
+  <hr class="divider"/>
+  <h3>Scaffolding and File Templates</h3>
+  <ul>
+    <li>New Project Wizard with vendor/project validation and subtype selection (<code>validator</code> / <code>lib</code>).</li>
+    <li>Post-init defaults for validator projects:
+      <ul>
+        <li><code>artifacts/</code> is added to <code>.gitignore</code>,</li>
+        <li>starter test module is created in <code>validators/tests/test_module.ak</code>.</li>
+      </ul>
+    </li>
+    <li>Improved project recognition stability after creation and reopen.</li>
+    <li><code>New → Aiken File</code> with 3 subtypes:
+      <ul>
+        <li><b>Aiken Validator</b> (template resolved from cached/generated <code>placeholder.ak</code>),</li>
+        <li><b>Aiken Test</b>,</li>
+        <li><b>Common File</b> (empty <code>.ak</code>).</li>
+      </ul>
+    </li>
+  </ul>
+  <div class="shot">[Screenshot placeholder: Aiken New Project Wizard]</div>
+  <div class="shot">[Screenshot placeholder: New Aiken File dialog + subtype picker]</div>
+
+  <hr class="divider"/>
+  <h3>Navigation and Editing UX</h3>
+  <ul>
+    <li>Better usage/declaration popup readability and contextual rendering.</li>
+    <li>Alias imports in <code>use ... as ...</code> now index and resolve consistently.</li>
+    <li>Autocomplete noise reduced by filtering out non-callable test signatures.</li>
+    <li>General UI consistency updates across runner cards, labels, and descriptions.</li>
+  </ul>
+  <div class="shot">[Screenshot placeholder: Usage popup + declaration selection improvements]</div>
+
+  <div class="note">
+    This page supports versioned content files. Add <code>whatsnew/&lt;version&gt;.html</code>
+    to ship custom notes for a specific release, while keeping <code>whatsnew/latest.html</code> as fallback.
+  </div>
+</body>
+</html>

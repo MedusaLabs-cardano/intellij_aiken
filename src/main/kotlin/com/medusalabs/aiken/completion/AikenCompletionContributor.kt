@@ -14,6 +14,12 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
         extend(
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(AikenLanguage),
+            AikenUseCompletionProvider()
+        )
+
+        extend(
+            CompletionType.BASIC,
+            PlatformPatterns.psiElement().withLanguage(AikenLanguage),
             IdentifierCompletionProvider(
                 lexerFactory = { AikenLexing.createLexer() },
                 kindByTokenType = mapOf(

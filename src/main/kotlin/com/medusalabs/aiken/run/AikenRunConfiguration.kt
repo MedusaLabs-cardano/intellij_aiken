@@ -1103,6 +1103,7 @@ class AikenRunConfiguration(
             private val field = JBTextField()
 
             init {
+                configureCompactInputField(field)
                 field.emptyText.text = "e.g. 42"
                 addContent(field)
             }
@@ -1123,6 +1124,7 @@ class AikenRunConfiguration(
             private val field = JBTextField()
 
             init {
+                configureCompactInputField(field)
                 field.emptyText.text = "hex bytes (without 0x)"
                 addContent(field)
             }
@@ -1141,6 +1143,7 @@ class AikenRunConfiguration(
             private val field = JBTextField()
 
             init {
+                configureCompactInputField(field)
                 field.emptyText.text = "raw CBOR hex"
                 addContent(field)
                 addContent(
@@ -1384,6 +1387,12 @@ class AikenRunConfiguration(
         private fun <T> makeComboCompact(combo: JComboBox<T>) {
             combo.maximumSize = combo.preferredSize
             combo.alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        private fun configureCompactInputField(field: JBTextField) {
+            field.columns = 32
+            field.maximumSize = field.preferredSize
+            field.alignmentX = Component.LEFT_ALIGNMENT
         }
 
         private inner class ApplyMapEditor(

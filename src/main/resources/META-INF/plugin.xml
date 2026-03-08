@@ -47,6 +47,7 @@
 
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.whatsnew.AikenWhatsNewStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
         <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
