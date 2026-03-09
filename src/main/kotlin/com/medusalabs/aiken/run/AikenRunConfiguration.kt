@@ -107,6 +107,7 @@ import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.JTree
+import javax.swing.border.TitledBorder
 import javax.swing.tree.TreeCellRenderer
 import java.awt.FlowLayout
 import java.awt.Font
@@ -298,6 +299,14 @@ class AikenRunConfiguration(
         }
 
         if (
+            command == AikenRunCommand.APPLY &&
+            applyOutputMode == AikenApplyOutputMode.TTY &&
+            applyAutoUntilNoParameters
+        ) {
+            return AikenApplyAutoRunState(environment)
+        }
+
+        if (
             command == AikenRunCommand.BUILD &&
             buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
         ) {
@@ -373,6 +382,21 @@ class AikenRunConfiguration(
 
         private fun configuredApplyCborParameters(): List<String> =
             configuration.configuredApplyCborParameters()
+
+        private fun alignedConfiguredApplyCborParameters(
+            executable: String,
+            workDir: String?,
+            blueprintFile: File,
+            moduleName: String?,
+            validatorName: String?
+        ): ArrayDeque<String> =
+            configuration.alignedConfiguredApplyCborParameters(
+                executable,
+                workDir,
+                blueprintFile,
+                moduleName,
+                validatorName
+            )
 
         private fun buildApplyCommandParameters(
             singleCborParameter: String?,
@@ -560,7 +584,13 @@ class AikenRunConfiguration(
         ) {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val configuredQueue = ArrayDeque(configuredApplyCborParameters())
+            val configuredQueue = alignedConfiguredApplyCborParameters(
+                executable,
+                workDir,
+                context.blueprintFile,
+                context.module,
+                context.validator
+            )
             val applied = ArrayList<String>()
             var usedManualValues = false
             var appliedCount = 0
@@ -956,7 +986,7 @@ class AikenRunConfiguration(
                 }
             private val sectionsPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                border = JBUI.Borders.empty(8)
+                border = JBUI.Borders.empty(4, 8, 4, 8)
             }
             private val applyButton = JButton("Apply")
             private val disposed = AtomicBoolean(false)
@@ -1034,9 +1064,11 @@ class AikenRunConfiguration(
                         this.sections.clear()
                         this.sections += sections
                     }
-                    for (section in sections) {
+                    for ((index, section) in sections.withIndex()) {
                         sectionsPanel.add(section.editor.component)
-                        sectionsPanel.add(JBUI.Panels.simplePanel().apply { border = JBUI.Borders.empty(4) })
+                        if (index < sections.lastIndex) {
+                            sectionsPanel.add(Box.createVerticalStrut(JBUI.scale(6)))
+                        }
                     }
                     applyButton.isEnabled = synchronized(this.sections) { this.sections.isNotEmpty() }
                     sectionsPanel.revalidate()
@@ -1065,8 +1097,12 @@ class AikenRunConfiguration(
                 }
                 if (!removed) return
                 updateUi {
-                    if (sectionsPanel.componentCount > 0) sectionsPanel.remove(0)
-                    if (sectionsPanel.componentCount > 0) sectionsPanel.remove(0)
+                    if (sectionsPanel.componentCount > 0) {
+                        sectionsPanel.remove(0)
+                    }
+                    if (sectionsPanel.componentCount > 0 && sectionsPanel.getComponent(0) is Box.Filler) {
+                        sectionsPanel.remove(0)
+                    }
                     applyButton.isEnabled = synchronized(sections) { sections.isNotEmpty() }
                     sectionsPanel.revalidate()
                     sectionsPanel.repaint()
@@ -1303,6 +1339,7 @@ class AikenRunConfiguration(
                 for ((_, editor) in editors) {
                     fieldsPanel.add(editor.component)
                 }
+                fieldsPanel.maximumSize = fieldsPanel.preferredSize
                 fieldsPanel.revalidate()
                 fieldsPanel.repaint()
             }
@@ -1350,6 +1387,7 @@ class AikenRunConfiguration(
                 addButton.addActionListener {
                     addRow(editorFactory("item${rows.size + 1}", depth + 1))
                 }
+                rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
                 addContent(rowsPanel)
                 addCompact(addButton)
             }
@@ -1366,6 +1404,7 @@ class AikenRunConfiguration(
                 rows += editor
                 val rowPanel = JPanel(BorderLayout(8, 0)).apply {
                     border = JBUI.Borders.emptyTop(4)
+                    alignmentX = Component.LEFT_ALIGNMENT
                     add(editor.component, BorderLayout.CENTER)
                 }
                 val removeButton = JButton(AikenIcons.DELETE).apply {
@@ -1378,7 +1417,9 @@ class AikenRunConfiguration(
                     }
                 }
                 rowPanel.add(removeButton, BorderLayout.EAST)
+                rowPanel.maximumSize = rowPanel.preferredSize
                 rowsPanel.add(rowPanel)
+                rowsPanel.maximumSize = rowsPanel.preferredSize
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
@@ -1416,6 +1457,7 @@ class AikenRunConfiguration(
                         valueFactory("value${rows.size + 1}", valueSchema, depth + 1)
                     )
                 }
+                rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
                 addCompact(addButton)
                 addContent(rowsPanel)
             }
@@ -1434,9 +1476,11 @@ class AikenRunConfiguration(
                 rows += keyEditor to valueEditor
                 val rowPanel = JPanel(BorderLayout(8, 0)).apply {
                     border = JBUI.Borders.emptyTop(4)
+                    alignmentX = Component.LEFT_ALIGNMENT
                 }
                 val keyAndValue = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
                     add(keyEditor.component)
                     add(valueEditor.component)
                 }
@@ -1451,7 +1495,9 @@ class AikenRunConfiguration(
                     }
                 }
                 rowPanel.add(removeButton, BorderLayout.EAST)
+                rowPanel.maximumSize = rowPanel.preferredSize
                 rowsPanel.add(rowPanel)
+                rowsPanel.maximumSize = rowsPanel.preferredSize
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
@@ -1462,12 +1508,35 @@ class AikenRunConfiguration(
             type: String,
             depth: Int
         ) : ApplyValueEditor {
-            override val component = JPanel(BorderLayout()).apply {
+            private val titleText = "$name ($type)"
+            private val titleFont = JBLabel().font.deriveFont(Font.BOLD)
+            override val component =
+                object : JPanel(BorderLayout()) {
+                    override fun getPreferredSize(): Dimension {
+                        val size = super.getPreferredSize()
+                        size.width = maxOf(size.width, titleMinSectionWidth())
+                        if (depth == 0) {
+                            size.width = maxOf(size.width, applyTopLevelSectionWidth())
+                        }
+                        return size
+                    }
+
+                    override fun getMaximumSize(): Dimension = preferredSize
+                }.apply {
+                val lineBorder = BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground())
+                val titledBorder = BorderFactory.createTitledBorder(
+                    lineBorder,
+                    titleText,
+                    TitledBorder.LEFT,
+                    TitledBorder.TOP,
+                    JBLabel().font.deriveFont(Font.BOLD)
+                )
                 border =
                     JBUI.Borders.compound(
-                        BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
-                        JBUI.Borders.empty(6, 8 + depth * 12, 6, 8)
+                        titledBorder,
+                        JBUI.Borders.empty(6, 4 + depth * 10, 6, 6)
                     )
+                alignmentX = Component.LEFT_ALIGNMENT
             }
 
             protected val contentPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
@@ -1476,15 +1545,9 @@ class AikenRunConfiguration(
             }
 
             init {
-                val title = JBLabel("$name ($type)").apply {
-                    font = font.deriveFont(Font.BOLD)
-                    border = JBUI.Borders.emptyBottom(4)
-                }
                 val top = JPanel().apply {
                     isOpaque = false
                     layout = BoxLayout(this, BoxLayout.X_AXIS)
-                    add(title)
-                    add(Box.createHorizontalStrut(8))
                     add(headerActionsPanel)
                     add(Box.createHorizontalGlue())
                 }
@@ -1495,6 +1558,7 @@ class AikenRunConfiguration(
             protected fun addContent(child: JComponent) {
                 child.alignmentX = Component.LEFT_ALIGNMENT
                 contentPanel.add(child)
+                contentPanel.maximumSize = contentPanel.preferredSize
             }
 
             protected fun addCompact(child: JComponent) {
@@ -1509,6 +1573,22 @@ class AikenRunConfiguration(
                         add(child, BorderLayout.WEST)
                     }
                 contentPanel.add(row)
+                contentPanel.maximumSize = contentPanel.preferredSize
+            }
+
+            private fun applyTopLevelSectionWidth(): Int {
+                val prototypeField = JBTextField().apply { columns = 32 }
+                val inputWidth = prototypeField.preferredSize.width
+                val horizontalInsets = JBUI.scale(8 + 8)
+                val borderAndGutter = JBUI.scale(24)
+                return inputWidth + horizontalInsets + borderAndGutter
+            }
+
+            private fun titleMinSectionWidth(): Int {
+                val metrics = component.getFontMetrics(titleFont)
+                val titleWidth = metrics.stringWidth(titleText)
+                val titlePadding = JBUI.scale(28)
+                return titleWidth + titlePadding
             }
         }
 
@@ -1717,17 +1797,25 @@ class AikenRunConfiguration(
             val workDir = resolveProjectDirectory()
             val inspectionFile = resolveApplyInspectionFile(workDir)
             val sessionKey = applyAutoSessionKey(inspectionFile, workDir)
+            val pendingBeforeStart = inspectionFile?.let { countPendingApplyParameters(it) }
             val accumulatedParameters =
                 APPLY_AUTO_CBOR_ACCUMULATOR.computeIfAbsent(sessionKey) { mutableListOf() }
             val cborQueue =
                 APPLY_AUTO_CBOR_QUEUE.computeIfAbsent(sessionKey) {
-                    ArrayDeque(configuredApplyCborParameters())
+                    inspectionFile?.let {
+                        alignedConfiguredApplyCborParameters(
+                            executable,
+                            workDir,
+                            it,
+                            applyModule.trim().ifEmpty { null },
+                            applyValidator.trim().ifEmpty { null }
+                        )
+                    } ?: ArrayDeque()
                 }
             val hasNonConfiguredApplied =
                 APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.computeIfAbsent(sessionKey) { AtomicBoolean(false) }
 
-            val pendingBeforeStart = inspectionFile?.let { hasPendingApplyParameters(it) }
-            if (pendingBeforeStart == false) {
+            if (pendingBeforeStart == 0) {
                 val completion = buildString {
                     append("Blueprint has no parameters left to apply\n")
                     val snapshot = synchronized(accumulatedParameters) { accumulatedParameters.toList() }
@@ -1791,8 +1879,8 @@ class AikenRunConfiguration(
                             APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
                             return
                         }
-                        val hasPending = inspectionFile?.let { hasPendingApplyParameters(it) }
-                        if (hasPending == false) {
+                        val pendingAfter = inspectionFile?.let { countPendingApplyParameters(it) }
+                        if (pendingAfter == 0) {
                             val completion = buildString {
                                 append(ANSI_CLEAR_SCREEN_AND_HOME)
                                 append("\rBlueprint has no parameters left to apply\r\n")
@@ -3664,6 +3752,30 @@ class AikenRunConfiguration(
         return parseCborValues(applyDefaultCborParameters)
     }
 
+    private fun alignedConfiguredApplyCborParameters(
+        executable: String,
+        workDir: String?,
+        blueprintFile: File,
+        moduleName: String?,
+        validatorName: String?
+    ): ArrayDeque<String> {
+        val configured = configuredApplyCborParameters()
+        if (configured.isEmpty()) {
+            return ArrayDeque()
+        }
+        if (!blueprintFile.exists() || !blueprintFile.isFile) {
+            return ArrayDeque(configured)
+        }
+
+        for ((index, candidate) in configured.withIndex()) {
+            if (canApplyConfiguredParameterToCurrentBlueprint(executable, workDir, blueprintFile, moduleName, validatorName, candidate)) {
+                return ArrayDeque(configured.drop(index))
+            }
+        }
+
+        return ArrayDeque()
+    }
+
     private fun parseCborValues(raw: String): List<String> {
         return raw
             .trim()
@@ -3690,6 +3802,64 @@ class AikenRunConfiguration(
             }
         }
         return parameters
+    }
+
+    private fun buildApplyProbeCommandParameters(
+        blueprintInput: String,
+        blueprintOutput: String,
+        singleCborParameter: String,
+        moduleName: String?,
+        validatorName: String?
+    ): List<String> {
+        val parameters = ArrayList<String>()
+        appendValueOption(parameters, "--in", blueprintInput)
+        appendValueOption(parameters, "--out", blueprintOutput)
+        appendValueOption(parameters, "--module", moduleName.orEmpty())
+        appendValueOption(parameters, "--validator", validatorName.orEmpty())
+        singleCborParameter.trim().takeIf { it.isNotEmpty() }?.let { parameters += it }
+        return parameters
+    }
+
+    private fun canApplyConfiguredParameterToCurrentBlueprint(
+        executable: String,
+        workDir: String?,
+        blueprintFile: File,
+        moduleName: String?,
+        validatorName: String?,
+        rawCandidate: String
+    ): Boolean {
+        val candidate = rawCandidate.trim().replace(Regex("\\s+"), "")
+        if (candidate.isEmpty() || candidate.length % 2 != 0 || !candidate.matches(Regex("[0-9a-fA-F]+"))) {
+            return false
+        }
+        val probeOutput = File.createTempFile("aiken-apply-probe-", ".json")
+        return try {
+            val args = buildApplyProbeCommandParameters(
+                blueprintInput = blueprintFile.absolutePath,
+                blueprintOutput = probeOutput.absolutePath,
+                singleCborParameter = candidate.lowercase(Locale.US),
+                moduleName = moduleName,
+                validatorName = validatorName
+            )
+            val invocation = ArrayList<String>(args.size + 3)
+            invocation += executable
+            invocation += "blueprint"
+            invocation += "apply"
+            invocation += args
+
+            val processBuilder = ProcessBuilder(invocation)
+            if (!workDir.isNullOrBlank()) {
+                processBuilder.directory(File(workDir))
+            }
+            processBuilder.redirectErrorStream(true)
+            val process = processBuilder.start()
+            process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            process.waitFor() == 0
+        } catch (_: Exception) {
+            false
+        } finally {
+            probeOutput.delete()
+        }
     }
 
     private fun formatAppliedCborParametersLine(parameters: List<String>): String {
@@ -4985,7 +5155,7 @@ class AikenRunConfiguration(
         return File(baseDir, selectedPath)
     }
 
-    private fun hasPendingApplyParameters(blueprintFile: File): Boolean? {
+    private fun countPendingApplyParameters(blueprintFile: File): Int? {
         if (!blueprintFile.exists() || !blueprintFile.isFile) return null
 
         val root =
@@ -5001,6 +5171,7 @@ class AikenRunConfiguration(
         val useAllValidators = moduleFilter == null && validatorFilter == null
 
         var matchedValidators = 0
+        var pendingParameters = 0
         for (element in validators) {
             val obj = element.asJsonObjectOrNull() ?: continue
 
@@ -5015,12 +5186,12 @@ class AikenRunConfiguration(
 
             val parameters = obj["parameters"]
             if (parameters != null && parameters.isJsonArray && parameters.asJsonArray.size() > 0) {
-                return true
+                pendingParameters += parameters.asJsonArray.size()
             }
         }
 
         if (matchedValidators == 0) return null
-        return false
+        return pendingParameters
     }
 
     private fun resolveConvertOutputDirectory(workDir: String?): File? {
