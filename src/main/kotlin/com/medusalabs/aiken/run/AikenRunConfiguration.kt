@@ -72,9 +72,14 @@ import org.jdom.Element
 import java.io.File
 import java.io.IOException
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.Insets
+import java.awt.RenderingHints
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.util.Base64
@@ -89,12 +94,14 @@ import java.util.concurrent.atomic.AtomicReference
 import com.intellij.util.messages.MessageBusConnection
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
+import com.intellij.ui.ColorUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBComboBoxLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -106,8 +113,13 @@ import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextField
+import javax.swing.Timer
 import javax.swing.JTree
+import javax.swing.UIManager
+import javax.swing.border.AbstractBorder
 import javax.swing.border.TitledBorder
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 import javax.swing.tree.TreeCellRenderer
 import java.awt.FlowLayout
 import java.awt.Font
@@ -326,7 +338,35 @@ class AikenRunConfiguration(
             override fun startProcess(): ProcessHandler {
                 val executable = resolveAikenExecutable()
                 val workDir = resolveProjectDirectory()
-                val args = buildCommandParameters()
+                val applySessionKey = if (command == AikenRunCommand.APPLY) applyAutoSessionKey(workDir) else null
+                val args =
+                    if (command == AikenRunCommand.APPLY) {
+                        val inspectionFile =
+                            applySessionKey?.let { resolveTrackedApplyInspectionFile(workDir, it) }
+                                ?: resolveApplyInspectionFile(workDir)
+                                ?: resolveApplyInputFile(workDir)
+                        val targetOutput = resolveApplyOutputFile(workDir) ?: inspectionFile
+                        val defaultsQueue =
+                            inspectionFile?.let {
+                                alignedConfiguredApplyCborParameters(
+                                    executable,
+                                    workDir,
+                                    it,
+                                    this@AikenRunConfiguration.applyModule.trim().ifEmpty { null },
+                                    this@AikenRunConfiguration.applyValidator.trim().ifEmpty { null }
+                                )
+                            } ?: ArrayDeque()
+                        buildApplyCommandParametersForPaths(
+                            blueprintInput = inspectionFile?.absolutePath.orEmpty(),
+                            blueprintOutput = targetOutput?.absolutePath.orEmpty(),
+                            moduleName = this@AikenRunConfiguration.applyModule.trim().ifEmpty { null },
+                            validatorName = this@AikenRunConfiguration.applyValidator.trim().ifEmpty { null },
+                            singleCborParameter = defaultsQueue.firstOrNull(),
+                            includeExtraArgs = true
+                        )
+                    } else {
+                        buildCommandParameters()
+                    }
                 val invocation = buildInvocation(executable, args, workDir)
 
                 // `aiken check` and `aiken build` emit rich human-readable output in TTY mode.
@@ -334,10 +374,40 @@ class AikenRunConfiguration(
                     (command == AikenRunCommand.CHECK && checkOutputMode == AikenCheckOutputMode.TTY) ||
                     (command == AikenRunCommand.BUILD && buildOutputMode == AikenBuildOutputMode.TTY)
                 ) {
-                    return createPtyProcessHandler(invocation, workDir).also { startedHandler = it }
+                    return createPtyProcessHandler(invocation, workDir).also {
+                        if (command == AikenRunCommand.BUILD) {
+                            it.addProcessListener(
+                                object : ProcessListener {
+                                    override fun processTerminated(event: ProcessEvent) {
+                                        if (event.exitCode == 0) {
+                                            bumpApplyBuildRevision()
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        startedHandler = it
+                    }
                 }
                 if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.TTY) {
-                    return createPtyTerminalProcessHandler(invocation, workDir).also { startedHandler = it }
+                    return createPtyTerminalProcessHandler(invocation, workDir).also {
+                        val targetOutput =
+                            resolveApplyOutputFile(workDir)
+                                ?: applySessionKey?.let { resolveTrackedApplyInspectionFile(workDir, it) }
+                                ?: resolveApplyInspectionFile(workDir)
+                        if (applySessionKey != null && targetOutput != null) {
+                            it.addProcessListener(
+                                object : ProcessListener {
+                                    override fun processTerminated(event: ProcessEvent) {
+                                        if (event.exitCode == 0) {
+                                            rememberTrackedApplyBlueprint(applySessionKey, targetOutput)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        startedHandler = it
+                    }
                 }
                 val commandLine = GeneralCommandLine()
                     .withCharset(StandardCharsets.UTF_8)
@@ -403,6 +473,26 @@ class AikenRunConfiguration(
             includeExtraArgs: Boolean = true
         ): List<String> = configuration.buildApplyCommandParameters(singleCborParameter, includeExtraArgs)
 
+        private fun buildApplyCommandParametersForPaths(
+            blueprintInput: String,
+            blueprintOutput: String,
+            moduleName: String?,
+            validatorName: String?,
+            singleCborParameter: String?,
+            includeExtraArgs: Boolean = true
+        ): List<String> =
+            configuration.buildApplyCommandParametersForPaths(
+                blueprintInput,
+                blueprintOutput,
+                moduleName,
+                validatorName,
+                singleCborParameter,
+                includeExtraArgs
+            )
+
+        private fun resolveApplyOutputFile(workDir: String?): File? =
+            configuration.resolveApplyOutputFile(workDir)
+
         private fun buildInvocation(
             executable: String,
             args: List<String>,
@@ -448,10 +538,15 @@ class AikenRunConfiguration(
             console.showStatus("Analyzing blueprint...")
             AppExecutorUtil.getAppExecutorService().execute task@{
                 try {
-                    val context = loadApplyContext()
+                    val prepared = prepareIdeApplyContext(handler)
+                    val context = prepared.context
 
                     if (context.parameters.isEmpty()) {
                         console.showStatus("Blueprint has no parameters left to apply")
+                        if (prepared.hiddenApplied.isNotEmpty()) {
+                            console.showAppliedParameters(prepared.hiddenApplied, includeHint = false)
+                        }
+                        console.showNoApplyActions()
                         handler.finish(0)
                         return@task
                     }
@@ -473,7 +568,7 @@ class AikenRunConfiguration(
                     console.setApplyAction {
                         if (!applyStarted.compareAndSet(false, true)) return@setApplyAction
                         AppExecutorUtil.getAppExecutorService().execute {
-                            runApplySequence(context, console, handler)
+                            runApplySequence(context, prepared.hiddenApplied, console, handler)
                         }
                     }
                 } catch (e: Exception) {
@@ -485,9 +580,9 @@ class AikenRunConfiguration(
             return DefaultExecutionResult(console, handler)
         }
 
-        private fun loadApplyContext(): ApplyContext {
+        private fun loadApplyContext(inspectionFileOverride: File? = null): ApplyContext {
             val workDir = resolveProjectDirectory()
-            val inspectionFile = resolveApplyInspectionFile(workDir)
+            val inspectionFile = inspectionFileOverride ?: resolveApplyInspectionFile(workDir)
             if (inspectionFile == null) {
                 throw ExecutionException("Unable to resolve blueprint file path.")
             }
@@ -577,45 +672,105 @@ class AikenRunConfiguration(
             )
         }
 
+        private fun prepareIdeApplyContext(handler: AikenAsyncProcessHandler): PreparedApplyContext {
+            val executable = resolveAikenExecutable()
+            val workDir = resolveProjectDirectory()
+            val inspectionFile = resolveApplyInspectionFile(workDir)
+                ?: throw ExecutionException("Unable to resolve blueprint file path.")
+            if (!inspectionFile.exists() || !inspectionFile.isFile) {
+                throw ExecutionException("Blueprint file does not exist: ${inspectionFile.absolutePath}")
+            }
+
+            val hiddenApplied = ArrayList<String>()
+            val defaultsQueue =
+                alignedConfiguredApplyCborParameters(
+                    executable,
+                    workDir,
+                    inspectionFile,
+                    configuration.applyModule.trim().ifEmpty { null },
+                    configuration.applyValidator.trim().ifEmpty { null }
+                )
+
+            val targetOutput = resolveApplyOutputFile(workDir) ?: inspectionFile
+            var currentInput = inspectionFile
+
+            while (defaultsQueue.isNotEmpty()) {
+                val cborHex = defaultsQueue.removeFirst()
+                val args =
+                    buildApplyCommandParametersForPaths(
+                        blueprintInput = currentInput.absolutePath,
+                        blueprintOutput = targetOutput.absolutePath,
+                        moduleName = configuration.applyModule.trim().ifEmpty { null },
+                        validatorName = configuration.applyValidator.trim().ifEmpty { null },
+                        singleCborParameter = cborHex,
+                        includeExtraArgs = true
+                    )
+                val invocation = buildInvocation(executable, args, workDir)
+                val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
+
+                if (run.exitCode != 0) {
+                    val stripped = stripAnsi(run.output)
+                    if (stripped.contains("aiken::blueprint::apply::no_parameters")) {
+                        break
+                    }
+                    throw ExecutionException(
+                        buildString {
+                            append("Failed applying configured default CBOR parameter.")
+                            if (stripped.isNotBlank()) {
+                                append("\n\n")
+                                append(stripped.trim())
+                            }
+                        }
+                    )
+                }
+
+                hiddenApplied += extractLastAppliedCborFromApplyOutput(run.output) ?: normalizeCborHex(cborHex).orEmpty()
+                currentInput = targetOutput
+            }
+
+            val context = loadApplyContext(currentInput)
+            return PreparedApplyContext(context, hiddenApplied)
+        }
+
         private fun runApplySequence(
             context: ApplyContext,
+            hiddenApplied: List<String>,
             console: AikenApplyExecutionConsole,
             handler: AikenAsyncProcessHandler
         ) {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val configuredQueue = alignedConfiguredApplyCborParameters(
-                executable,
-                workDir,
-                context.blueprintFile,
-                context.module,
-                context.validator
-            )
-            val applied = ArrayList<String>()
+            val applied = ArrayList<String>(hiddenApplied)
             var usedManualValues = false
-            var appliedCount = 0
+            var appliedCount = hiddenApplied.size
+            val targetOutput = resolveApplyOutputFile(workDir) ?: context.blueprintFile
+            var currentInput = context.blueprintFile
 
             try {
                 while (!handler.isProcessTerminated && !handler.isProcessTerminating) {
                     val section = console.peekFirstSection() ?: break
 
-                    val cborHex =
-                        if (configuredQueue.isNotEmpty()) {
-                            normalizeCborHex(configuredQueue.removeFirst())
-                        } else {
-                            usedManualValues = true
-                            val encoded = encodeDataAsHex(section.editor.encodeData(section.title))
-                            normalizeCborHex(encoded)
-                        }
+                    usedManualValues = true
+                    val encoded = encodeDataAsHex(readApplyEditorDataOnEdt(section.editor, section.title))
+                    val cborHex = normalizeCborHex(encoded)
 
                     if (cborHex == null) {
                         console.showError("Invalid CBOR value for '${section.title}'.")
-                        handler.finish(1)
+                        applyStarted.set(false)
+                        console.enableApplyRetry()
                         return
                     }
 
                     console.showStatus("Applying parameter '${section.title}'...")
-                    val args = buildApplyCommandParameters(cborHex, includeExtraArgs = true)
+                    val args =
+                        buildApplyCommandParametersForPaths(
+                            blueprintInput = currentInput.absolutePath,
+                            blueprintOutput = targetOutput.absolutePath,
+                            moduleName = configuration.applyModule.trim().ifEmpty { null },
+                            validatorName = configuration.applyValidator.trim().ifEmpty { null },
+                            singleCborParameter = cborHex,
+                            includeExtraArgs = true
+                        )
                     val invocation = buildInvocation(executable, args, workDir)
                     val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
 
@@ -637,12 +792,14 @@ class AikenRunConfiguration(
                         if (applied.isNotEmpty()) {
                             console.showAppliedParameters(applied, usedManualValues)
                         }
-                        handler.finish(run.exitCode)
+                        applyStarted.set(false)
+                        console.enableApplyRetry()
                         return
                     }
 
                     applied += extractLastAppliedCborFromApplyOutput(run.output) ?: cborHex
                     appliedCount += 1
+                    currentInput = targetOutput
                     console.removeFirstSection()
 
                     if (!configuration.applyAutoUntilNoParameters) {
@@ -653,20 +810,46 @@ class AikenRunConfiguration(
                 val remaining = console.sectionCount()
                 if (remaining == 0) {
                     console.showStatus("Blueprint has no parameters left to apply")
+                    console.showNoApplyActions()
                 } else {
                     console.showStatus("Applied $appliedCount parameter(s). $remaining remaining.")
+                    applyStarted.set(false)
+                    console.enableApplyRetry()
                 }
                 if (applied.isNotEmpty()) {
                     console.showAppliedParameters(applied, usedManualValues)
                 }
-                handler.finish(0)
+                if (remaining == 0) {
+                    handler.finish(0)
+                }
             } catch (e: Exception) {
                 console.showError("Apply failed: ${e.message.orEmpty()}")
                 if (applied.isNotEmpty()) {
                     console.showAppliedParameters(applied, usedManualValues)
                 }
-                handler.finish(1)
+                applyStarted.set(false)
+                console.enableApplyRetry()
             }
+        }
+
+        @Throws(ExecutionException::class)
+        private fun readApplyEditorDataOnEdt(editor: ApplyValueEditor, fieldPath: String): ApplyData {
+            if (ApplicationManager.getApplication().isDispatchThread) {
+                return editor.encodeData(fieldPath)
+            }
+
+            val resultRef = AtomicReference<ApplyData?>()
+            val errorRef = AtomicReference<ExecutionException?>()
+            ApplicationManager.getApplication().invokeAndWait {
+                try {
+                    resultRef.set(editor.encodeData(fieldPath))
+                } catch (e: ExecutionException) {
+                    errorRef.set(e)
+                }
+            }
+            errorRef.get()?.let { throw it }
+            return resultRef.get()
+                ?: throw ExecutionException("Unable to read parameter value for '$fieldPath'.")
         }
 
         private fun normalizeCborHex(raw: String?): String? {
@@ -914,18 +1097,15 @@ class AikenRunConfiguration(
                 is ApplySchema.Map -> "Map<${schemaDisplayType(schema.key)}, ${schemaDisplayType(schema.value)}>"
                 is ApplySchema.AnyOf -> {
                     val explicit = schema.typeName?.trim().orEmpty()
+                    val option = detectOptionConstructors(schema.constructors)
                     when {
+                        option != null -> {
+                            val inner = option.some.fields.firstOrNull()?.schema?.let { schemaDisplayType(it) } ?: "Data"
+                            "Option<$inner>"
+                        }
                         explicit.isNotEmpty() -> normalizeTypeLabel(explicit)
                         looksLikeBoolConstructors(schema.constructors) -> "Bool"
-                        else -> {
-                            val option = detectOptionConstructors(schema.constructors)
-                            if (option != null) {
-                                val inner = option.some.fields.firstOrNull()?.schema?.let { schemaDisplayType(it) } ?: "Data"
-                                "Option<$inner>"
-                            } else {
-                                "DataType"
-                            }
-                        }
+                        else -> "DataType"
                     }
                 }
             }
@@ -967,7 +1147,17 @@ class AikenRunConfiguration(
         }
 
         private inner class AikenApplyExecutionConsole : ExecutionConsole {
-            private val rootPanel = JPanel(BorderLayout())
+            private val rootPanel =
+                ScrollPaneFactory.createScrollPane(JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    isOpaque = false
+                }, true).apply {
+                    border = JBUI.Borders.empty()
+                    viewport.isOpaque = false
+                    isOpaque = false
+                }
+            private val contentPanel: JPanel
+                get() = rootPanel.viewport.view as JPanel
             private val statusArea =
                 JBTextArea("Preparing Apply form...").apply {
                     isEditable = false
@@ -984,9 +1174,20 @@ class AikenRunConfiguration(
                     border = JBUI.Borders.emptyTop(8)
                     isOpaque = false
                 }
+            private val errorArea =
+                JBTextArea().apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    border = JBUI.Borders.emptyTop(8)
+                    isOpaque = false
+                    foreground = UIUtil.getErrorForeground()
+                    isVisible = false
+                }
             private val sectionsPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 border = JBUI.Borders.empty(4, 8, 4, 8)
+                isOpaque = false
             }
             private val applyButton = JButton("Apply")
             private val disposed = AtomicBoolean(false)
@@ -997,31 +1198,39 @@ class AikenRunConfiguration(
                 val top = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     border = JBUI.Borders.empty(8)
+                    isOpaque = false
+                    alignmentX = Component.LEFT_ALIGNMENT
                     add(statusArea)
+                    add(errorArea)
                     add(messagesArea)
                 }
-
-                val scroll = ScrollPaneFactory.createScrollPane(sectionsPanel, true).apply {
-                    border = JBUI.Borders.empty()
-                }
+                top.maximumSize = Dimension(Int.MAX_VALUE, top.preferredSize.height)
 
                 applyButton.isEnabled = false
+                applyButton.isVisible = false
+                styleApplyButton(applyButton, compact = false)
                 applyButton.addActionListener {
                     onApply?.invoke()
                 }
                 val controls = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                     border = JBUI.Borders.empty(8)
-                    add(applyButton)
+                    isOpaque = false
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    add(wrapRoundedButton(applyButton))
                 }
+                controls.maximumSize = Dimension(Int.MAX_VALUE, controls.preferredSize.height)
 
-                rootPanel.add(top, BorderLayout.NORTH)
-                rootPanel.add(scroll, BorderLayout.CENTER)
-                rootPanel.add(controls, BorderLayout.SOUTH)
+                sectionsPanel.alignmentX = Component.LEFT_ALIGNMENT
+
+                contentPanel.add(top)
+                contentPanel.add(sectionsPanel)
+                contentPanel.add(controls)
+                contentPanel.add(Box.createVerticalGlue())
             }
 
             override fun getComponent(): JComponent = rootPanel
 
-            override fun getPreferredFocusableComponent(): JComponent = rootPanel
+            override fun getPreferredFocusableComponent(): JComponent = contentPanel
 
             override fun dispose() {
                 disposed.set(true)
@@ -1030,13 +1239,14 @@ class AikenRunConfiguration(
             fun showStatus(text: String) {
                 updateUi {
                     statusArea.text = text
+                    clearError()
                 }
             }
 
             fun showError(text: String) {
                 updateUi {
-                    appendMessage(text)
-                    applyButton.isEnabled = false
+                    errorArea.text = text.trimEnd()
+                    errorArea.isVisible = errorArea.text.isNotBlank()
                 }
             }
 
@@ -1058,6 +1268,7 @@ class AikenRunConfiguration(
             ) {
                 updateUi {
                     statusArea.text = "Ready to apply parameters for $module.$validator"
+                    clearError()
                     appendMessage("Blueprint: $blueprintPath")
                     sectionsPanel.removeAll()
                     synchronized(this.sections) {
@@ -1070,7 +1281,10 @@ class AikenRunConfiguration(
                             sectionsPanel.add(Box.createVerticalStrut(JBUI.scale(6)))
                         }
                     }
-                    applyButton.isEnabled = synchronized(this.sections) { this.sections.isNotEmpty() }
+                    sectionsPanel.maximumSize = Dimension(Int.MAX_VALUE, sectionsPanel.preferredSize.height)
+                    refreshApplyEditorStripes(sectionsPanel)
+                    val hasSections = synchronized(this.sections) { this.sections.isNotEmpty() }
+                    updateApplyButtonState(hasSections, hasSections)
                     sectionsPanel.revalidate()
                     sectionsPanel.repaint()
                 }
@@ -1079,7 +1293,8 @@ class AikenRunConfiguration(
             fun setApplyAction(action: () -> Unit) {
                 updateUi {
                     onApply = action
-                    applyButton.isEnabled = sections.isNotEmpty()
+                    val hasSections = sections.isNotEmpty()
+                    updateApplyButtonState(hasSections, hasSections)
                 }
             }
 
@@ -1103,9 +1318,24 @@ class AikenRunConfiguration(
                     if (sectionsPanel.componentCount > 0 && sectionsPanel.getComponent(0) is Box.Filler) {
                         sectionsPanel.remove(0)
                     }
-                    applyButton.isEnabled = synchronized(sections) { sections.isNotEmpty() }
+                    refreshApplyEditorStripes(sectionsPanel)
+                    val hasSections = synchronized(sections) { sections.isNotEmpty() }
+                    updateApplyButtonState(hasSections, hasSections)
                     sectionsPanel.revalidate()
                     sectionsPanel.repaint()
+                }
+            }
+
+            fun showNoApplyActions() {
+                updateUi {
+                    updateApplyButtonState(visible = false, enabled = false)
+                }
+            }
+
+            fun enableApplyRetry() {
+                updateUi {
+                    val hasSections = synchronized(sections) { sections.isNotEmpty() }
+                    updateApplyButtonState(visible = hasSections, enabled = hasSections)
                 }
             }
 
@@ -1116,12 +1346,22 @@ class AikenRunConfiguration(
                 messagesArea.append(text.trimEnd())
             }
 
+            private fun clearError() {
+                errorArea.text = ""
+                errorArea.isVisible = false
+            }
+
             private fun updateUi(block: () -> Unit) {
                 if (disposed.get()) return
                 ApplicationManager.getApplication().invokeLater {
                     if (disposed.get()) return@invokeLater
                     block()
                 }
+            }
+
+            private fun updateApplyButtonState(visible: Boolean, enabled: Boolean) {
+                applyButton.isVisible = visible
+                applyButton.isEnabled = visible && enabled
             }
         }
 
@@ -1130,18 +1370,30 @@ class AikenRunConfiguration(
 
             @Throws(ExecutionException::class)
             fun encodeData(fieldPath: String): ApplyData
+
+            fun tryPopulate(data: ApplyData): Boolean
+
+            fun rename(newName: String) {}
         }
 
         private inner class ApplyIntegerEditor(
             name: String,
             depth: Int
-        ) : BaseApplyEditor(name, "Int", depth) {
+        ) : BaseApplyEditor(name, "Int", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "e.g. 42"
-                addContent(field)
+                addContent(
+                    wrapValidatedApplyInputField(field) { raw ->
+                        when {
+                            raw.isBlank() -> null
+                            raw.toBigIntegerOrNull() != null -> null
+                            else -> "Expected integer"
+                        }
+                    }
+                )
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1151,23 +1403,43 @@ class AikenRunConfiguration(
                     ?: throw ExecutionException("$fieldPath must be an integer.")
                 return ApplyData.Integer(value)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val value = (data as? ApplyData.Integer) ?: return false
+                field.text = value.value.toString()
+                return true
+            }
         }
 
         private inner class ApplyBytesEditor(
             name: String,
             depth: Int
-        ) : BaseApplyEditor(name, "ByteArray", depth) {
+        ) : BaseApplyEditor(name, "ByteArray", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "hex bytes (without 0x)"
-                addContent(field)
+                addContent(
+                    wrapValidatedApplyInputField(field) { raw ->
+                        when {
+                            raw.isBlank() -> null
+                            normalizeCborHex(raw) != null -> null
+                            else -> "Expected even-length hex"
+                        }
+                    }
+                )
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
                 val bytes = parseHexBytes(field.text.trim(), fieldPath)
                 return ApplyData.Bytes(bytes)
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val value = (data as? ApplyData.Bytes) ?: return false
+                field.text = value.value.toHex()
+                return true
             }
         }
 
@@ -1175,13 +1447,22 @@ class AikenRunConfiguration(
             name: String,
             depth: Int,
             reason: String
-        ) : BaseApplyEditor(name, "Data", depth) {
+        ) : BaseApplyEditor(name, "Data", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "raw CBOR hex"
-                addContent(field)
+                addContent(
+                    wrapValidatedApplyInputField(field) { raw ->
+                        when {
+                            raw.isBlank() -> null
+                            normalizeCborHex(raw) == null -> "Expected valid CBOR hex"
+                            decodeApplyDataFromHex(raw) == null -> "Expected decodable CBOR"
+                            else -> null
+                        }
+                    }
+                )
                 addContent(
                     JBLabel("Data structure is not known in blueprint ($reason). Enter full CBOR hex.")
                         .apply { border = JBUI.Borders.emptyTop(2) }
@@ -1193,18 +1474,28 @@ class AikenRunConfiguration(
                     ?: throw ExecutionException("$fieldPath must be valid CBOR hex.")
                 return ApplyData.RawCbor(parseHexBytes(normalized, fieldPath))
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                field.text =
+                    when (data) {
+                        is ApplyData.RawCbor -> data.bytes.toHex()
+                        else -> encodeDataAsHex(data)
+                    }
+                return true
+            }
         }
 
         private inner class ApplyBoolEditor(
             name: String,
             depth: Int,
             constructors: List<ApplyConstructor>
-        ) : BaseApplyEditor(name, "Bool", depth) {
+        ) : BaseApplyEditor(name, "Bool", depth, stripeAsBlock = false) {
             private val falseCtor = constructors.first { it.title.equals("False", ignoreCase = true) }
             private val trueCtor = constructors.first { it.title.equals("True", ignoreCase = true) }
             private val field = JBCheckBox()
 
             init {
+                field.isOpaque = false
                 updateLabel()
                 field.addActionListener { updateLabel() }
                 addCompact(field)
@@ -1217,6 +1508,18 @@ class AikenRunConfiguration(
 
             private fun updateLabel() {
                 field.text = if (field.isSelected) "True" else "False"
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                field.isSelected =
+                    when (constr.index) {
+                        trueCtor.index -> true
+                        falseCtor.index -> false
+                        else -> return false
+                    }
+                updateLabel()
+                return true
             }
         }
 
@@ -1232,6 +1535,7 @@ class AikenRunConfiguration(
             private val someEditor = editorFactory(someField.title ?: "Some", someField.schema, depth + 1)
 
             init {
+                noneCheck.isOpaque = false
                 headerActionsPanel.add(noneCheck)
                 noneCheck.isSelected = true
                 noneCheck.addActionListener {
@@ -1239,6 +1543,7 @@ class AikenRunConfiguration(
                 }
                 addContent(someEditor.component)
                 updateSomeVisibility()
+                refreshChildNames()
             }
 
             private fun updateSomeVisibility() {
@@ -1247,6 +1552,8 @@ class AikenRunConfiguration(
                 someEditor.component.isEnabled = showSome
                 component.revalidate()
                 component.repaint()
+                component.rootPane?.revalidate()
+                component.rootPane?.repaint()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1256,6 +1563,33 @@ class AikenRunConfiguration(
                     val someData = someEditor.encodeData("$fieldPath.Some")
                     ApplyData.Constr(optionConstructors.some.index, listOf(someData))
                 }
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                return when (constr.index) {
+                    optionConstructors.none.index -> {
+                        noneCheck.isSelected = true
+                        updateSomeVisibility()
+                        true
+                    }
+                    optionConstructors.some.index -> {
+                        if (constr.fields.size != 1) return false
+                        noneCheck.isSelected = false
+                        updateSomeVisibility()
+                        someEditor.tryPopulate(constr.fields.first())
+                    }
+                    else -> false
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                someEditor.rename(breadcrumbName(currentEditorName(), "Some"))
             }
         }
 
@@ -1275,6 +1609,7 @@ class AikenRunConfiguration(
                 for ((_, editor) in fields) {
                     addContent(editor.component)
                 }
+                refreshChildNames()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1284,6 +1619,23 @@ class AikenRunConfiguration(
                 }
                 return ApplyData.Constr(constructor.index, encodedFields)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                if (constr.index != constructor.index || constr.fields.size != fields.size) return false
+                return fields.indices.all { index -> fields[index].second.tryPopulate(constr.fields[index]) }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                for ((childName, editor) in fields) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
+                }
+            }
         }
 
         private inner class ApplyAnyOfEditor(
@@ -1291,20 +1643,23 @@ class AikenRunConfiguration(
             depth: Int,
             typeLabel: String,
             private val constructors: List<ApplyConstructor>,
-            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+            private val editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
             private val constructorCombo = JComboBox(constructors.map { it.title }.toTypedArray())
-            private val fieldsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val fieldsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             private val editorsByConstructor = LinkedHashMap<Int, List<Pair<String, ApplyValueEditor>>>()
 
             init {
                 makeComboCompact(constructorCombo)
-                addCompact(constructorCombo)
+                addCompact(wrapApplyComboBox(constructorCombo))
                 addContent(fieldsPanel)
                 constructorCombo.addActionListener {
                     refreshFields(editorsByConstructor, constructors, editorFactory, depth)
                 }
-                refreshFields(editorsByConstructor, constructors, editorFactory, depth)
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1316,6 +1671,17 @@ class AikenRunConfiguration(
                     fields += editor.encodeData("$fieldPath.$childName")
                 }
                 return ApplyData.Constr(ctor.index, fields)
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                val targetIndex = constructors.indexOfFirst { it.index == constr.index }
+                if (targetIndex == -1) return false
+                constructorCombo.selectedIndex = targetIndex
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
+                val editors = editorsByConstructor[targetIndex].orEmpty()
+                if (editors.size != constr.fields.size) return false
+                return editors.indices.all { index -> editors[index].second.tryPopulate(constr.fields[index]) }
             }
 
             private fun refreshFields(
@@ -1336,12 +1702,18 @@ class AikenRunConfiguration(
                     }
 
                 fieldsPanel.removeAll()
-                for ((_, editor) in editors) {
+                for ((childName, editor) in editors) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
                     fieldsPanel.add(editor.component)
                 }
-                fieldsPanel.maximumSize = fieldsPanel.preferredSize
+                refreshApplyEditorStripes(fieldsPanel)
                 fieldsPanel.revalidate()
                 fieldsPanel.repaint()
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
             }
         }
 
@@ -1361,6 +1733,7 @@ class AikenRunConfiguration(
                 for ((_, editor) in fields) {
                     addContent(editor.component)
                 }
+                refreshChildNames()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1370,6 +1743,23 @@ class AikenRunConfiguration(
                 }
                 return ApplyData.List(values)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val list = data as? ApplyData.List ?: return false
+                if (list.items.size != fields.size) return false
+                return fields.indices.all { index -> fields[index].second.tryPopulate(list.items[index]) }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                for ((childName, editor) in fields) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
+                }
+            }
         }
 
         private inner class ApplyListEditor(
@@ -1377,64 +1767,316 @@ class AikenRunConfiguration(
             typeLabel: String,
             depth: Int,
             private val itemSchema: ApplySchema,
-            editorFactory: (String, Int) -> ApplyValueEditor
+            private val editorFactory: (String, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
-            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-            private val addButton = JButton("Add item")
-            private val rows = ArrayList<ApplyValueEditor>()
+            private val rowsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
+            private val addButton = JButton("+")
 
             init {
+                makeHeaderActionButtonCompact(addButton)
                 addButton.addActionListener {
-                    addRow(editorFactory("item${rows.size + 1}", depth + 1))
+                    addRow(editorFactory("[${rowCount()}]", depth + 1))
                 }
                 rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
                 addContent(rowsPanel)
-                addCompact(addButton)
+                headerActionsPanel.add(wrapRoundedButton(addButton))
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
-                val values = ArrayList<ApplyData>(rows.size)
-                for ((index, editor) in rows.withIndex()) {
-                    values += editor.encodeData("$fieldPath[${index + 1}]")
+                val editors = currentEditors()
+                val values = ArrayList<ApplyData>(editors.size)
+                for ((index, editor) in editors.withIndex()) {
+                    values += editor.encodeData("$fieldPath[${index}]")
                 }
                 return ApplyData.List(values)
             }
 
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val list = data as? ApplyData.List ?: return false
+                clearRows()
+                for ((index, item) in list.items.withIndex()) {
+                    val editor = editorFactory("[${index}]", editorDepth + 1)
+                    if (!editor.tryPopulate(item)) {
+                        clearRows()
+                        return false
+                    }
+                    addRow(editor)
+                }
+                return true
+            }
+
             private fun addRow(editor: ApplyValueEditor) {
-                rows += editor
-                val rowPanel = JPanel(BorderLayout(8, 0)).apply {
-                    border = JBUI.Borders.emptyTop(4)
+                lateinit var entryPanel: JPanel
+                val rowPanel = JPanel(BorderLayout(0, 0)).apply {
+                    border = JBUI.Borders.empty()
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                     add(editor.component, BorderLayout.CENTER)
                 }
                 val removeButton = JButton(AikenIcons.DELETE).apply {
-                    isFocusable = false
+                    styleApplyButton(this, compact = true)
                     addActionListener {
-                        rows.remove(editor)
-                        rowsPanel.remove(rowPanel)
+                        rowsPanel.remove(entryPanel)
+                        renumberRows()
                         rowsPanel.revalidate()
                         rowsPanel.repaint()
                     }
                 }
-                rowPanel.add(removeButton, BorderLayout.EAST)
-                rowPanel.maximumSize = rowPanel.preferredSize
-                rowsPanel.add(rowPanel)
-                rowsPanel.maximumSize = rowsPanel.preferredSize
+                rowPanel.add(wrapRoundedButton(removeButton), BorderLayout.EAST)
+                val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                val separator = JPanel().apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.empty(4, 0, 0, 0)
+                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    preferredSize = Dimension(1, JBUI.scale(1))
+                    maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
+                }
+                entryPanel = createStripePaintPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.insets(0))
+                    putClientProperty(APPLY_STRIPE_ARC_KEY, JBUI.scale(12))
+                    putClientProperty(APPLY_LIST_EDITOR_KEY, editor)
+                    add(rowPanel)
+                    add(separator)
+                }
+                rowsPanel.add(entryPanel)
+                renumberRows()
+                refreshCollectionEntryStripes(rowsPanel)
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
+
+            private fun clearRows() {
+                rowsPanel.removeAll()
+                refreshCollectionEntryStripes(rowsPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+
+            private fun renumberRows() {
+                currentEditors().forEachIndexed { index, editor ->
+                    editor.rename(breadcrumbName(currentEditorName(), "[${index}]"))
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                renumberRows()
+            }
+
+            private fun rowCount(): Int = currentEditors().size
+
+            private fun currentEditors(): List<ApplyValueEditor> =
+                rowsPanel.components.mapNotNull { component ->
+                    (component as? JComponent)?.getClientProperty(APPLY_LIST_EDITOR_KEY) as? ApplyValueEditor
+                }
         }
 
         private fun <T> makeComboCompact(combo: JComboBox<T>) {
             combo.maximumSize = combo.preferredSize
             combo.alignmentX = Component.LEFT_ALIGNMENT
+            combo.isOpaque = false
+            combo.background = Color(0, 0, 0, 0)
+            combo.border = JBUI.Borders.empty()
         }
+
+        private fun makeHeaderActionButtonCompact(button: JButton) {
+            styleApplyButton(button, compact = true)
+            button.font = button.font.deriveFont((button.font.size2D * 1.35f).coerceAtLeast(14f))
+            button.margin = JBUI.insets(0)
+            button.preferredSize = JBUI.size(26, 24)
+            button.maximumSize = button.preferredSize
+            button.alignmentY = Component.CENTER_ALIGNMENT
+        }
+
+        private fun styleApplyButton(button: JButton, compact: Boolean, filled: Boolean = false) {
+            button.isFocusable = false
+            button.isOpaque = filled
+            button.isContentAreaFilled = filled
+            button.background = if (filled) applyButtonBackgroundColor() else Color(0, 0, 0, 0)
+            button.foreground = applyButtonForegroundColor()
+            button.margin = if (compact) JBUI.insets(0, 6) else JBUI.insets(3, 8)
+            button.border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
+            button.maximumSize = button.preferredSize
+        }
+
+        private fun wrapRoundedButton(button: JButton): JComponent =
+            object : JPanel(BorderLayout()) {
+                override fun paintComponent(g: Graphics) {
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.color = applyButtonBackgroundColor()
+                    g2.fillRoundRect(0, 0, width - JBUI.scale(1), height - JBUI.scale(1), JBUI.scale(10), JBUI.scale(10))
+                    g2.dispose()
+                    super.paintComponent(g)
+                }
+            }.apply {
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
+                button.isOpaque = false
+                button.isContentAreaFilled = false
+                button.background = Color(0, 0, 0, 0)
+                button.foreground = applyButtonForegroundColor()
+                button.border = JBUI.Borders.empty()
+                add(button, BorderLayout.CENTER)
+                maximumSize = preferredSize
+            }
 
         private fun configureCompactInputField(field: JBTextField) {
             field.columns = 32
             field.maximumSize = field.preferredSize
             field.alignmentX = Component.LEFT_ALIGNMENT
+            field.isOpaque = false
+            field.background = Color(0, 0, 0, 0)
+            field.border = JBUI.Borders.empty()
         }
+
+        private fun wrapApplyInputField(field: JBTextField): JComponent =
+            JPanel(BorderLayout()).apply {
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1, 6), colorProvider = ::applyInputBorderColor)
+                maximumSize = field.maximumSize
+                add(field, BorderLayout.CENTER)
+            }
+
+        private fun wrapValidatedApplyInputField(field: JBTextField, validator: (String) -> String?): JComponent {
+            val wrapper =
+                JPanel(BorderLayout()).apply {
+                    isOpaque = false
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    maximumSize = field.maximumSize
+                    add(field, BorderLayout.CENTER)
+                }
+            val invalidState = AtomicReference(false)
+            val validationTimer =
+                Timer(2000) {
+                    val invalid = validator(field.text) != null
+                    if (invalidState.getAndSet(invalid) != invalid) {
+                        wrapper.revalidate()
+                        wrapper.repaint()
+                    }
+                }.apply {
+                    isRepeats = false
+                }
+            wrapper.border =
+                applyControlBorder(
+                    arc = JBUI.scale(10),
+                    insets = JBUI.insets(1, 6),
+                    colorProvider = {
+                        if (invalidState.get()) applyInputErrorBorderColor() else applyInputBorderColor()
+                    }
+                )
+            val scheduleValidation = {
+                val wasInvalid = invalidState.getAndSet(false)
+                if (wasInvalid) {
+                    wrapper.revalidate()
+                    wrapper.repaint()
+                }
+                validationTimer.restart()
+            }
+            field.document.addDocumentListener(
+                object : DocumentListener {
+                    override fun insertUpdate(e: DocumentEvent?) = scheduleValidation()
+
+                    override fun removeUpdate(e: DocumentEvent?) = scheduleValidation()
+
+                    override fun changedUpdate(e: DocumentEvent?) = scheduleValidation()
+                }
+            )
+            return wrapper
+        }
+
+        private fun <T> wrapApplyComboBox(combo: JComboBox<T>): JComponent =
+            JPanel(BorderLayout()).apply {
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(0, 4), colorProvider = ::applyInputBorderColor)
+                maximumSize = combo.maximumSize
+                add(combo, BorderLayout.CENTER)
+            }
+
+        private fun applyControlBorderColor(): Color {
+            return UIManager.getColor("Button.borderColor")
+                ?: UIManager.getColor("Component.borderColor")
+                ?: run {
+                    val separator = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                    if (UIUtil.isUnderDarcula()) {
+                        Color(separator.red, separator.green, separator.blue, 188)
+                    } else {
+                        Color(separator.red, separator.green, separator.blue, 144)
+                    }
+                }
+        }
+
+        private fun applyInputBorderColor(): Color {
+            val buttonBorder = UIManager.getColor("Button.borderColor")
+            val componentBorder = UIManager.getColor("Component.borderColor")
+            val base =
+                buttonBorder
+                    ?: componentBorder
+                    ?: JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+            return if (UIUtil.isUnderDarcula()) {
+                Color(base.red, base.green, base.blue, 232)
+            } else {
+                Color(base.red, base.green, base.blue, 196)
+            }
+        }
+
+        private fun applyInputErrorBorderColor(): Color {
+            val base =
+                UIManager.getColor("ValidationTooltip.errorBorderColor")
+                    ?: UIManager.getColor("Component.error.borderColor")
+                    ?: UIUtil.getErrorForeground()
+            return if (UIUtil.isUnderDarcula()) {
+                Color(base.red, base.green, base.blue, 232)
+            } else {
+                Color(base.red, base.green, base.blue, 216)
+            }
+        }
+
+        private fun applyButtonBackgroundColor(): Color =
+            UIManager.getColor("Button.background")
+                ?: UIManager.getColor("Button.startBackground")
+                ?: UIUtil.getButtonSelectColor()
+
+        private fun applyButtonForegroundColor(): Color =
+            UIManager.getColor("Button.foreground")
+                ?: UIUtil.getLabelForeground()
+
+        private fun applyControlBorder(arc: Int, insets: Insets, colorProvider: () -> Color = ::applyControlBorderColor): AbstractBorder =
+            object : AbstractBorder() {
+                override fun getBorderInsets(c: Component?): Insets = Insets(insets.top, insets.left, insets.bottom, insets.right)
+
+                override fun getBorderInsets(c: Component?, borderInsets: Insets): Insets {
+                    borderInsets.top = insets.top
+                    borderInsets.left = insets.left
+                    borderInsets.bottom = insets.bottom
+                    borderInsets.right = insets.right
+                    return borderInsets
+                }
+
+                override fun paintBorder(c: Component?, g: Graphics, x: Int, y: Int, width: Int, height: Int) {
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.color = colorProvider()
+                    val strokeInset = JBUI.scale(1)
+                    g2.drawRoundRect(
+                        x,
+                        y,
+                        width - strokeInset,
+                        height - strokeInset,
+                        arc,
+                        arc
+                    )
+                    g2.dispose()
+                }
+            }
 
         private inner class ApplyMapEditor(
             name: String,
@@ -1444,27 +2086,31 @@ class AikenRunConfiguration(
             private val valueSchema: ApplySchema,
             editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
-            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-            private val addButton = JButton("Add pair")
-            private val rows = ArrayList<Pair<ApplyValueEditor, ApplyValueEditor>>()
+            private val rowsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
+            private val addButton = JButton("+")
             private val keyFactory = editorFactory
             private val valueFactory = editorFactory
 
             init {
+                makeHeaderActionButtonCompact(addButton)
                 addButton.addActionListener {
                     addRow(
-                        keyFactory("key${rows.size + 1}", keySchema, depth + 1),
-                        valueFactory("value${rows.size + 1}", valueSchema, depth + 1)
+                        keyFactory("key${rowCount() + 1}", keySchema, depth + 1),
+                        valueFactory("value${rowCount() + 1}", valueSchema, depth + 1)
                     )
                 }
                 rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
-                addCompact(addButton)
                 addContent(rowsPanel)
+                headerActionsPanel.add(wrapRoundedButton(addButton))
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
-                val pairs = ArrayList<Pair<ApplyData, ApplyData>>(rows.size)
-                for ((index, row) in rows.withIndex()) {
+                val editors = currentEditors()
+                val pairs = ArrayList<Pair<ApplyData, ApplyData>>(editors.size)
+                for ((index, row) in editors.withIndex()) {
                     val key = row.first.encodeData("$fieldPath.key${index + 1}")
                     val value = row.second.encodeData("$fieldPath.value${index + 1}")
                     pairs += key to value
@@ -1472,46 +2118,152 @@ class AikenRunConfiguration(
                 return ApplyData.Map(pairs)
             }
 
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val map = data as? ApplyData.Map ?: return false
+                clearRows()
+                for ((index, item) in map.items.withIndex()) {
+                    val keyEditor = keyFactory("key${index + 1}", keySchema, editorDepth + 1)
+                    val valueEditor = valueFactory("value${index + 1}", valueSchema, editorDepth + 1)
+                    if (!keyEditor.tryPopulate(item.first) || !valueEditor.tryPopulate(item.second)) {
+                        clearRows()
+                        return false
+                    }
+                    addRow(keyEditor, valueEditor)
+                }
+                return true
+            }
+
             private fun addRow(keyEditor: ApplyValueEditor, valueEditor: ApplyValueEditor) {
-                rows += keyEditor to valueEditor
-                val rowPanel = JPanel(BorderLayout(8, 0)).apply {
-                    border = JBUI.Borders.emptyTop(4)
+                lateinit var entryPanel: JPanel
+                val rowPanel = JPanel(BorderLayout(0, 0)).apply {
+                    border = JBUI.Borders.empty()
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                 }
                 val keyAndValue = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                     add(keyEditor.component)
                     add(valueEditor.component)
                 }
+                refreshApplyEditorStripes(keyAndValue)
                 rowPanel.add(keyAndValue, BorderLayout.CENTER)
                 val removeButton = JButton(AikenIcons.DELETE).apply {
-                    isFocusable = false
+                    styleApplyButton(this, compact = true)
                     addActionListener {
-                        rows.remove(keyEditor to valueEditor)
-                        rowsPanel.remove(rowPanel)
+                        rowsPanel.remove(entryPanel)
+                        renumberRows()
                         rowsPanel.revalidate()
                         rowsPanel.repaint()
                     }
                 }
-                rowPanel.add(removeButton, BorderLayout.EAST)
-                rowPanel.maximumSize = rowPanel.preferredSize
-                rowsPanel.add(rowPanel)
-                rowsPanel.maximumSize = rowsPanel.preferredSize
+                rowPanel.add(wrapRoundedButton(removeButton), BorderLayout.EAST)
+                val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                val separator = JPanel().apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.empty(4, 0, 0, 0)
+                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    preferredSize = Dimension(1, JBUI.scale(1))
+                    maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
+                }
+                entryPanel = createStripePaintPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.insets(0))
+                    putClientProperty(APPLY_STRIPE_ARC_KEY, JBUI.scale(12))
+                    putClientProperty(APPLY_MAP_KEY_EDITOR_KEY, keyEditor)
+                    putClientProperty(APPLY_MAP_VALUE_EDITOR_KEY, valueEditor)
+                    add(rowPanel)
+                    add(separator)
+                }
+                rowsPanel.add(entryPanel)
+                renumberRows()
+                refreshCollectionEntryStripes(rowsPanel)
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
+
+            private fun clearRows() {
+                rowsPanel.removeAll()
+                refreshCollectionEntryStripes(rowsPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+
+            private fun renumberRows() {
+                currentEditors().forEachIndexed { index, row ->
+                    row.first.rename(breadcrumbName(currentEditorName(), "key${index + 1}"))
+                    row.second.rename(breadcrumbName(currentEditorName(), "value${index + 1}"))
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                renumberRows()
+            }
+
+            private fun rowCount(): Int = currentEditors().size
+
+            private fun currentEditors(): List<Pair<ApplyValueEditor, ApplyValueEditor>> =
+                rowsPanel.components.mapNotNull { component ->
+                    val rowPanel = component as? JComponent ?: return@mapNotNull null
+                    val keyEditor = rowPanel.getClientProperty(APPLY_MAP_KEY_EDITOR_KEY) as? ApplyValueEditor ?: return@mapNotNull null
+                    val valueEditor = rowPanel.getClientProperty(APPLY_MAP_VALUE_EDITOR_KEY) as? ApplyValueEditor ?: return@mapNotNull null
+                    keyEditor to valueEditor
+                }
         }
 
         private abstract inner class BaseApplyEditor(
             name: String,
             type: String,
-            depth: Int
+            depth: Int,
+            stripeAsBlock: Boolean = true
         ) : ApplyValueEditor {
-            private val titleText = "$name ($type)"
+            protected val editorDepth = depth
+            private var editorName = name
+            private val editorType = type
             private val titleFont = JBLabel().font.deriveFont(Font.BOLD)
+            private val titleLabel =
+                JBLabel().apply {
+                    font = titleFont
+                    foreground = UIUtil.getLabelForeground()
+                    isOpaque = false
+                }
+            protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                isOpaque = false
+            }
+            private val headerPanel =
+                JPanel().apply {
+                    isOpaque = false
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    border = JBUI.Borders.empty(8, JBUI.scale(8), 0, JBUI.scale(8))
+                    add(titleLabel)
+                    add(Box.createHorizontalStrut(JBUI.scale(8)))
+                    add(headerActionsPanel)
+                    add(Box.createHorizontalGlue())
+                }
+            protected val contentPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             override val component =
                 object : JPanel(BorderLayout()) {
+                    override fun paintComponent(g: Graphics) {
+                        val g2 = g.create() as Graphics2D
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                        val arc = JBUI.scale(12)
+                        val stripe = getClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY) as? Color
+                        if (stripe != null) {
+                            g2.color = stripe
+                            g2.fillRoundRect(0, 0, width - JBUI.scale(1), height - JBUI.scale(1), arc, arc)
+                        }
+                        g2.color = applyControlBorderColor()
+                        g2.drawRoundRect(0, 0, width - JBUI.scale(1), height - JBUI.scale(1), arc, arc)
+                        g2.dispose()
+                        super.paintComponent(g)
+                    }
+
                     override fun getPreferredSize(): Dimension {
                         val size = super.getPreferredSize()
                         size.width = maxOf(size.width, titleMinSectionWidth())
@@ -1521,44 +2273,43 @@ class AikenRunConfiguration(
                         return size
                     }
 
-                    override fun getMaximumSize(): Dimension = preferredSize
+                    override fun getMaximumSize(): Dimension =
+                        if (depth == 0) preferredSize else Dimension(Int.MAX_VALUE, preferredSize.height)
                 }.apply {
-                val lineBorder = BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground())
-                val titledBorder = BorderFactory.createTitledBorder(
-                    lineBorder,
-                    titleText,
-                    TitledBorder.LEFT,
-                    TitledBorder.TOP,
-                    JBLabel().font.deriveFont(Font.BOLD)
-                )
-                border =
-                    JBUI.Borders.compound(
-                        titledBorder,
-                        JBUI.Borders.empty(6, 4 + depth * 10, 6, 6)
-                    )
+                border = JBUI.Borders.empty(0, editorLeftInset(), 6, 6)
                 alignmentX = Component.LEFT_ALIGNMENT
-            }
-
-            protected val contentPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-            protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                putClientProperty(APPLY_EDITOR_COMPONENT_KEY, true)
+                putClientProperty(APPLY_EDITOR_DEPTH_KEY, depth)
+                putClientProperty(APPLY_EDITOR_STRIPABLE_KEY, stripeAsBlock)
                 isOpaque = false
             }
 
             init {
-                val top = JPanel().apply {
-                    isOpaque = false
-                    layout = BoxLayout(this, BoxLayout.X_AXIS)
-                    add(headerActionsPanel)
-                    add(Box.createHorizontalGlue())
-                }
-                component.add(top, BorderLayout.NORTH)
-                component.add(contentPanel, BorderLayout.CENTER)
+                updateTitleLabel()
+                component.add(headerPanel, BorderLayout.NORTH)
+                component.add(
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = false
+                        border = JBUI.Borders.empty(0, JBUI.scale(8), 8, JBUI.scale(8))
+                        add(contentPanel, BorderLayout.CENTER)
+                    },
+                    BorderLayout.CENTER
+                )
             }
+
+            override fun rename(newName: String) {
+                editorName = newName
+                updateTitleLabel()
+                component.revalidate()
+                component.repaint()
+            }
+
+            protected fun currentEditorName(): String = editorName
 
             protected fun addContent(child: JComponent) {
                 child.alignmentX = Component.LEFT_ALIGNMENT
                 contentPanel.add(child)
-                contentPanel.maximumSize = contentPanel.preferredSize
+                refreshApplyEditorStripes(contentPanel)
             }
 
             protected fun addCompact(child: JComponent) {
@@ -1573,7 +2324,6 @@ class AikenRunConfiguration(
                         add(child, BorderLayout.WEST)
                     }
                 contentPanel.add(row)
-                contentPanel.maximumSize = contentPanel.preferredSize
             }
 
             private fun applyTopLevelSectionWidth(): Int {
@@ -1586,11 +2336,43 @@ class AikenRunConfiguration(
 
             private fun titleMinSectionWidth(): Int {
                 val metrics = component.getFontMetrics(titleFont)
-                val titleWidth = metrics.stringWidth(titleText)
+                val titleWidth = metrics.stringWidth(currentTitleText())
                 val titlePadding = JBUI.scale(28)
                 return titleWidth + titlePadding
             }
+
+            private fun editorLeftInset(): Int = 10
+
+            private fun currentTitleText(): String = "$editorName :: $editorType"
+
+            private fun updateTitleLabel() {
+                titleLabel.text = currentTitleText()
+            }
         }
+
+        private fun breadcrumbName(parent: String, child: String): String = "$parent.$child"
+
+        private fun createStripePaintPanel(layout: java.awt.LayoutManager? = null): JPanel =
+            object : JPanel(layout) {
+                override fun paintComponent(g: Graphics) {
+                    val stripe = getClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY) as? Color
+                    if (stripe != null) {
+                        val g2 = g.create() as Graphics2D
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                        g2.color = stripe
+                        val arc = getClientProperty(APPLY_STRIPE_ARC_KEY) as? Int
+                        if (arc != null && arc > 0) {
+                            g2.fillRoundRect(0, 0, width, height, arc, arc)
+                        } else {
+                            g2.fillRect(0, 0, width, height)
+                        }
+                        g2.dispose()
+                    }
+                    super.paintComponent(g)
+                }
+            }.apply {
+                isOpaque = false
+            }
 
         private fun encodeDataAsHex(data: ApplyData): String {
             val bytes = ByteArrayOutputStream()
@@ -1621,17 +2403,210 @@ class AikenRunConfiguration(
             return String(chars)
         }
 
+        private fun decodeApplyDataFromHex(raw: String): ApplyData? {
+            val normalized = normalizeCborHex(raw) ?: return null
+            val bytes = ByteArray(normalized.length / 2)
+            var i = 0
+            while (i < normalized.length) {
+                bytes[i / 2] = normalized.substring(i, i + 2).toInt(16).toByte()
+                i += 2
+            }
+            val decoded = decodePlutusData(bytes, 0) ?: return null
+            return if (decoded.nextOffset == bytes.size) decoded.data else null
+        }
+
+        private fun decodePlutusData(bytes: ByteArray, offset: Int): DecodedApplyData? {
+            if (offset >= bytes.size) return null
+            val initialByte = bytes[offset].toInt() and 0xff
+            val major = initialByte ushr 5
+            val additional = initialByte and 0x1f
+
+            return when (major) {
+                0 -> {
+                    val (value, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+                    DecodedApplyData(ApplyData.Integer(value), nextOffset)
+                }
+                1 -> {
+                    val (value, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+                    DecodedApplyData(ApplyData.Integer(value.negate().subtract(BigInteger.ONE)), nextOffset)
+                }
+                2 -> decodeByteString(bytes, offset, additional)
+                4 -> decodeListData(bytes, offset, additional)
+                5 -> decodeMapData(bytes, offset, additional)
+                6 -> decodeTaggedData(bytes, offset, additional)
+                else -> null
+            }
+        }
+
+        private fun decodeByteString(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            if (additional == 31) {
+                val out = ByteArrayOutputStream()
+                var cursor = offset + 1
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.Bytes(out.toByteArray()), cursor + 1)
+                    }
+                    val chunkMajor = marker ushr 5
+                    val chunkAdditional = marker and 0x1f
+                    if (chunkMajor != 2 || chunkAdditional == 31) return null
+                    val chunk = decodeByteString(bytes, cursor, chunkAdditional) ?: return null
+                    val chunkBytes = chunk.data as? ApplyData.Bytes ?: return null
+                    out.write(chunkBytes.value)
+                    cursor = chunk.nextOffset
+                }
+                return null
+            }
+
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            val intLength = length.toIntExactOrNull() ?: return null
+            if (nextOffset + intLength > bytes.size) return null
+            return DecodedApplyData(
+                ApplyData.Bytes(bytes.copyOfRange(nextOffset, nextOffset + intLength)),
+                nextOffset + intLength
+            )
+        }
+
+        private fun decodeListData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val items = ArrayList<ApplyData>()
+            var cursor = offset + 1
+            if (additional == 31) {
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.List(items), cursor + 1)
+                    }
+                    val item = decodePlutusData(bytes, cursor) ?: return null
+                    items += item.data
+                    cursor = item.nextOffset
+                }
+                return null
+            }
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            cursor = nextOffset
+            repeat(length.toIntExactOrNull() ?: return null) {
+                val item = decodePlutusData(bytes, cursor) ?: return null
+                items += item.data
+                cursor = item.nextOffset
+            }
+            return DecodedApplyData(ApplyData.List(items), cursor)
+        }
+
+        private fun decodeMapData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val items = ArrayList<Pair<ApplyData, ApplyData>>()
+            var cursor = offset + 1
+            if (additional == 31) {
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.Map(items), cursor + 1)
+                    }
+                    val key = decodePlutusData(bytes, cursor) ?: return null
+                    val value = decodePlutusData(bytes, key.nextOffset) ?: return null
+                    items += key.data to value.data
+                    cursor = value.nextOffset
+                }
+                return null
+            }
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            cursor = nextOffset
+            repeat(length.toIntExactOrNull() ?: return null) {
+                val key = decodePlutusData(bytes, cursor) ?: return null
+                val value = decodePlutusData(bytes, key.nextOffset) ?: return null
+                items += key.data to value.data
+                cursor = value.nextOffset
+            }
+            return DecodedApplyData(ApplyData.Map(items), cursor)
+        }
+
+        private fun decodeTaggedData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val (tag, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            return when {
+                tag >= BigInteger.valueOf(121L) && tag <= BigInteger.valueOf(127L) -> {
+                    val fields = decodePlutusConstrFields(bytes, nextOffset) ?: return null
+                    DecodedApplyData(
+                        ApplyData.Constr(tag.subtract(BigInteger.valueOf(121L)).toLongExactOrNull() ?: return null, fields.first),
+                        fields.second
+                    )
+                }
+                tag >= BigInteger.valueOf(1280L) && tag <= BigInteger.valueOf(1400L) -> {
+                    val fields = decodePlutusConstrFields(bytes, nextOffset) ?: return null
+                    DecodedApplyData(
+                        ApplyData.Constr(
+                            tag.subtract(BigInteger.valueOf(1280L)).add(BigInteger.valueOf(7L)).toLongExactOrNull() ?: return null,
+                            fields.first
+                        ),
+                        fields.second
+                    )
+                }
+                tag == BigInteger.valueOf(102L) -> {
+                    val payload = decodePlutusData(bytes, nextOffset) ?: return null
+                    val list = payload.data as? ApplyData.List ?: return null
+                    if (list.items.size != 2) return null
+                    val index = (list.items[0] as? ApplyData.Integer)?.value?.toLongExactOrNull() ?: return null
+                    val fields = (list.items[1] as? ApplyData.List)?.items ?: return null
+                    DecodedApplyData(ApplyData.Constr(index, fields), payload.nextOffset)
+                }
+                tag == BigInteger.valueOf(2L) || tag == BigInteger.valueOf(3L) -> {
+                    val payload = decodePlutusData(bytes, nextOffset) ?: return null
+                    val byteString = payload.data as? ApplyData.Bytes ?: return null
+                    val integer = BigInteger(1, byteString.value)
+                    val value = if (tag == BigInteger.valueOf(2L)) integer else integer.negate().subtract(BigInteger.ONE)
+                    DecodedApplyData(ApplyData.Integer(value), payload.nextOffset)
+                }
+                else -> decodePlutusData(bytes, nextOffset)
+            }
+        }
+
+        private fun decodePlutusConstrFields(bytes: ByteArray, offset: Int): Pair<List<ApplyData>, Int>? {
+            val decoded = decodePlutusData(bytes, offset) ?: return null
+            val fields = decoded.data as? ApplyData.List ?: return null
+            return fields.items to decoded.nextOffset
+        }
+
+        private fun decodeUnsignedValue(bytes: ByteArray, offset: Int, additional: Int): Pair<BigInteger, Int>? {
+            return when {
+                additional < 24 -> BigInteger.valueOf(additional.toLong()) to (offset + 1)
+                additional == 24 -> {
+                    if (offset + 1 >= bytes.size) null
+                    else BigInteger.valueOf((bytes[offset + 1].toInt() and 0xff).toLong()) to (offset + 2)
+                }
+                additional == 25 -> {
+                    if (offset + 2 >= bytes.size) null
+                    else BigInteger.valueOf(
+                        (((bytes[offset + 1].toInt() and 0xff) shl 8) or (bytes[offset + 2].toInt() and 0xff)).toLong()
+                    ) to (offset + 3)
+                }
+                additional == 26 -> {
+                    if (offset + 4 >= bytes.size) null
+                    else (
+                        BigInteger.valueOf(
+                            ((bytes[offset + 1].toLong() and 0xffL) shl 24) or
+                                ((bytes[offset + 2].toLong() and 0xffL) shl 16) or
+                                ((bytes[offset + 3].toLong() and 0xffL) shl 8) or
+                                (bytes[offset + 4].toLong() and 0xffL)
+                        )
+                    ) to (offset + 5)
+                }
+                additional == 27 -> {
+                    if (offset + 8 >= bytes.size) null
+                    else BigInteger(1, bytes.copyOfRange(offset + 1, offset + 9)) to (offset + 9)
+                }
+                else -> null
+            }
+        }
+
         private fun encodePlutusData(output: ByteArrayOutputStream, data: ApplyData) {
             when (data) {
                 is ApplyData.RawCbor -> output.write(data.bytes)
                 is ApplyData.Integer -> encodeInteger(output, data.value)
                 is ApplyData.Bytes -> {
-                    writeTypeAndLength(output, major = 2, value = data.value.size.toLong())
+                    writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(data.value.size.toLong()))
                     output.write(data.value)
                 }
                 is ApplyData.List -> {
                     if (data.items.isEmpty()) {
-                        writeTypeAndLength(output, major = 4, value = 0)
+                        writeTypeAndLength(output, major = 4, value = BigInteger.ZERO)
                     } else {
                         output.write(0x9f)
                         data.items.forEach { encodePlutusData(output, it) }
@@ -1639,7 +2614,7 @@ class AikenRunConfiguration(
                     }
                 }
                 is ApplyData.Map -> {
-                    writeTypeAndLength(output, major = 5, value = data.items.size.toLong())
+                    writeTypeAndLength(output, major = 5, value = BigInteger.valueOf(data.items.size.toLong()))
                     data.items.forEach { (key, value) ->
                         encodePlutusData(output, key)
                         encodePlutusData(output, value)
@@ -1648,14 +2623,14 @@ class AikenRunConfiguration(
                 is ApplyData.Constr -> {
                     val index = data.index
                     if (index < 7) {
-                        writeTypeAndLength(output, major = 6, value = 121 + index)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(121 + index))
                         encodeConstrFields(output, data.fields)
                     } else if (index < 128) {
-                        writeTypeAndLength(output, major = 6, value = 1280 + index - 7)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(1280 + index - 7))
                         encodeConstrFields(output, data.fields)
                     } else {
-                        writeTypeAndLength(output, major = 6, value = 102)
-                        writeTypeAndLength(output, major = 4, value = 2)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(102L))
+                        writeTypeAndLength(output, major = 4, value = BigInteger.valueOf(2L))
                         encodeInteger(output, BigInteger.valueOf(index))
                         encodeConstrFields(output, data.fields)
                     }
@@ -1665,7 +2640,7 @@ class AikenRunConfiguration(
 
         private fun encodeConstrFields(output: ByteArrayOutputStream, fields: List<ApplyData>) {
             if (fields.isEmpty()) {
-                writeTypeAndLength(output, major = 4, value = 0)
+                writeTypeAndLength(output, major = 4, value = BigInteger.ZERO)
             } else {
                 output.write(0x9f)
                 fields.forEach { encodePlutusData(output, it) }
@@ -1676,25 +2651,25 @@ class AikenRunConfiguration(
         private fun encodeInteger(output: ByteArrayOutputStream, value: BigInteger) {
             val zero = BigInteger.ZERO
             if (value >= zero) {
-                if (value.bitLength() <= 63) {
-                    writeTypeAndLength(output, major = 0, value = value.toLong())
+                if (fitsCompactUnsignedCbor(value)) {
+                    writeTypeAndLength(output, major = 0, value = value)
                     return
                 }
-                writeTypeAndLength(output, major = 6, value = 2)
+                writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(2L))
                 val bytes = unsignedBytes(value)
-                writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+                writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(bytes.size.toLong()))
                 output.write(bytes)
                 return
             }
 
             val transformed = value.negate().subtract(BigInteger.ONE)
-            if (transformed.bitLength() <= 63) {
-                writeTypeAndLength(output, major = 1, value = transformed.toLong())
+            if (fitsCompactUnsignedCbor(transformed)) {
+                writeTypeAndLength(output, major = 1, value = transformed)
                 return
             }
-            writeTypeAndLength(output, major = 6, value = 3)
+            writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(3L))
             val bytes = unsignedBytes(transformed)
-            writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+            writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(bytes.size.toLong()))
             output.write(bytes)
         }
 
@@ -1707,33 +2682,106 @@ class AikenRunConfiguration(
             }
         }
 
-        private fun writeTypeAndLength(output: ByteArrayOutputStream, major: Int, value: Long) {
+        private fun writeTypeAndLength(output: ByteArrayOutputStream, major: Int, value: BigInteger) {
             when {
-                value < 24 -> output.write((major shl 5) or value.toInt())
-                value <= 0xff -> {
+                value < BigInteger.valueOf(24L) -> output.write((major shl 5) or value.toInt())
+                value <= BigInteger.valueOf(0xffL) -> {
                     output.write((major shl 5) or 24)
                     output.write(value.toInt())
                 }
-                value <= 0xffff -> {
+                value <= BigInteger.valueOf(0xffffL) -> {
                     output.write((major shl 5) or 25)
-                    output.write((value ushr 8).toInt() and 0xff)
-                    output.write(value.toInt() and 0xff)
+                    val longValue = value.toLong()
+                    output.write((longValue ushr 8).toInt() and 0xff)
+                    output.write(longValue.toInt() and 0xff)
                 }
-                value <= 0xffff_ffffL -> {
+                value <= BigInteger("4294967295") -> {
                     output.write((major shl 5) or 26)
-                    output.write((value ushr 24).toInt() and 0xff)
-                    output.write((value ushr 16).toInt() and 0xff)
-                    output.write((value ushr 8).toInt() and 0xff)
-                    output.write(value.toInt() and 0xff)
+                    val longValue = value.toLong()
+                    output.write((longValue ushr 24).toInt() and 0xff)
+                    output.write((longValue ushr 16).toInt() and 0xff)
+                    output.write((longValue ushr 8).toInt() and 0xff)
+                    output.write(longValue.toInt() and 0xff)
+                }
+                value <= CBOR_UNSIGNED_MAX -> {
+                    output.write((major shl 5) or 27)
+                    val encoded = unsignedBytes(value)
+                    repeat(8 - encoded.size) { output.write(0) }
+                    output.write(encoded)
                 }
                 else -> {
-                    output.write((major shl 5) or 27)
-                    for (shift in 56 downTo 0 step 8) {
-                        output.write((value ushr shift).toInt() and 0xff)
-                    }
+                    throw IllegalArgumentException("CBOR compact value out of range: $value")
                 }
             }
         }
+
+        private fun fitsCompactUnsignedCbor(value: BigInteger): Boolean =
+            value.signum() >= 0 && value <= CBOR_UNSIGNED_MAX
+
+        private fun refreshCollectionEntryStripes(rowsPanel: JPanel) {
+            rowsPanel.components.forEachIndexed { index, component ->
+                val panel = component as? JPanel ?: return@forEachIndexed
+                panel.isOpaque = false
+                panel.putClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY, collectionStripeBackground(index))
+                panel.components.forEach { child ->
+                    if (child is JComponent && child !is JButton) {
+                        child.isOpaque = false
+                    }
+                }
+                panel.repaint()
+            }
+        }
+
+        private fun refreshApplyEditorStripes(container: JPanel) {
+            var stripeIndex = 0
+            container.components.forEach { component ->
+                val child = component as? JComponent ?: return@forEach
+                if (child.getClientProperty(APPLY_EDITOR_COMPONENT_KEY) != true) return@forEach
+                val depth = (child.getClientProperty(APPLY_EDITOR_DEPTH_KEY) as? Int) ?: 0
+                child.putClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY, applyEditorStripeBackground(stripeIndex, depth))
+                child.repaint()
+                stripeIndex += 1
+            }
+        }
+
+        private fun applyEditorStripeBackground(index: Int, depth: Int): Color {
+            val base = UIUtil.getPanelBackground()
+            val dark = UIUtil.isUnderDarcula()
+            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
+            val fraction =
+                if (dark) {
+                    (if (index % 2 == 0) 0.035 else 0.065) + depth * 0.01
+                } else {
+                    (if (index % 2 == 0) 0.012 else 0.022) + depth * 0.004
+                }.coerceAtMost(if (dark) 0.12 else 0.045)
+            return ColorUtil.mix(base, mixTarget, fraction.toDouble())
+        }
+
+        private fun collectionStripeBackground(index: Int): Color {
+            val base = UIUtil.getPanelBackground()
+            val dark = UIUtil.isUnderDarcula()
+            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
+            val fraction = if (dark) {
+                if (index % 2 == 0) 0.028 else 0.05
+            } else {
+                if (index % 2 == 0) 0.008 else 0.016
+            }
+            return ColorUtil.mix(base, mixTarget, fraction)
+        }
+
+        private fun BigInteger.toIntExactOrNull(): Int? =
+            try {
+                intValueExact()
+            } catch (_: ArithmeticException) {
+                null
+            }
+
+        private fun BigInteger.toLongExactOrNull(): Long? =
+            try {
+                longValueExact()
+            } catch (_: ArithmeticException) {
+                null
+            }
 
         private data class ApplyContext(
             val blueprintFile: File,
@@ -1741,6 +2789,16 @@ class AikenRunConfiguration(
             val validator: String,
             val selectedValidator: String,
             val parameters: List<ApplyResolvedParameter>
+        )
+
+        private data class PreparedApplyContext(
+            val context: ApplyContext,
+            val hiddenApplied: List<String>
+        )
+
+        private data class DecodedApplyData(
+            val data: ApplyData,
+            val nextOffset: Int
         )
 
         private data class ApplyResolvedParameter(
@@ -1795,14 +2853,20 @@ class AikenRunConfiguration(
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val inspectionFile = resolveApplyInspectionFile(workDir)
-            val sessionKey = applyAutoSessionKey(inspectionFile, workDir)
-            val pendingBeforeStart = inspectionFile?.let { countPendingApplyParameters(it) }
+            val sessionKey = applyAutoSessionKey(workDir)
+            val inspectionFile = resolveTrackedApplyInspectionFile(workDir, sessionKey)
+            val currentBlueprintPath =
+                APPLY_AUTO_CURRENT_BLUEPRINT.computeIfAbsent(sessionKey) {
+                    val seed = inspectionFile ?: resolveApplyInputFile(workDir) ?: resolveApplyOutputFile(workDir)
+                    seed?.let(::safeCanonicalPath).orEmpty()
+                }
+            val currentBlueprintFile = currentBlueprintPath.takeIf { it.isNotBlank() }?.let(::File)
+            val pendingBeforeStart = currentBlueprintFile?.let { countPendingApplyParameters(it) }
             val accumulatedParameters =
                 APPLY_AUTO_CBOR_ACCUMULATOR.computeIfAbsent(sessionKey) { mutableListOf() }
             val cborQueue =
                 APPLY_AUTO_CBOR_QUEUE.computeIfAbsent(sessionKey) {
-                    inspectionFile?.let {
+                    currentBlueprintFile?.let {
                         alignedConfiguredApplyCborParameters(
                             executable,
                             workDir,
@@ -1831,6 +2895,7 @@ class AikenRunConfiguration(
                 APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
                 APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
                 APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                APPLY_AUTO_CURRENT_BLUEPRINT.remove(sessionKey)
                 return createCompletedApplyResult(completion)
             }
 
@@ -1838,7 +2903,16 @@ class AikenRunConfiguration(
                 synchronized(cborQueue) {
                     if (cborQueue.isEmpty()) null else cborQueue.removeFirst()
                 }
-            val args = buildApplyCommandParameters(cborForRun)
+            val targetOutput = resolveApplyOutputFile(workDir) ?: currentBlueprintFile
+            val args =
+                buildApplyCommandParametersForPaths(
+                    blueprintInput = currentBlueprintFile?.absolutePath.orEmpty(),
+                    blueprintOutput = targetOutput?.absolutePath.orEmpty(),
+                    moduleName = applyModule.trim().ifEmpty { null },
+                    validatorName = applyValidator.trim().ifEmpty { null },
+                    singleCborParameter = cborForRun,
+                    includeExtraArgs = true
+                )
             val invocation = buildInvocation(executable, args, workDir)
             val handler = createPtyTerminalProcessHandler(invocation, workDir)
             val runOutput = StringBuilder()
@@ -1877,9 +2951,14 @@ class AikenRunConfiguration(
                             APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
                             APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
                             APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                            APPLY_AUTO_CURRENT_BLUEPRINT.remove(sessionKey)
                             return
                         }
-                        val pendingAfter = inspectionFile?.let { countPendingApplyParameters(it) }
+                        targetOutput?.let {
+                            APPLY_AUTO_CURRENT_BLUEPRINT[sessionKey] = safeCanonicalPath(it)
+                            rememberApplySessionRevision(sessionKey)
+                        }
+                        val pendingAfter = targetOutput?.let { countPendingApplyParameters(it) }
                         if (pendingAfter == 0) {
                             val completion = buildString {
                                 append(ANSI_CLEAR_SCREEN_AND_HOME)
@@ -1900,6 +2979,7 @@ class AikenRunConfiguration(
                             APPLY_AUTO_CBOR_ACCUMULATOR.remove(sessionKey)
                             APPLY_AUTO_CBOR_QUEUE.remove(sessionKey)
                             APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES.remove(sessionKey)
+                            APPLY_AUTO_CURRENT_BLUEPRINT.remove(sessionKey)
                             return
                         }
                         ApplicationManager.getApplication().invokeLater {
@@ -2286,6 +3366,7 @@ class AikenRunConfiguration(
 
                 val buildSucceeded = run.exitCode == 0 && diagnostics.errors.isEmpty()
                 if (buildSucceeded) {
+                    bumpApplyBuildRevision()
                     buildProgress.message(
                         "build succeeded",
                         "Aiken build finished successfully.",
@@ -3787,12 +4868,29 @@ class AikenRunConfiguration(
     private fun buildApplyCommandParameters(
         singleCborParameter: String?,
         includeExtraArgs: Boolean = true
+    ): List<String> =
+        buildApplyCommandParametersForPaths(
+            blueprintInput = absolutizeApplyPath(applyInput),
+            blueprintOutput = absolutizeApplyPath(applyOut),
+            moduleName = applyModule.trim().ifEmpty { null },
+            validatorName = applyValidator.trim().ifEmpty { null },
+            singleCborParameter = singleCborParameter,
+            includeExtraArgs = includeExtraArgs
+        )
+
+    private fun buildApplyCommandParametersForPaths(
+        blueprintInput: String,
+        blueprintOutput: String,
+        moduleName: String?,
+        validatorName: String?,
+        singleCborParameter: String?,
+        includeExtraArgs: Boolean = true
     ): List<String> {
         val parameters = ArrayList<String>()
-        appendValueOption(parameters, "--in", absolutizeApplyPath(applyInput))
-        appendValueOption(parameters, "--out", absolutizeApplyPath(applyOut))
-        appendValueOption(parameters, "--module", applyModule)
-        appendValueOption(parameters, "--validator", applyValidator)
+        appendValueOption(parameters, "--in", blueprintInput)
+        appendValueOption(parameters, "--out", blueprintOutput)
+        appendValueOption(parameters, "--module", moduleName.orEmpty())
+        appendValueOption(parameters, "--validator", validatorName.orEmpty())
         singleCborParameter?.trim()?.takeIf { it.isNotEmpty() }?.let { parameters += it }
 
         if (includeExtraArgs) {
@@ -3810,15 +4908,15 @@ class AikenRunConfiguration(
         singleCborParameter: String,
         moduleName: String?,
         validatorName: String?
-    ): List<String> {
-        val parameters = ArrayList<String>()
-        appendValueOption(parameters, "--in", blueprintInput)
-        appendValueOption(parameters, "--out", blueprintOutput)
-        appendValueOption(parameters, "--module", moduleName.orEmpty())
-        appendValueOption(parameters, "--validator", validatorName.orEmpty())
-        singleCborParameter.trim().takeIf { it.isNotEmpty() }?.let { parameters += it }
-        return parameters
-    }
+    ): List<String> =
+        buildApplyCommandParametersForPaths(
+            blueprintInput = blueprintInput,
+            blueprintOutput = blueprintOutput,
+            moduleName = moduleName,
+            validatorName = validatorName,
+            singleCborParameter = singleCborParameter,
+            includeExtraArgs = false
+        )
 
     private fun canApplyConfiguredParameterToCurrentBlueprint(
         executable: String,
@@ -3908,19 +5006,12 @@ class AikenRunConfiguration(
         return lastApplied
     }
 
-    private fun applyAutoSessionKey(inspectionFile: File?, workDir: String?): String {
+    private fun applyAutoSessionKey(workDir: String?): String {
         val blueprintPath =
-            when {
-                inspectionFile != null -> {
-                    try {
-                        inspectionFile.canonicalPath
-                    } catch (_: IOException) {
-                        inspectionFile.absolutePath
-                    }
-                }
-                !workDir.isNullOrBlank() -> workDir
-                else -> project.basePath.orEmpty()
-            }
+            resolveApplyOutputFile(workDir)?.let(::safeCanonicalPath)
+                ?: resolveApplyInputFile(workDir)?.let(::safeCanonicalPath)
+                ?: workDir
+                ?: project.basePath.orEmpty()
         return buildString {
             append(project.locationHash)
             append("::")
@@ -3933,6 +5024,54 @@ class AikenRunConfiguration(
             append(applyValidator.trim())
         }
     }
+
+    private fun resolveTrackedApplyInspectionFile(workDir: String?, sessionKey: String): File? {
+        val trackedFile =
+            APPLY_TTY_CURRENT_BLUEPRINT[sessionKey]
+                ?.takeIf { it.isNotBlank() }
+                ?.let(::File)
+                ?.takeIf { it.isFile }
+        val fallback = resolveApplyInspectionFile(workDir)
+        val inputFile = resolveApplyInputFile(workDir)?.takeIf { it.isFile }
+        val currentBuildRevision = currentApplyBuildRevision()
+        val sessionBuildRevision = APPLY_SESSION_BUILD_REVISIONS[sessionKey] ?: currentBuildRevision
+
+        if (trackedFile != null) {
+            if (sessionBuildRevision < currentBuildRevision && inputFile != null) {
+                return inputFile
+            }
+            return trackedFile
+        }
+
+        return fallback ?: inputFile ?: resolveApplyOutputFile(workDir)
+    }
+
+    private fun rememberTrackedApplyBlueprint(sessionKey: String, blueprintFile: File) {
+        APPLY_TTY_CURRENT_BLUEPRINT[sessionKey] = safeCanonicalPath(blueprintFile)
+        rememberApplySessionRevision(sessionKey)
+    }
+
+    private fun rememberApplySessionRevision(sessionKey: String) {
+        APPLY_SESSION_BUILD_REVISIONS[sessionKey] = currentApplyBuildRevision()
+    }
+
+    private fun currentApplyBuildRevision(): Long =
+        APPLY_PROJECT_BUILD_REVISIONS
+            .computeIfAbsent(project.locationHash) { AtomicLong(0) }
+            .get()
+
+    private fun bumpApplyBuildRevision() {
+        APPLY_PROJECT_BUILD_REVISIONS
+            .computeIfAbsent(project.locationHash) { AtomicLong(0) }
+            .incrementAndGet()
+    }
+
+    private fun safeCanonicalPath(file: File): String =
+        try {
+            file.canonicalPath
+        } catch (_: IOException) {
+            file.absolutePath
+        }
 
     private fun buildInvocation(
         executable: String,
@@ -5142,17 +6281,40 @@ class AikenRunConfiguration(
     private fun resolveApplyInspectionFile(workDir: String?): File? {
         val preferredOut = absolutizeApplyPath(applyOut).trim()
         val preferredIn = absolutizeApplyPath(applyInput).trim()
-        val selectedPath = when {
-            preferredOut.isNotEmpty() -> preferredOut
-            preferredIn.isNotEmpty() -> preferredIn
-            else -> return null
-        }
+        val outputFile = preferredOut.takeIf { it.isNotEmpty() }?.let { resolveApplyFile(workDir, it) }
+        val inputFile = preferredIn.takeIf { it.isNotEmpty() }?.let { resolveApplyFile(workDir, it) }
 
-        val file = File(selectedPath)
+        return when {
+            outputFile?.isFile == true && inputFile?.isFile == true -> {
+                if (outputFile.lastModified() >= inputFile.lastModified()) outputFile else inputFile
+            }
+            outputFile?.isFile == true -> outputFile
+            inputFile?.isFile == true -> inputFile
+            outputFile != null -> outputFile
+            inputFile != null -> inputFile
+            else -> null
+        }
+    }
+
+    private fun resolveApplyInputFile(workDir: String?): File? {
+        val input = absolutizeApplyPath(applyInput).trim()
+        return if (input.isEmpty()) null else resolveApplyFile(workDir, input)
+    }
+
+    private fun resolveApplyOutputFile(workDir: String?): File? {
+        val output = absolutizeApplyPath(applyOut).trim()
+        if (output.isNotEmpty()) {
+            return resolveApplyFile(workDir, output)
+        }
+        return resolveApplyInputFile(workDir)
+    }
+
+    private fun resolveApplyFile(workDir: String?, path: String): File {
+        val file = File(path)
         if (file.isAbsolute) return file
 
-        val baseDir = workDir ?: resolveProjectDirectory() ?: project.basePath ?: return null
-        return File(baseDir, selectedPath)
+        val baseDir = workDir ?: resolveProjectDirectory() ?: project.basePath.orEmpty()
+        return File(baseDir, path)
     }
 
     private fun countPendingApplyParameters(blueprintFile: File): Int? {
@@ -5659,9 +6821,22 @@ class AikenRunConfiguration(
         const val DEFAULT_ARTIFACT_TESTNET_TEMPLATE = "%module%.%validator%.addr_test"
         const val DEFAULT_ARTIFACT_POLICY_TEMPLATE = "%module%.%validator%.policy"
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
+        const val APPLY_LIST_EDITOR_KEY = "aiken.apply.list.editor"
+        const val APPLY_MAP_KEY_EDITOR_KEY = "aiken.apply.map.key.editor"
+        const val APPLY_MAP_VALUE_EDITOR_KEY = "aiken.apply.map.value.editor"
+        const val APPLY_EDITOR_COMPONENT_KEY = "aiken.apply.editor.component"
+        const val APPLY_EDITOR_DEPTH_KEY = "aiken.apply.editor.depth"
+        const val APPLY_EDITOR_STRIPABLE_KEY = "aiken.apply.editor.stripable"
+        const val APPLY_EDITOR_STRIPE_COLOR_KEY = "aiken.apply.editor.stripe.color"
+        const val APPLY_STRIPE_ARC_KEY = "aiken.apply.stripe.arc"
+        val CBOR_UNSIGNED_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
         val APPLY_AUTO_CBOR_ACCUMULATOR = ConcurrentHashMap<String, MutableList<String>>()
         val APPLY_AUTO_CBOR_QUEUE = ConcurrentHashMap<String, ArrayDeque<String>>()
         val APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES = ConcurrentHashMap<String, AtomicBoolean>()
+        val APPLY_AUTO_CURRENT_BLUEPRINT = ConcurrentHashMap<String, String>()
+        val APPLY_TTY_CURRENT_BLUEPRINT = ConcurrentHashMap<String, String>()
+        val APPLY_PROJECT_BUILD_REVISIONS = ConcurrentHashMap<String, AtomicLong>()
+        val APPLY_SESSION_BUILD_REVISIONS = ConcurrentHashMap<String, Long>()
     }
 }
 
@@ -5700,23 +6875,23 @@ enum class AikenPropertyCoverage(val cliValue: String, private val label: String
 }
 
 enum class AikenCheckOutputMode(private val label: String) {
-    TTY("tty"),
+    TTY("TTY"),
     JSON("json"),
-    IDE_INTEGRATED("ide integrated");
+    IDE_INTEGRATED("IDE integrated");
 
     override fun toString(): String = label
 }
 
 enum class AikenBuildOutputMode(private val label: String) {
-    TTY("tty"),
-    IDE_INTEGRATED("ide integrated");
+    TTY("TTY"),
+    IDE_INTEGRATED("IDE integrated");
 
     override fun toString(): String = label
 }
 
 enum class AikenApplyOutputMode(private val label: String) {
-    TTY("tty"),
-    IDE_INTEGRATED("ide integrated");
+    TTY("TTY"),
+    IDE_INTEGRATED("IDE integrated");
 
     override fun toString(): String = label
 }

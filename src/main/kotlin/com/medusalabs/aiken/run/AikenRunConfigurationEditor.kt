@@ -19,6 +19,7 @@ import javax.swing.JComponent
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.BoxLayout
 import javax.swing.text.JTextComponent
 
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
@@ -72,6 +73,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyDefaultCborParametersField = JBTextField()
     private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
     private val applyOutputModeCombo = JComboBox(AikenApplyOutputMode.entries.toTypedArray())
+    private val applyAutoRepeatPanel = JPanel().apply {
+        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        isOpaque = false
+    }
+    private val applyAutoRepeatComment = JLabel("If disabled, run Parametrize separately for each parameter.")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -119,6 +125,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyModuleField.emptyText.text = "e.g. my_module"
         applyValidatorField.emptyText.text = "e.g. my_validator"
         applyDefaultCborParametersField.emptyText.text = "e.g. 182A, d8799f0102ff"
+        applyAutoRepeatComment.foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        applyAutoRepeatComment.border = JBUI.Borders.emptyTop(2)
+        applyAutoRepeatPanel.add(applyAutoUntilNoParametersCheck)
+        applyAutoRepeatPanel.add(applyAutoRepeatComment)
+        applyOutputModeCombo.addActionListener {
+            updateApplyModeVisibility()
+        }
 
         addressArtifactsBasePathField.emptyText.text = "artifacts"
         cleanTargetPathField.emptyText.text = "artifacts"
@@ -177,6 +190,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyDefaultCborParametersField.text = configuration.applyDefaultCborParameters
         applyAutoUntilNoParametersCheck.isSelected = configuration.applyAutoUntilNoParameters
         applyOutputModeCombo.selectedItem = configuration.applyOutputMode
+        updateApplyModeVisibility()
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -640,19 +654,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .comment("Tip: run manual parameterization first, then paste those CBOR values here. Separate values with comma or space.")
                 }
 
-                row {
-                    cell(applyAutoUntilNoParametersCheck)
-                        .comment("If disabled, run Apply separately for each parameter.")
-                }
-
                 row("Output mode:") {
                     cell(applyOutputModeCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("TTY for native interactive prompts, IDE integrated for structured GUI parameterization.")
                 }
+
+                row {
+                    cell(applyAutoRepeatPanel)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                }
             }
         }
+    }
+
+    private fun updateApplyModeVisibility() {
+        val ttySelected = (applyOutputModeCombo.selectedItem as? AikenApplyOutputMode) == AikenApplyOutputMode.TTY
+        applyAutoRepeatPanel.isVisible = ttySelected
+        applyAutoUntilNoParametersCheck.isVisible = ttySelected
+        applyAutoRepeatComment.isVisible = ttySelected
+        rootContent?.revalidate()
+        rootContent?.repaint()
     }
 
     private fun showCommandCard(command: AikenRunCommand) {
