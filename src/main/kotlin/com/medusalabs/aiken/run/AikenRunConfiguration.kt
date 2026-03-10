@@ -72,9 +72,14 @@ import org.jdom.Element
 import java.io.File
 import java.io.IOException
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.Insets
+import java.awt.RenderingHints
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.util.Base64
@@ -107,6 +112,7 @@ import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.JTree
+import javax.swing.border.AbstractBorder
 import javax.swing.border.TitledBorder
 import javax.swing.tree.TreeCellRenderer
 import java.awt.FlowLayout
@@ -463,6 +469,16 @@ class AikenRunConfiguration(
                             editor = createEditor(parameter.schema, label, depth = 0)
                         )
                     }.toMutableList()
+                    val defaultsQueue = alignedConfiguredApplyCborParameters(
+                        resolveAikenExecutable(),
+                        resolveProjectDirectory(),
+                        context.blueprintFile,
+                        context.module,
+                        context.validator
+                    )
+                    for ((section, cborHex) in sections.zip(defaultsQueue)) {
+                        decodeApplyDataFromHex(cborHex)?.let { section.editor.tryPopulate(it) }
+                    }
 
                     console.showForm(
                         module = context.module,
@@ -584,13 +600,6 @@ class AikenRunConfiguration(
         ) {
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
-            val configuredQueue = alignedConfiguredApplyCborParameters(
-                executable,
-                workDir,
-                context.blueprintFile,
-                context.module,
-                context.validator
-            )
             val applied = ArrayList<String>()
             var usedManualValues = false
             var appliedCount = 0
@@ -599,14 +608,9 @@ class AikenRunConfiguration(
                 while (!handler.isProcessTerminated && !handler.isProcessTerminating) {
                     val section = console.peekFirstSection() ?: break
 
-                    val cborHex =
-                        if (configuredQueue.isNotEmpty()) {
-                            normalizeCborHex(configuredQueue.removeFirst())
-                        } else {
-                            usedManualValues = true
-                            val encoded = encodeDataAsHex(section.editor.encodeData(section.title))
-                            normalizeCborHex(encoded)
-                        }
+                    usedManualValues = true
+                    val encoded = encodeDataAsHex(readApplyEditorDataOnEdt(section.editor, section.title))
+                    val cborHex = normalizeCborHex(encoded)
 
                     if (cborHex == null) {
                         console.showError("Invalid CBOR value for '${section.title}'.")
@@ -667,6 +671,26 @@ class AikenRunConfiguration(
                 }
                 handler.finish(1)
             }
+        }
+
+        @Throws(ExecutionException::class)
+        private fun readApplyEditorDataOnEdt(editor: ApplyValueEditor, fieldPath: String): ApplyData {
+            if (ApplicationManager.getApplication().isDispatchThread) {
+                return editor.encodeData(fieldPath)
+            }
+
+            val resultRef = AtomicReference<ApplyData?>()
+            val errorRef = AtomicReference<ExecutionException?>()
+            ApplicationManager.getApplication().invokeAndWait {
+                try {
+                    resultRef.set(editor.encodeData(fieldPath))
+                } catch (e: ExecutionException) {
+                    errorRef.set(e)
+                }
+            }
+            errorRef.get()?.let { throw it }
+            return resultRef.get()
+                ?: throw ExecutionException("Unable to read parameter value for '$fieldPath'.")
         }
 
         private fun normalizeCborHex(raw: String?): String? {
@@ -997,6 +1021,7 @@ class AikenRunConfiguration(
                 val top = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     border = JBUI.Borders.empty(8)
+                    isOpaque = false
                     add(statusArea)
                     add(messagesArea)
                 }
@@ -1006,11 +1031,13 @@ class AikenRunConfiguration(
                 }
 
                 applyButton.isEnabled = false
+                styleApplyButton(applyButton, compact = false)
                 applyButton.addActionListener {
                     onApply?.invoke()
                 }
                 val controls = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                     border = JBUI.Borders.empty(8)
+                    isOpaque = false
                     add(applyButton)
                 }
 
@@ -1070,6 +1097,7 @@ class AikenRunConfiguration(
                             sectionsPanel.add(Box.createVerticalStrut(JBUI.scale(6)))
                         }
                     }
+                    refreshApplyEditorStripes(sectionsPanel)
                     applyButton.isEnabled = synchronized(this.sections) { this.sections.isNotEmpty() }
                     sectionsPanel.revalidate()
                     sectionsPanel.repaint()
@@ -1103,6 +1131,7 @@ class AikenRunConfiguration(
                     if (sectionsPanel.componentCount > 0 && sectionsPanel.getComponent(0) is Box.Filler) {
                         sectionsPanel.remove(0)
                     }
+                    refreshApplyEditorStripes(sectionsPanel)
                     applyButton.isEnabled = synchronized(sections) { sections.isNotEmpty() }
                     sectionsPanel.revalidate()
                     sectionsPanel.repaint()
@@ -1130,18 +1159,22 @@ class AikenRunConfiguration(
 
             @Throws(ExecutionException::class)
             fun encodeData(fieldPath: String): ApplyData
+
+            fun tryPopulate(data: ApplyData): Boolean
+
+            fun rename(newName: String) {}
         }
 
         private inner class ApplyIntegerEditor(
             name: String,
             depth: Int
-        ) : BaseApplyEditor(name, "Int", depth) {
+        ) : BaseApplyEditor(name, "Int", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "e.g. 42"
-                addContent(field)
+                addContent(wrapApplyInputField(field))
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1151,23 +1184,35 @@ class AikenRunConfiguration(
                     ?: throw ExecutionException("$fieldPath must be an integer.")
                 return ApplyData.Integer(value)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val value = (data as? ApplyData.Integer) ?: return false
+                field.text = value.value.toString()
+                return true
+            }
         }
 
         private inner class ApplyBytesEditor(
             name: String,
             depth: Int
-        ) : BaseApplyEditor(name, "ByteArray", depth) {
+        ) : BaseApplyEditor(name, "ByteArray", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "hex bytes (without 0x)"
-                addContent(field)
+                addContent(wrapApplyInputField(field))
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
                 val bytes = parseHexBytes(field.text.trim(), fieldPath)
                 return ApplyData.Bytes(bytes)
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val value = (data as? ApplyData.Bytes) ?: return false
+                field.text = value.value.toHex()
+                return true
             }
         }
 
@@ -1175,13 +1220,13 @@ class AikenRunConfiguration(
             name: String,
             depth: Int,
             reason: String
-        ) : BaseApplyEditor(name, "Data", depth) {
+        ) : BaseApplyEditor(name, "Data", depth, stripeAsBlock = false) {
             private val field = JBTextField()
 
             init {
                 configureCompactInputField(field)
                 field.emptyText.text = "raw CBOR hex"
-                addContent(field)
+                addContent(wrapApplyInputField(field))
                 addContent(
                     JBLabel("Data structure is not known in blueprint ($reason). Enter full CBOR hex.")
                         .apply { border = JBUI.Borders.emptyTop(2) }
@@ -1193,18 +1238,28 @@ class AikenRunConfiguration(
                     ?: throw ExecutionException("$fieldPath must be valid CBOR hex.")
                 return ApplyData.RawCbor(parseHexBytes(normalized, fieldPath))
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                field.text =
+                    when (data) {
+                        is ApplyData.RawCbor -> data.bytes.toHex()
+                        else -> encodeDataAsHex(data)
+                    }
+                return true
+            }
         }
 
         private inner class ApplyBoolEditor(
             name: String,
             depth: Int,
             constructors: List<ApplyConstructor>
-        ) : BaseApplyEditor(name, "Bool", depth) {
+        ) : BaseApplyEditor(name, "Bool", depth, stripeAsBlock = false) {
             private val falseCtor = constructors.first { it.title.equals("False", ignoreCase = true) }
             private val trueCtor = constructors.first { it.title.equals("True", ignoreCase = true) }
             private val field = JBCheckBox()
 
             init {
+                field.isOpaque = false
                 updateLabel()
                 field.addActionListener { updateLabel() }
                 addCompact(field)
@@ -1217,6 +1272,18 @@ class AikenRunConfiguration(
 
             private fun updateLabel() {
                 field.text = if (field.isSelected) "True" else "False"
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                field.isSelected =
+                    when (constr.index) {
+                        trueCtor.index -> true
+                        falseCtor.index -> false
+                        else -> return false
+                    }
+                updateLabel()
+                return true
             }
         }
 
@@ -1232,6 +1299,7 @@ class AikenRunConfiguration(
             private val someEditor = editorFactory(someField.title ?: "Some", someField.schema, depth + 1)
 
             init {
+                noneCheck.isOpaque = false
                 headerActionsPanel.add(noneCheck)
                 noneCheck.isSelected = true
                 noneCheck.addActionListener {
@@ -1239,6 +1307,7 @@ class AikenRunConfiguration(
                 }
                 addContent(someEditor.component)
                 updateSomeVisibility()
+                refreshChildNames()
             }
 
             private fun updateSomeVisibility() {
@@ -1247,6 +1316,8 @@ class AikenRunConfiguration(
                 someEditor.component.isEnabled = showSome
                 component.revalidate()
                 component.repaint()
+                component.rootPane?.revalidate()
+                component.rootPane?.repaint()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1256,6 +1327,33 @@ class AikenRunConfiguration(
                     val someData = someEditor.encodeData("$fieldPath.Some")
                     ApplyData.Constr(optionConstructors.some.index, listOf(someData))
                 }
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                return when (constr.index) {
+                    optionConstructors.none.index -> {
+                        noneCheck.isSelected = true
+                        updateSomeVisibility()
+                        true
+                    }
+                    optionConstructors.some.index -> {
+                        if (constr.fields.size != 1) return false
+                        noneCheck.isSelected = false
+                        updateSomeVisibility()
+                        someEditor.tryPopulate(constr.fields.first())
+                    }
+                    else -> false
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                someEditor.rename(breadcrumbName(currentEditorName(), "Some"))
             }
         }
 
@@ -1275,6 +1373,7 @@ class AikenRunConfiguration(
                 for ((_, editor) in fields) {
                     addContent(editor.component)
                 }
+                refreshChildNames()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1284,6 +1383,23 @@ class AikenRunConfiguration(
                 }
                 return ApplyData.Constr(constructor.index, encodedFields)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                if (constr.index != constructor.index || constr.fields.size != fields.size) return false
+                return fields.indices.all { index -> fields[index].second.tryPopulate(constr.fields[index]) }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                for ((childName, editor) in fields) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
+                }
+            }
         }
 
         private inner class ApplyAnyOfEditor(
@@ -1291,10 +1407,13 @@ class AikenRunConfiguration(
             depth: Int,
             typeLabel: String,
             private val constructors: List<ApplyConstructor>,
-            editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+            private val editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
             private val constructorCombo = JComboBox(constructors.map { it.title }.toTypedArray())
-            private val fieldsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val fieldsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             private val editorsByConstructor = LinkedHashMap<Int, List<Pair<String, ApplyValueEditor>>>()
 
             init {
@@ -1304,7 +1423,7 @@ class AikenRunConfiguration(
                 constructorCombo.addActionListener {
                     refreshFields(editorsByConstructor, constructors, editorFactory, depth)
                 }
-                refreshFields(editorsByConstructor, constructors, editorFactory, depth)
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1316,6 +1435,17 @@ class AikenRunConfiguration(
                     fields += editor.encodeData("$fieldPath.$childName")
                 }
                 return ApplyData.Constr(ctor.index, fields)
+            }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val constr = data as? ApplyData.Constr ?: return false
+                val targetIndex = constructors.indexOfFirst { it.index == constr.index }
+                if (targetIndex == -1) return false
+                constructorCombo.selectedIndex = targetIndex
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
+                val editors = editorsByConstructor[targetIndex].orEmpty()
+                if (editors.size != constr.fields.size) return false
+                return editors.indices.all { index -> editors[index].second.tryPopulate(constr.fields[index]) }
             }
 
             private fun refreshFields(
@@ -1336,12 +1466,18 @@ class AikenRunConfiguration(
                     }
 
                 fieldsPanel.removeAll()
-                for ((_, editor) in editors) {
+                for ((childName, editor) in editors) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
                     fieldsPanel.add(editor.component)
                 }
-                fieldsPanel.maximumSize = fieldsPanel.preferredSize
+                refreshApplyEditorStripes(fieldsPanel)
                 fieldsPanel.revalidate()
                 fieldsPanel.repaint()
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshFields(editorsByConstructor, constructors, editorFactory, editorDepth)
             }
         }
 
@@ -1361,6 +1497,7 @@ class AikenRunConfiguration(
                 for ((_, editor) in fields) {
                     addContent(editor.component)
                 }
+                refreshChildNames()
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
@@ -1370,6 +1507,23 @@ class AikenRunConfiguration(
                 }
                 return ApplyData.List(values)
             }
+
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val list = data as? ApplyData.List ?: return false
+                if (list.items.size != fields.size) return false
+                return fields.indices.all { index -> fields[index].second.tryPopulate(list.items[index]) }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                refreshChildNames()
+            }
+
+            private fun refreshChildNames() {
+                for ((childName, editor) in fields) {
+                    editor.rename(breadcrumbName(currentEditorName(), childName))
+                }
+            }
         }
 
         private inner class ApplyListEditor(
@@ -1377,52 +1531,111 @@ class AikenRunConfiguration(
             typeLabel: String,
             depth: Int,
             private val itemSchema: ApplySchema,
-            editorFactory: (String, Int) -> ApplyValueEditor
+            private val editorFactory: (String, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
-            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val rowsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             private val addButton = JButton("Add item")
-            private val rows = ArrayList<ApplyValueEditor>()
 
             init {
+                makeHeaderActionButtonCompact(addButton)
                 addButton.addActionListener {
-                    addRow(editorFactory("item${rows.size + 1}", depth + 1))
+                    addRow(editorFactory("[${rowCount() + 1}]", depth + 1))
                 }
                 rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
                 addContent(rowsPanel)
-                addCompact(addButton)
+                headerActionsPanel.add(addButton)
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
-                val values = ArrayList<ApplyData>(rows.size)
-                for ((index, editor) in rows.withIndex()) {
+                val editors = currentEditors()
+                val values = ArrayList<ApplyData>(editors.size)
+                for ((index, editor) in editors.withIndex()) {
                     values += editor.encodeData("$fieldPath[${index + 1}]")
                 }
                 return ApplyData.List(values)
             }
 
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val list = data as? ApplyData.List ?: return false
+                clearRows()
+                for ((index, item) in list.items.withIndex()) {
+                    val editor = editorFactory("[${index + 1}]", editorDepth + 1)
+                    if (!editor.tryPopulate(item)) {
+                        clearRows()
+                        return false
+                    }
+                    addRow(editor)
+                }
+                return true
+            }
+
             private fun addRow(editor: ApplyValueEditor) {
-                rows += editor
+                lateinit var entryPanel: JPanel
                 val rowPanel = JPanel(BorderLayout(8, 0)).apply {
                     border = JBUI.Borders.emptyTop(4)
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                     add(editor.component, BorderLayout.CENTER)
                 }
                 val removeButton = JButton(AikenIcons.DELETE).apply {
-                    isFocusable = false
+                    styleApplyButton(this, compact = true)
                     addActionListener {
-                        rows.remove(editor)
-                        rowsPanel.remove(rowPanel)
+                        rowsPanel.remove(entryPanel)
+                        renumberRows()
                         rowsPanel.revalidate()
                         rowsPanel.repaint()
                     }
                 }
                 rowPanel.add(removeButton, BorderLayout.EAST)
-                rowPanel.maximumSize = rowPanel.preferredSize
-                rowsPanel.add(rowPanel)
-                rowsPanel.maximumSize = rowsPanel.preferredSize
+                val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                val separator = JPanel().apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.empty(4, 0, 0, 0)
+                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    preferredSize = Dimension(1, JBUI.scale(1))
+                    maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
+                }
+                entryPanel = createStripePaintPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    putClientProperty(APPLY_LIST_EDITOR_KEY, editor)
+                    add(rowPanel)
+                    add(separator)
+                }
+                rowsPanel.add(entryPanel)
+                renumberRows()
+                refreshCollectionEntryStripes(rowsPanel)
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
+
+            private fun clearRows() {
+                rowsPanel.removeAll()
+                refreshCollectionEntryStripes(rowsPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+
+            private fun renumberRows() {
+                currentEditors().forEachIndexed { index, editor ->
+                    editor.rename(breadcrumbName(currentEditorName(), "[${index + 1}]"))
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                renumberRows()
+            }
+
+            private fun rowCount(): Int = currentEditors().size
+
+            private fun currentEditors(): List<ApplyValueEditor> =
+                rowsPanel.components.mapNotNull { component ->
+                    (component as? JComponent)?.getClientProperty(APPLY_LIST_EDITOR_KEY) as? ApplyValueEditor
+                }
         }
 
         private fun <T> makeComboCompact(combo: JComboBox<T>) {
@@ -1430,11 +1643,74 @@ class AikenRunConfiguration(
             combo.alignmentX = Component.LEFT_ALIGNMENT
         }
 
+        private fun makeHeaderActionButtonCompact(button: JButton) {
+            styleApplyButton(button, compact = true)
+            button.alignmentY = Component.CENTER_ALIGNMENT
+        }
+
+        private fun styleApplyButton(button: JButton, compact: Boolean) {
+            button.isFocusable = false
+            button.isOpaque = false
+            button.isContentAreaFilled = false
+            button.background = Color(0, 0, 0, 0)
+            button.margin = if (compact) JBUI.insets(1, 6) else JBUI.insets(3, 8)
+            button.border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
+            button.maximumSize = button.preferredSize
+        }
+
         private fun configureCompactInputField(field: JBTextField) {
             field.columns = 32
             field.maximumSize = field.preferredSize
             field.alignmentX = Component.LEFT_ALIGNMENT
+            field.isOpaque = false
+            field.background = Color(0, 0, 0, 0)
+            field.border = JBUI.Borders.empty()
         }
+
+        private fun wrapApplyInputField(field: JBTextField): JComponent =
+            JPanel(BorderLayout()).apply {
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1, 6))
+                maximumSize = field.maximumSize
+                add(field, BorderLayout.CENTER)
+            }
+
+        private fun applyControlBorderColor(): Color =
+            if (com.intellij.util.ui.UIUtil.isUnderDarcula()) {
+                Color(255, 255, 255, 96)
+            } else {
+                Color(0, 0, 0, 92)
+            }
+
+        private fun applyControlBorder(arc: Int, insets: Insets): AbstractBorder =
+            object : AbstractBorder() {
+                override fun getBorderInsets(c: Component?): Insets = Insets(insets.top, insets.left, insets.bottom, insets.right)
+
+                override fun getBorderInsets(c: Component?, borderInsets: Insets): Insets {
+                    borderInsets.top = insets.top
+                    borderInsets.left = insets.left
+                    borderInsets.bottom = insets.bottom
+                    borderInsets.right = insets.right
+                    return borderInsets
+                }
+
+                override fun paintBorder(c: Component?, g: Graphics, x: Int, y: Int, width: Int, height: Int) {
+                    val g2 = g.create() as Graphics2D
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    g2.color = applyControlBorderColor()
+                    val strokeInset = JBUI.scale(1)
+                    g2.drawRoundRect(
+                        x,
+                        y,
+                        width - strokeInset,
+                        height - strokeInset,
+                        arc,
+                        arc
+                    )
+                    g2.dispose()
+                }
+            }
 
         private inner class ApplyMapEditor(
             name: String,
@@ -1444,27 +1720,31 @@ class AikenRunConfiguration(
             private val valueSchema: ApplySchema,
             editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
-            private val rowsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            private val rowsPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             private val addButton = JButton("Add pair")
-            private val rows = ArrayList<Pair<ApplyValueEditor, ApplyValueEditor>>()
             private val keyFactory = editorFactory
             private val valueFactory = editorFactory
 
             init {
+                makeHeaderActionButtonCompact(addButton)
                 addButton.addActionListener {
                     addRow(
-                        keyFactory("key${rows.size + 1}", keySchema, depth + 1),
-                        valueFactory("value${rows.size + 1}", valueSchema, depth + 1)
+                        keyFactory("key${rowCount() + 1}", keySchema, depth + 1),
+                        valueFactory("value${rowCount() + 1}", valueSchema, depth + 1)
                     )
                 }
                 rowsPanel.alignmentX = Component.LEFT_ALIGNMENT
-                addCompact(addButton)
                 addContent(rowsPanel)
+                headerActionsPanel.add(addButton)
             }
 
             override fun encodeData(fieldPath: String): ApplyData {
-                val pairs = ArrayList<Pair<ApplyData, ApplyData>>(rows.size)
-                for ((index, row) in rows.withIndex()) {
+                val editors = currentEditors()
+                val pairs = ArrayList<Pair<ApplyData, ApplyData>>(editors.size)
+                for ((index, row) in editors.withIndex()) {
                     val key = row.first.encodeData("$fieldPath.key${index + 1}")
                     val value = row.second.encodeData("$fieldPath.value${index + 1}")
                     pairs += key to value
@@ -1472,46 +1752,126 @@ class AikenRunConfiguration(
                 return ApplyData.Map(pairs)
             }
 
+            override fun tryPopulate(data: ApplyData): Boolean {
+                val map = data as? ApplyData.Map ?: return false
+                clearRows()
+                for ((index, item) in map.items.withIndex()) {
+                    val keyEditor = keyFactory("key${index + 1}", keySchema, editorDepth + 1)
+                    val valueEditor = valueFactory("value${index + 1}", valueSchema, editorDepth + 1)
+                    if (!keyEditor.tryPopulate(item.first) || !valueEditor.tryPopulate(item.second)) {
+                        clearRows()
+                        return false
+                    }
+                    addRow(keyEditor, valueEditor)
+                }
+                return true
+            }
+
             private fun addRow(keyEditor: ApplyValueEditor, valueEditor: ApplyValueEditor) {
-                rows += keyEditor to valueEditor
+                lateinit var entryPanel: JPanel
                 val rowPanel = JPanel(BorderLayout(8, 0)).apply {
                     border = JBUI.Borders.emptyTop(4)
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                 }
                 val keyAndValue = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     alignmentX = Component.LEFT_ALIGNMENT
+                    isOpaque = false
                     add(keyEditor.component)
                     add(valueEditor.component)
                 }
+                refreshApplyEditorStripes(keyAndValue)
                 rowPanel.add(keyAndValue, BorderLayout.CENTER)
                 val removeButton = JButton(AikenIcons.DELETE).apply {
-                    isFocusable = false
+                    styleApplyButton(this, compact = true)
                     addActionListener {
-                        rows.remove(keyEditor to valueEditor)
-                        rowsPanel.remove(rowPanel)
+                        rowsPanel.remove(entryPanel)
+                        renumberRows()
                         rowsPanel.revalidate()
                         rowsPanel.repaint()
                     }
                 }
                 rowPanel.add(removeButton, BorderLayout.EAST)
-                rowPanel.maximumSize = rowPanel.preferredSize
-                rowsPanel.add(rowPanel)
-                rowsPanel.maximumSize = rowsPanel.preferredSize
+                val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                val separator = JPanel().apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.empty(4, 0, 0, 0)
+                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    preferredSize = Dimension(1, JBUI.scale(1))
+                    maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
+                }
+                entryPanel = createStripePaintPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    putClientProperty(APPLY_MAP_KEY_EDITOR_KEY, keyEditor)
+                    putClientProperty(APPLY_MAP_VALUE_EDITOR_KEY, valueEditor)
+                    add(rowPanel)
+                    add(separator)
+                }
+                rowsPanel.add(entryPanel)
+                renumberRows()
+                refreshCollectionEntryStripes(rowsPanel)
                 rowsPanel.revalidate()
                 rowsPanel.repaint()
             }
+
+            private fun clearRows() {
+                rowsPanel.removeAll()
+                refreshCollectionEntryStripes(rowsPanel)
+                rowsPanel.revalidate()
+                rowsPanel.repaint()
+            }
+
+            private fun renumberRows() {
+                currentEditors().forEachIndexed { index, row ->
+                    row.first.rename(breadcrumbName(currentEditorName(), "key${index + 1}"))
+                    row.second.rename(breadcrumbName(currentEditorName(), "value${index + 1}"))
+                }
+            }
+
+            override fun rename(newName: String) {
+                super.rename(newName)
+                renumberRows()
+            }
+
+            private fun rowCount(): Int = currentEditors().size
+
+            private fun currentEditors(): List<Pair<ApplyValueEditor, ApplyValueEditor>> =
+                rowsPanel.components.mapNotNull { component ->
+                    val rowPanel = component as? JComponent ?: return@mapNotNull null
+                    val keyEditor = rowPanel.getClientProperty(APPLY_MAP_KEY_EDITOR_KEY) as? ApplyValueEditor ?: return@mapNotNull null
+                    val valueEditor = rowPanel.getClientProperty(APPLY_MAP_VALUE_EDITOR_KEY) as? ApplyValueEditor ?: return@mapNotNull null
+                    keyEditor to valueEditor
+                }
         }
 
         private abstract inner class BaseApplyEditor(
             name: String,
             type: String,
-            depth: Int
+            depth: Int,
+            stripeAsBlock: Boolean = true
         ) : ApplyValueEditor {
-            private val titleText = "$name ($type)"
+            protected val editorDepth = depth
+            private var editorName = name
+            private val editorType = type
             private val titleFont = JBLabel().font.deriveFont(Font.BOLD)
+            private val titleLabel = JBLabel().apply {
+                font = titleFont
+            }
             override val component =
                 object : JPanel(BorderLayout()) {
+                    override fun paintComponent(g: Graphics) {
+                        val stripe = getClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY) as? Color
+                        if (stripe != null) {
+                            val g2 = g.create() as Graphics2D
+                            g2.color = stripe
+                            g2.fillRect(0, 0, width, height)
+                            g2.dispose()
+                        }
+                        super.paintComponent(g)
+                    }
+
                     override fun getPreferredSize(): Dimension {
                         val size = super.getPreferredSize()
                         size.width = maxOf(size.width, titleMinSectionWidth())
@@ -1521,33 +1881,38 @@ class AikenRunConfiguration(
                         return size
                     }
 
-                    override fun getMaximumSize(): Dimension = preferredSize
+                    override fun getMaximumSize(): Dimension =
+                        if (depth == 0) preferredSize else Dimension(Int.MAX_VALUE, preferredSize.height)
                 }.apply {
-                val lineBorder = BorderFactory.createLineBorder(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground())
-                val titledBorder = BorderFactory.createTitledBorder(
-                    lineBorder,
-                    titleText,
-                    TitledBorder.LEFT,
-                    TitledBorder.TOP,
-                    JBLabel().font.deriveFont(Font.BOLD)
-                )
+                val lineColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                val leftBorder = BorderFactory.createMatteBorder(0, JBUI.scale(1), 0, 0, lineColor)
                 border =
                     JBUI.Borders.compound(
-                        titledBorder,
-                        JBUI.Borders.empty(6, 4 + depth * 10, 6, 6)
+                        leftBorder,
+                        JBUI.Borders.empty(6, editorLeftInset(), 6, 6)
                     )
                 alignmentX = Component.LEFT_ALIGNMENT
+                putClientProperty(APPLY_EDITOR_COMPONENT_KEY, true)
+                putClientProperty(APPLY_EDITOR_DEPTH_KEY, depth)
+                putClientProperty(APPLY_EDITOR_STRIPABLE_KEY, stripeAsBlock)
+                isOpaque = false
             }
 
-            protected val contentPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+            protected val contentPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+            }
             protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 isOpaque = false
             }
 
             init {
+                updateTitleLabel()
                 val top = JPanel().apply {
                     isOpaque = false
                     layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    add(titleLabel)
+                    add(Box.createHorizontalStrut(JBUI.scale(8)))
                     add(headerActionsPanel)
                     add(Box.createHorizontalGlue())
                 }
@@ -1555,10 +1920,19 @@ class AikenRunConfiguration(
                 component.add(contentPanel, BorderLayout.CENTER)
             }
 
+            override fun rename(newName: String) {
+                editorName = newName
+                updateTitleLabel()
+                component.revalidate()
+                component.repaint()
+            }
+
+            protected fun currentEditorName(): String = editorName
+
             protected fun addContent(child: JComponent) {
                 child.alignmentX = Component.LEFT_ALIGNMENT
                 contentPanel.add(child)
-                contentPanel.maximumSize = contentPanel.preferredSize
+                refreshApplyEditorStripes(contentPanel)
             }
 
             protected fun addCompact(child: JComponent) {
@@ -1573,7 +1947,6 @@ class AikenRunConfiguration(
                         add(child, BorderLayout.WEST)
                     }
                 contentPanel.add(row)
-                contentPanel.maximumSize = contentPanel.preferredSize
             }
 
             private fun applyTopLevelSectionWidth(): Int {
@@ -1586,11 +1959,37 @@ class AikenRunConfiguration(
 
             private fun titleMinSectionWidth(): Int {
                 val metrics = component.getFontMetrics(titleFont)
-                val titleWidth = metrics.stringWidth(titleText)
+                val titleWidth = metrics.stringWidth(currentTitleText())
                 val titlePadding = JBUI.scale(28)
                 return titleWidth + titlePadding
             }
+
+            private fun editorLeftInset(): Int = 4
+
+            private fun currentTitleText(): String = "$editorName :: $editorType"
+
+            private fun updateTitleLabel() {
+                titleLabel.text = currentTitleText()
+            }
         }
+
+        private fun breadcrumbName(parent: String, child: String): String = "$parent.$child"
+
+        private fun createStripePaintPanel(layout: java.awt.LayoutManager? = null): JPanel =
+            object : JPanel(layout) {
+                override fun paintComponent(g: Graphics) {
+                    val stripe = getClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY) as? Color
+                    if (stripe != null) {
+                        val g2 = g.create() as Graphics2D
+                        g2.color = stripe
+                        g2.fillRect(0, 0, width, height)
+                        g2.dispose()
+                    }
+                    super.paintComponent(g)
+                }
+            }.apply {
+                isOpaque = false
+            }
 
         private fun encodeDataAsHex(data: ApplyData): String {
             val bytes = ByteArrayOutputStream()
@@ -1621,17 +2020,210 @@ class AikenRunConfiguration(
             return String(chars)
         }
 
+        private fun decodeApplyDataFromHex(raw: String): ApplyData? {
+            val normalized = normalizeCborHex(raw) ?: return null
+            val bytes = ByteArray(normalized.length / 2)
+            var i = 0
+            while (i < normalized.length) {
+                bytes[i / 2] = normalized.substring(i, i + 2).toInt(16).toByte()
+                i += 2
+            }
+            val decoded = decodePlutusData(bytes, 0) ?: return null
+            return if (decoded.nextOffset == bytes.size) decoded.data else null
+        }
+
+        private fun decodePlutusData(bytes: ByteArray, offset: Int): DecodedApplyData? {
+            if (offset >= bytes.size) return null
+            val initialByte = bytes[offset].toInt() and 0xff
+            val major = initialByte ushr 5
+            val additional = initialByte and 0x1f
+
+            return when (major) {
+                0 -> {
+                    val (value, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+                    DecodedApplyData(ApplyData.Integer(value), nextOffset)
+                }
+                1 -> {
+                    val (value, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+                    DecodedApplyData(ApplyData.Integer(value.negate().subtract(BigInteger.ONE)), nextOffset)
+                }
+                2 -> decodeByteString(bytes, offset, additional)
+                4 -> decodeListData(bytes, offset, additional)
+                5 -> decodeMapData(bytes, offset, additional)
+                6 -> decodeTaggedData(bytes, offset, additional)
+                else -> null
+            }
+        }
+
+        private fun decodeByteString(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            if (additional == 31) {
+                val out = ByteArrayOutputStream()
+                var cursor = offset + 1
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.Bytes(out.toByteArray()), cursor + 1)
+                    }
+                    val chunkMajor = marker ushr 5
+                    val chunkAdditional = marker and 0x1f
+                    if (chunkMajor != 2 || chunkAdditional == 31) return null
+                    val chunk = decodeByteString(bytes, cursor, chunkAdditional) ?: return null
+                    val chunkBytes = chunk.data as? ApplyData.Bytes ?: return null
+                    out.write(chunkBytes.value)
+                    cursor = chunk.nextOffset
+                }
+                return null
+            }
+
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            val intLength = length.toIntExactOrNull() ?: return null
+            if (nextOffset + intLength > bytes.size) return null
+            return DecodedApplyData(
+                ApplyData.Bytes(bytes.copyOfRange(nextOffset, nextOffset + intLength)),
+                nextOffset + intLength
+            )
+        }
+
+        private fun decodeListData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val items = ArrayList<ApplyData>()
+            var cursor = offset + 1
+            if (additional == 31) {
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.List(items), cursor + 1)
+                    }
+                    val item = decodePlutusData(bytes, cursor) ?: return null
+                    items += item.data
+                    cursor = item.nextOffset
+                }
+                return null
+            }
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            cursor = nextOffset
+            repeat(length.toIntExactOrNull() ?: return null) {
+                val item = decodePlutusData(bytes, cursor) ?: return null
+                items += item.data
+                cursor = item.nextOffset
+            }
+            return DecodedApplyData(ApplyData.List(items), cursor)
+        }
+
+        private fun decodeMapData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val items = ArrayList<Pair<ApplyData, ApplyData>>()
+            var cursor = offset + 1
+            if (additional == 31) {
+                while (cursor < bytes.size) {
+                    val marker = bytes[cursor].toInt() and 0xff
+                    if (marker == 0xff) {
+                        return DecodedApplyData(ApplyData.Map(items), cursor + 1)
+                    }
+                    val key = decodePlutusData(bytes, cursor) ?: return null
+                    val value = decodePlutusData(bytes, key.nextOffset) ?: return null
+                    items += key.data to value.data
+                    cursor = value.nextOffset
+                }
+                return null
+            }
+            val (length, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            cursor = nextOffset
+            repeat(length.toIntExactOrNull() ?: return null) {
+                val key = decodePlutusData(bytes, cursor) ?: return null
+                val value = decodePlutusData(bytes, key.nextOffset) ?: return null
+                items += key.data to value.data
+                cursor = value.nextOffset
+            }
+            return DecodedApplyData(ApplyData.Map(items), cursor)
+        }
+
+        private fun decodeTaggedData(bytes: ByteArray, offset: Int, additional: Int): DecodedApplyData? {
+            val (tag, nextOffset) = decodeUnsignedValue(bytes, offset, additional) ?: return null
+            return when {
+                tag >= BigInteger.valueOf(121L) && tag <= BigInteger.valueOf(127L) -> {
+                    val fields = decodePlutusConstrFields(bytes, nextOffset) ?: return null
+                    DecodedApplyData(
+                        ApplyData.Constr(tag.subtract(BigInteger.valueOf(121L)).toLongExactOrNull() ?: return null, fields.first),
+                        fields.second
+                    )
+                }
+                tag >= BigInteger.valueOf(1280L) && tag <= BigInteger.valueOf(1400L) -> {
+                    val fields = decodePlutusConstrFields(bytes, nextOffset) ?: return null
+                    DecodedApplyData(
+                        ApplyData.Constr(
+                            tag.subtract(BigInteger.valueOf(1280L)).add(BigInteger.valueOf(7L)).toLongExactOrNull() ?: return null,
+                            fields.first
+                        ),
+                        fields.second
+                    )
+                }
+                tag == BigInteger.valueOf(102L) -> {
+                    val payload = decodePlutusData(bytes, nextOffset) ?: return null
+                    val list = payload.data as? ApplyData.List ?: return null
+                    if (list.items.size != 2) return null
+                    val index = (list.items[0] as? ApplyData.Integer)?.value?.toLongExactOrNull() ?: return null
+                    val fields = (list.items[1] as? ApplyData.List)?.items ?: return null
+                    DecodedApplyData(ApplyData.Constr(index, fields), payload.nextOffset)
+                }
+                tag == BigInteger.valueOf(2L) || tag == BigInteger.valueOf(3L) -> {
+                    val payload = decodePlutusData(bytes, nextOffset) ?: return null
+                    val byteString = payload.data as? ApplyData.Bytes ?: return null
+                    val integer = BigInteger(1, byteString.value)
+                    val value = if (tag == BigInteger.valueOf(2L)) integer else integer.negate().subtract(BigInteger.ONE)
+                    DecodedApplyData(ApplyData.Integer(value), payload.nextOffset)
+                }
+                else -> decodePlutusData(bytes, nextOffset)
+            }
+        }
+
+        private fun decodePlutusConstrFields(bytes: ByteArray, offset: Int): Pair<List<ApplyData>, Int>? {
+            val decoded = decodePlutusData(bytes, offset) ?: return null
+            val fields = decoded.data as? ApplyData.List ?: return null
+            return fields.items to decoded.nextOffset
+        }
+
+        private fun decodeUnsignedValue(bytes: ByteArray, offset: Int, additional: Int): Pair<BigInteger, Int>? {
+            return when {
+                additional < 24 -> BigInteger.valueOf(additional.toLong()) to (offset + 1)
+                additional == 24 -> {
+                    if (offset + 1 >= bytes.size) null
+                    else BigInteger.valueOf((bytes[offset + 1].toInt() and 0xff).toLong()) to (offset + 2)
+                }
+                additional == 25 -> {
+                    if (offset + 2 >= bytes.size) null
+                    else BigInteger.valueOf(
+                        (((bytes[offset + 1].toInt() and 0xff) shl 8) or (bytes[offset + 2].toInt() and 0xff)).toLong()
+                    ) to (offset + 3)
+                }
+                additional == 26 -> {
+                    if (offset + 4 >= bytes.size) null
+                    else (
+                        BigInteger.valueOf(
+                            ((bytes[offset + 1].toLong() and 0xffL) shl 24) or
+                                ((bytes[offset + 2].toLong() and 0xffL) shl 16) or
+                                ((bytes[offset + 3].toLong() and 0xffL) shl 8) or
+                                (bytes[offset + 4].toLong() and 0xffL)
+                        )
+                    ) to (offset + 5)
+                }
+                additional == 27 -> {
+                    if (offset + 8 >= bytes.size) null
+                    else BigInteger(1, bytes.copyOfRange(offset + 1, offset + 9)) to (offset + 9)
+                }
+                else -> null
+            }
+        }
+
         private fun encodePlutusData(output: ByteArrayOutputStream, data: ApplyData) {
             when (data) {
                 is ApplyData.RawCbor -> output.write(data.bytes)
                 is ApplyData.Integer -> encodeInteger(output, data.value)
                 is ApplyData.Bytes -> {
-                    writeTypeAndLength(output, major = 2, value = data.value.size.toLong())
+                    writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(data.value.size.toLong()))
                     output.write(data.value)
                 }
                 is ApplyData.List -> {
                     if (data.items.isEmpty()) {
-                        writeTypeAndLength(output, major = 4, value = 0)
+                        writeTypeAndLength(output, major = 4, value = BigInteger.ZERO)
                     } else {
                         output.write(0x9f)
                         data.items.forEach { encodePlutusData(output, it) }
@@ -1639,7 +2231,7 @@ class AikenRunConfiguration(
                     }
                 }
                 is ApplyData.Map -> {
-                    writeTypeAndLength(output, major = 5, value = data.items.size.toLong())
+                    writeTypeAndLength(output, major = 5, value = BigInteger.valueOf(data.items.size.toLong()))
                     data.items.forEach { (key, value) ->
                         encodePlutusData(output, key)
                         encodePlutusData(output, value)
@@ -1648,14 +2240,14 @@ class AikenRunConfiguration(
                 is ApplyData.Constr -> {
                     val index = data.index
                     if (index < 7) {
-                        writeTypeAndLength(output, major = 6, value = 121 + index)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(121 + index))
                         encodeConstrFields(output, data.fields)
                     } else if (index < 128) {
-                        writeTypeAndLength(output, major = 6, value = 1280 + index - 7)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(1280 + index - 7))
                         encodeConstrFields(output, data.fields)
                     } else {
-                        writeTypeAndLength(output, major = 6, value = 102)
-                        writeTypeAndLength(output, major = 4, value = 2)
+                        writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(102L))
+                        writeTypeAndLength(output, major = 4, value = BigInteger.valueOf(2L))
                         encodeInteger(output, BigInteger.valueOf(index))
                         encodeConstrFields(output, data.fields)
                     }
@@ -1665,7 +2257,7 @@ class AikenRunConfiguration(
 
         private fun encodeConstrFields(output: ByteArrayOutputStream, fields: List<ApplyData>) {
             if (fields.isEmpty()) {
-                writeTypeAndLength(output, major = 4, value = 0)
+                writeTypeAndLength(output, major = 4, value = BigInteger.ZERO)
             } else {
                 output.write(0x9f)
                 fields.forEach { encodePlutusData(output, it) }
@@ -1676,25 +2268,25 @@ class AikenRunConfiguration(
         private fun encodeInteger(output: ByteArrayOutputStream, value: BigInteger) {
             val zero = BigInteger.ZERO
             if (value >= zero) {
-                if (value.bitLength() <= 63) {
-                    writeTypeAndLength(output, major = 0, value = value.toLong())
+                if (fitsCompactUnsignedCbor(value)) {
+                    writeTypeAndLength(output, major = 0, value = value)
                     return
                 }
-                writeTypeAndLength(output, major = 6, value = 2)
+                writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(2L))
                 val bytes = unsignedBytes(value)
-                writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+                writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(bytes.size.toLong()))
                 output.write(bytes)
                 return
             }
 
             val transformed = value.negate().subtract(BigInteger.ONE)
-            if (transformed.bitLength() <= 63) {
-                writeTypeAndLength(output, major = 1, value = transformed.toLong())
+            if (fitsCompactUnsignedCbor(transformed)) {
+                writeTypeAndLength(output, major = 1, value = transformed)
                 return
             }
-            writeTypeAndLength(output, major = 6, value = 3)
+            writeTypeAndLength(output, major = 6, value = BigInteger.valueOf(3L))
             val bytes = unsignedBytes(transformed)
-            writeTypeAndLength(output, major = 2, value = bytes.size.toLong())
+            writeTypeAndLength(output, major = 2, value = BigInteger.valueOf(bytes.size.toLong()))
             output.write(bytes)
         }
 
@@ -1707,33 +2299,104 @@ class AikenRunConfiguration(
             }
         }
 
-        private fun writeTypeAndLength(output: ByteArrayOutputStream, major: Int, value: Long) {
+        private fun writeTypeAndLength(output: ByteArrayOutputStream, major: Int, value: BigInteger) {
             when {
-                value < 24 -> output.write((major shl 5) or value.toInt())
-                value <= 0xff -> {
+                value < BigInteger.valueOf(24L) -> output.write((major shl 5) or value.toInt())
+                value <= BigInteger.valueOf(0xffL) -> {
                     output.write((major shl 5) or 24)
                     output.write(value.toInt())
                 }
-                value <= 0xffff -> {
+                value <= BigInteger.valueOf(0xffffL) -> {
                     output.write((major shl 5) or 25)
-                    output.write((value ushr 8).toInt() and 0xff)
-                    output.write(value.toInt() and 0xff)
+                    val longValue = value.toLong()
+                    output.write((longValue ushr 8).toInt() and 0xff)
+                    output.write(longValue.toInt() and 0xff)
                 }
-                value <= 0xffff_ffffL -> {
+                value <= BigInteger("4294967295") -> {
                     output.write((major shl 5) or 26)
-                    output.write((value ushr 24).toInt() and 0xff)
-                    output.write((value ushr 16).toInt() and 0xff)
-                    output.write((value ushr 8).toInt() and 0xff)
-                    output.write(value.toInt() and 0xff)
+                    val longValue = value.toLong()
+                    output.write((longValue ushr 24).toInt() and 0xff)
+                    output.write((longValue ushr 16).toInt() and 0xff)
+                    output.write((longValue ushr 8).toInt() and 0xff)
+                    output.write(longValue.toInt() and 0xff)
+                }
+                value <= CBOR_UNSIGNED_MAX -> {
+                    output.write((major shl 5) or 27)
+                    val encoded = unsignedBytes(value)
+                    repeat(8 - encoded.size) { output.write(0) }
+                    output.write(encoded)
                 }
                 else -> {
-                    output.write((major shl 5) or 27)
-                    for (shift in 56 downTo 0 step 8) {
-                        output.write((value ushr shift).toInt() and 0xff)
-                    }
+                    throw IllegalArgumentException("CBOR compact value out of range: $value")
                 }
             }
         }
+
+        private fun fitsCompactUnsignedCbor(value: BigInteger): Boolean =
+            value.signum() >= 0 && value <= CBOR_UNSIGNED_MAX
+
+        private fun refreshCollectionEntryStripes(rowsPanel: JPanel) {
+            rowsPanel.components.forEachIndexed { index, component ->
+                val panel = component as? JPanel ?: return@forEachIndexed
+                panel.isOpaque = false
+                panel.putClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY, collectionStripeBackground(index))
+                panel.components.forEach { child ->
+                    if (child is JComponent && child !is JButton) {
+                        child.isOpaque = false
+                    }
+                }
+                panel.repaint()
+            }
+        }
+
+        private fun refreshApplyEditorStripes(container: JPanel) {
+            var stripeIndex = 0
+            container.components.forEach { component ->
+                val child = component as? JComponent ?: return@forEach
+                if (child.getClientProperty(APPLY_EDITOR_COMPONENT_KEY) != true) return@forEach
+                val depth = (child.getClientProperty(APPLY_EDITOR_DEPTH_KEY) as? Int) ?: 0
+                child.putClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY, applyEditorStripeBackground(stripeIndex, depth))
+                child.repaint()
+                stripeIndex += 1
+            }
+        }
+
+        private fun applyEditorStripeBackground(index: Int, depth: Int): Color {
+            val dark = com.intellij.util.ui.UIUtil.isUnderDarcula()
+            val alpha = if (dark) {
+                if (index % 2 == 0) 18 + depth * 5 else 34 + depth * 5
+            } else {
+                if (index % 2 == 0) 6 + depth * 2 else 12 + depth * 2
+            }
+            val clampedAlpha = alpha.coerceAtMost(if (dark) 84 else 28)
+            return if (dark) {
+                Color(255, 255, 255, clampedAlpha)
+            } else {
+                Color(0, 0, 0, clampedAlpha)
+            }
+        }
+
+        private fun collectionStripeBackground(index: Int): Color {
+            return if (com.intellij.util.ui.UIUtil.isUnderDarcula()) {
+                Color(255, 255, 255, if (index % 2 == 0) 14 else 26)
+            } else {
+                Color(0, 0, 0, if (index % 2 == 0) 4 else 8)
+            }
+        }
+
+        private fun BigInteger.toIntExactOrNull(): Int? =
+            try {
+                intValueExact()
+            } catch (_: ArithmeticException) {
+                null
+            }
+
+        private fun BigInteger.toLongExactOrNull(): Long? =
+            try {
+                longValueExact()
+            } catch (_: ArithmeticException) {
+                null
+            }
 
         private data class ApplyContext(
             val blueprintFile: File,
@@ -1741,6 +2404,11 @@ class AikenRunConfiguration(
             val validator: String,
             val selectedValidator: String,
             val parameters: List<ApplyResolvedParameter>
+        )
+
+        private data class DecodedApplyData(
+            val data: ApplyData,
+            val nextOffset: Int
         )
 
         private data class ApplyResolvedParameter(
@@ -5659,6 +6327,14 @@ class AikenRunConfiguration(
         const val DEFAULT_ARTIFACT_TESTNET_TEMPLATE = "%module%.%validator%.addr_test"
         const val DEFAULT_ARTIFACT_POLICY_TEMPLATE = "%module%.%validator%.policy"
         const val IDE_WATCH_RESTART_DEBOUNCE_MS = 450L
+        const val APPLY_LIST_EDITOR_KEY = "aiken.apply.list.editor"
+        const val APPLY_MAP_KEY_EDITOR_KEY = "aiken.apply.map.key.editor"
+        const val APPLY_MAP_VALUE_EDITOR_KEY = "aiken.apply.map.value.editor"
+        const val APPLY_EDITOR_COMPONENT_KEY = "aiken.apply.editor.component"
+        const val APPLY_EDITOR_DEPTH_KEY = "aiken.apply.editor.depth"
+        const val APPLY_EDITOR_STRIPABLE_KEY = "aiken.apply.editor.stripable"
+        const val APPLY_EDITOR_STRIPE_COLOR_KEY = "aiken.apply.editor.stripe.color"
+        val CBOR_UNSIGNED_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
         val APPLY_AUTO_CBOR_ACCUMULATOR = ConcurrentHashMap<String, MutableList<String>>()
         val APPLY_AUTO_CBOR_QUEUE = ConcurrentHashMap<String, ArrayDeque<String>>()
         val APPLY_AUTO_HAS_NON_CONFIGURED_APPLIES = ConcurrentHashMap<String, AtomicBoolean>()
