@@ -94,12 +94,14 @@ import java.util.concurrent.atomic.AtomicReference
 import com.intellij.util.messages.MessageBusConnection
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
+import com.intellij.ui.ColorUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBComboBoxLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -1644,16 +1646,16 @@ class AikenRunConfiguration(
         }
 
         private fun makeHeaderActionButtonCompact(button: JButton) {
-            styleApplyButton(button, compact = true)
+            styleApplyButton(button, compact = true, filled = true)
             button.alignmentY = Component.CENTER_ALIGNMENT
         }
 
-        private fun styleApplyButton(button: JButton, compact: Boolean) {
+        private fun styleApplyButton(button: JButton, compact: Boolean, filled: Boolean = false) {
             button.isFocusable = false
-            button.isOpaque = false
-            button.isContentAreaFilled = false
-            button.background = Color(0, 0, 0, 0)
-            button.margin = if (compact) JBUI.insets(1, 6) else JBUI.insets(3, 8)
+            button.isOpaque = filled
+            button.isContentAreaFilled = filled
+            button.background = if (filled) UIUtil.getPanelBackground() else Color(0, 0, 0, 0)
+            button.margin = if (compact) JBUI.insets(0, 6) else JBUI.insets(3, 8)
             button.border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
             button.maximumSize = button.preferredSize
         }
@@ -1676,12 +1678,14 @@ class AikenRunConfiguration(
                 add(field, BorderLayout.CENTER)
             }
 
-        private fun applyControlBorderColor(): Color =
-            if (com.intellij.util.ui.UIUtil.isUnderDarcula()) {
-                Color(255, 255, 255, 96)
+        private fun applyControlBorderColor(): Color {
+            val separator = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+            return if (UIUtil.isUnderDarcula()) {
+                Color(separator.red, separator.green, separator.blue, 168)
             } else {
-                Color(0, 0, 0, 92)
+                Color(separator.red, separator.green, separator.blue, 124)
             }
+        }
 
         private fun applyControlBorder(arc: Int, insets: Insets): AbstractBorder =
             object : AbstractBorder() {
@@ -1856,19 +1860,43 @@ class AikenRunConfiguration(
             private var editorName = name
             private val editorType = type
             private val titleFont = JBLabel().font.deriveFont(Font.BOLD)
-            private val titleLabel = JBLabel().apply {
-                font = titleFont
+            private val titleLabel =
+                JBLabel().apply {
+                    font = titleFont
+                    foreground = UIUtil.getLabelForeground()
+                    isOpaque = false
+                }
+            protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                isOpaque = false
+            }
+            private val headerPanel =
+                JPanel().apply {
+                    isOpaque = false
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    border = JBUI.Borders.empty(0, JBUI.scale(8), 0, JBUI.scale(8))
+                    add(titleLabel)
+                    add(Box.createHorizontalStrut(JBUI.scale(8)))
+                    add(headerActionsPanel)
+                    add(Box.createHorizontalGlue())
+                }
+            protected val contentPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
             }
             override val component =
                 object : JPanel(BorderLayout()) {
                     override fun paintComponent(g: Graphics) {
+                        val g2 = g.create() as Graphics2D
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                        val arc = JBUI.scale(12)
                         val stripe = getClientProperty(APPLY_EDITOR_STRIPE_COLOR_KEY) as? Color
                         if (stripe != null) {
-                            val g2 = g.create() as Graphics2D
                             g2.color = stripe
-                            g2.fillRect(0, 0, width, height)
-                            g2.dispose()
+                            g2.fillRoundRect(0, 0, width - JBUI.scale(1), height - JBUI.scale(1), arc, arc)
                         }
+                        g2.color = applyControlBorderColor()
+                        g2.drawRoundRect(0, 0, width - JBUI.scale(1), height - JBUI.scale(1), arc, arc)
+                        g2.dispose()
                         super.paintComponent(g)
                     }
 
@@ -1884,13 +1912,7 @@ class AikenRunConfiguration(
                     override fun getMaximumSize(): Dimension =
                         if (depth == 0) preferredSize else Dimension(Int.MAX_VALUE, preferredSize.height)
                 }.apply {
-                val lineColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
-                val leftBorder = BorderFactory.createMatteBorder(0, JBUI.scale(1), 0, 0, lineColor)
-                border =
-                    JBUI.Borders.compound(
-                        leftBorder,
-                        JBUI.Borders.empty(6, editorLeftInset(), 6, 6)
-                    )
+                border = JBUI.Borders.empty(0, editorLeftInset(), 6, 6)
                 alignmentX = Component.LEFT_ALIGNMENT
                 putClientProperty(APPLY_EDITOR_COMPONENT_KEY, true)
                 putClientProperty(APPLY_EDITOR_DEPTH_KEY, depth)
@@ -1898,26 +1920,17 @@ class AikenRunConfiguration(
                 isOpaque = false
             }
 
-            protected val contentPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                isOpaque = false
-            }
-            protected val headerActionsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-                isOpaque = false
-            }
-
             init {
                 updateTitleLabel()
-                val top = JPanel().apply {
-                    isOpaque = false
-                    layout = BoxLayout(this, BoxLayout.X_AXIS)
-                    add(titleLabel)
-                    add(Box.createHorizontalStrut(JBUI.scale(8)))
-                    add(headerActionsPanel)
-                    add(Box.createHorizontalGlue())
-                }
-                component.add(top, BorderLayout.NORTH)
-                component.add(contentPanel, BorderLayout.CENTER)
+                component.add(headerPanel, BorderLayout.NORTH)
+                component.add(
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = false
+                        border = JBUI.Borders.empty(0, JBUI.scale(8), 8, JBUI.scale(8))
+                        add(contentPanel, BorderLayout.CENTER)
+                    },
+                    BorderLayout.CENTER
+                )
             }
 
             override fun rename(newName: String) {
@@ -1964,7 +1977,7 @@ class AikenRunConfiguration(
                 return titleWidth + titlePadding
             }
 
-            private fun editorLeftInset(): Int = 4
+            private fun editorLeftInset(): Int = 10
 
             private fun currentTitleText(): String = "$editorName :: $editorType"
 
@@ -2362,26 +2375,28 @@ class AikenRunConfiguration(
         }
 
         private fun applyEditorStripeBackground(index: Int, depth: Int): Color {
-            val dark = com.intellij.util.ui.UIUtil.isUnderDarcula()
-            val alpha = if (dark) {
-                if (index % 2 == 0) 18 + depth * 5 else 34 + depth * 5
-            } else {
-                if (index % 2 == 0) 6 + depth * 2 else 12 + depth * 2
-            }
-            val clampedAlpha = alpha.coerceAtMost(if (dark) 84 else 28)
-            return if (dark) {
-                Color(255, 255, 255, clampedAlpha)
-            } else {
-                Color(0, 0, 0, clampedAlpha)
-            }
+            val base = UIUtil.getPanelBackground()
+            val dark = UIUtil.isUnderDarcula()
+            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
+            val fraction =
+                if (dark) {
+                    (if (index % 2 == 0) 0.035 else 0.065) + depth * 0.01
+                } else {
+                    (if (index % 2 == 0) 0.012 else 0.022) + depth * 0.004
+                }.coerceAtMost(if (dark) 0.12 else 0.045)
+            return ColorUtil.mix(base, mixTarget, fraction.toDouble())
         }
 
         private fun collectionStripeBackground(index: Int): Color {
-            return if (com.intellij.util.ui.UIUtil.isUnderDarcula()) {
-                Color(255, 255, 255, if (index % 2 == 0) 14 else 26)
+            val base = UIUtil.getPanelBackground()
+            val dark = UIUtil.isUnderDarcula()
+            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
+            val fraction = if (dark) {
+                if (index % 2 == 0) 0.028 else 0.05
             } else {
-                Color(0, 0, 0, if (index % 2 == 0) 4 else 8)
+                if (index % 2 == 0) 0.008 else 0.016
             }
+            return ColorUtil.mix(base, mixTarget, fraction)
         }
 
         private fun BigInteger.toIntExactOrNull(): Int? =
