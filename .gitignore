@@ -6,6 +6,7 @@ build/
 .kotlin
 .intellijPlatform/
 .gradle-local/
+*.hprof
 
 ### IntelliJ IDEA ###
 .idea
@@ -42,3 +43,4 @@ bin/
 .DS_Store
 info.md
 /docs/
+/update.md

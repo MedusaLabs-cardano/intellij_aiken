@@ -15,25 +15,25 @@ import com.intellij.psi.PsiNamedElement
 import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiReference
 import com.intellij.psi.PsiReferenceBase
-import com.intellij.psi.TokenType
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.LocalSearchScope
 import com.intellij.psi.search.SearchScope
 import com.intellij.refactoring.listeners.RefactoringElementListener
 import com.intellij.refactoring.rename.RenamePsiElementProcessor
 import com.intellij.usageView.UsageInfo
 import com.intellij.util.indexing.FileBasedIndex
-import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
-import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AikenImportIndex
-import com.medusalabs.aiken.index.AikenIdentifierIndex
 import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
 import com.medusalabs.aiken.navigation.AikenDeclarationResolver
+import com.medusalabs.aiken.project.AikenSearchScopes
+import com.medusalabs.aiken.search.AikenUseScopeProvider
+import com.medusalabs.aiken.search.AikenUsageSearchSupport
+import com.medusalabs.aiken.search.LegacyIndexedSearchScope
 
 class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
     override fun canProcessElement(element: PsiElement): Boolean {
@@ -71,14 +71,8 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         val name = resolvedTarget.text
         if (name.isEmpty()) return emptyList()
 
-        val config = RenameConfig.fromElement(resolvedTarget, type) ?: return emptyList()
         val project = resolvedTarget.project
-        val targetFiles = collectTargetFiles(project, resolvedTarget, config, name)
-        if (targetFiles.isEmpty()) return emptyList()
-
-        val limitInFile: TextRange? = config.limitFactory?.invoke(resolvedTarget, name)
         val psiManager = PsiManager.getInstance(project)
-        val psiDocumentManager = PsiDocumentManager.getInstance(project)
         val references = LinkedHashMap<Pair<VirtualFile, TextRange>, PsiReference>()
         val declarationFile = resolvedTarget.containingFile?.virtualFile
         val declarationRange = resolvedTarget.textRange
@@ -90,16 +84,52 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
             }
         }
 
-        for (vf in targetFiles) {
-            val psiFile = psiManager.findFile(vf) ?: continue
-            val document = psiDocumentManager.getDocument(psiFile) ?: continue
-            val limit = if (vf == target.containingFile?.virtualFile) limitInFile else null
-            val ranges = collectRenameRanges(document, config, name, limit) +
-                collectImportedNameRanges(document, config, name)
-            for (range in ranges.distinct()) {
-                val key = vf to range
-                if (!references.containsKey(key)) {
-                    references[key] = AikenRenameReference(resolvedTarget, psiFile, range)
+        if (resolvedTarget.containingFile?.fileType == AikenFileType) {
+            if (searchScope is LocalSearchScope) {
+                val hits =
+                    AikenUsageSearchSupport.findResolvedAikenReferencesInLocalScope(
+                        resolvedTarget,
+                        searchScope,
+                        searchInCommentsAndStrings
+                    )
+                for (hit in hits) {
+                    val key = hit.virtualFile to hit.range
+                    if (!references.containsKey(key)) {
+                        references[key] = hit.reference
+                    }
+                }
+            } else {
+                val platformReferences = super.findReferences(resolvedTarget, searchScope, searchInCommentsAndStrings)
+                for (reference in platformReferences) {
+                    val file = reference.element.containingFile?.virtualFile ?: continue
+                    val range = reference.rangeInElement.shiftRight(reference.element.textRange.startOffset)
+                    val key = file to range
+                    if (!references.containsKey(key)) {
+                        references[key] = reference
+                    }
+                }
+            }
+            return references.values.toList()
+        } else {
+            val config = RenameConfig.fromElement(type) ?: return emptyList()
+            val effectiveSearchScope =
+                LegacyIndexedSearchScope.create(project, AikenSearchScopes.forElement(resolvedTarget), searchScope)
+            val limitInFile = config.limitFactory?.invoke(resolvedTarget, name)
+            val targetFiles = collectTargetFiles(project, resolvedTarget, config, name, effectiveSearchScope)
+            if (targetFiles.isEmpty()) return references.values.toList()
+            val psiDocumentManager = PsiDocumentManager.getInstance(project)
+            for (vf in targetFiles) {
+                val psiFile = psiManager.findFile(vf) ?: continue
+                val document = psiDocumentManager.getDocument(psiFile) ?: continue
+                val limit = if (vf == resolvedTarget.containingFile?.virtualFile) limitInFile else null
+                val ranges = collectRenameRanges(document, config, name, limit)
+                for (range in ranges.distinct()) {
+                    if (!effectiveSearchScope.contains(psiFile, range)) continue
+
+                    val key = vf to range
+                    if (!references.containsKey(key)) {
+                        references[key] = AikenRenameReference(resolvedTarget, psiFile, range)
+                    }
                 }
             }
         }
@@ -121,72 +151,134 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         val type = resolvedTarget.node?.elementType ?: return
         val project = resolvedTarget.project
 
-        val config = RenameConfig.fromElement(resolvedTarget, type) ?: return
-        val targetFiles = collectTargetFiles(project, resolvedTarget, config, oldName)
-        if (targetFiles.isEmpty()) return
-        val limitInFile: TextRange? = config.limitFactory?.invoke(resolvedTarget, oldName)
+        if (resolvedTarget.containingFile?.fileType == AikenFileType) {
+            val platformUsages =
+                if (usages.isNotEmpty()) {
+                    filterPlatformUsages(resolvedTarget, usages)
+                } else {
+                    val generatedUsages =
+                        findReferences(resolvedTarget, AikenUseScopeProvider.effectiveForElement(resolvedTarget), false)
+                            .map(::UsageInfo)
+                            .toTypedArray()
+                    filterPlatformUsages(resolvedTarget, generatedUsages)
+                }
+
+            super.renameElement(resolvedTarget, newName, platformUsages, listener)
+            return
+        }
+
+        val config = RenameConfig.fromElement(type) ?: return
+        val explicitUsageRanges = collectUsageRanges(resolvedTarget, usages)
 
         WriteCommandAction.runWriteCommandAction(project) {
             val psiDocumentManager = PsiDocumentManager.getInstance(project)
-            for (vf in targetFiles) {
-                val psiFile = PsiManager.getInstance(project).findFile(vf) ?: continue
-                val document = psiDocumentManager.getDocument(psiFile) ?: continue
-                val limit = if (vf == resolvedTarget.containingFile?.virtualFile) limitInFile else null
-                val ranges = collectRenameRanges(document, config, oldName, limit) +
-                    collectImportedNameRanges(document, config, oldName)
-                if (ranges.isEmpty()) continue
-
-                for (range in ranges.distinct().sortedByDescending { it.startOffset }) {
-                    document.replaceString(range.startOffset, range.endOffset, newName)
+            if (explicitUsageRanges.isNotEmpty()) {
+                for ((vf, ranges) in explicitUsageRanges) {
+                    val psiFile = PsiManager.getInstance(project).findFile(vf) ?: continue
+                    val document = psiDocumentManager.getDocument(psiFile) ?: continue
+                    for (range in ranges.distinct().sortedByDescending { it.startOffset }) {
+                        document.replaceString(range.startOffset, range.endOffset, newName)
+                    }
+                    psiDocumentManager.commitDocument(document)
                 }
-                psiDocumentManager.commitDocument(document)
+            } else {
+                val fallbackSearchScope =
+                    LegacyIndexedSearchScope.create(
+                        project,
+                        AikenSearchScopes.forElement(resolvedTarget),
+                        AikenSearchScopes.forElement(resolvedTarget)
+                    )
+                val limitInFile = config.limitFactory?.invoke(resolvedTarget, oldName)
+                val targetFiles = collectTargetFiles(project, resolvedTarget, config, oldName, fallbackSearchScope)
+                if (targetFiles.isEmpty()) return@runWriteCommandAction
+                for (vf in targetFiles) {
+                    val psiFile = PsiManager.getInstance(project).findFile(vf) ?: continue
+                    val document = psiDocumentManager.getDocument(psiFile) ?: continue
+                    val limit = if (vf == resolvedTarget.containingFile?.virtualFile) limitInFile else null
+                    val ranges = collectRenameRanges(document, config, oldName, limit)
+                    if (ranges.isEmpty()) continue
+
+                    for (range in ranges.distinct().sortedByDescending { it.startOffset }) {
+                        document.replaceString(range.startOffset, range.endOffset, newName)
+                    }
+                    psiDocumentManager.commitDocument(document)
+                }
             }
         }
-
         listener?.elementRenamed(resolvedTarget)
+    }
+
+    private fun collectUsageRanges(
+        resolvedTarget: PsiElement,
+        usages: Array<UsageInfo>
+    ): Map<VirtualFile, List<TextRange>> {
+        if (usages.isEmpty()) return emptyMap()
+
+        val rangesByFile = LinkedHashMap<VirtualFile, LinkedHashSet<TextRange>>()
+
+        fun addRange(file: VirtualFile?, range: TextRange?) {
+            if (file == null || range == null) return
+            rangesByFile.computeIfAbsent(file) { LinkedHashSet() }.add(range)
+        }
+
+        addRange(resolvedTarget.containingFile?.virtualFile, resolvedTarget.textRange)
+
+        for (usage in usages) {
+            val file = usage.virtualFile ?: usage.file?.virtualFile ?: usage.element?.containingFile?.virtualFile
+            val segment = usage.segment
+            val range =
+                when {
+                    segment != null -> TextRange(segment.startOffset, segment.endOffset)
+                    usage.element != null -> usage.element!!.textRange
+                    else -> null
+                }
+            addRange(file, range)
+        }
+
+        return rangesByFile.mapValues { entry -> entry.value.toList() }
+    }
+
+    private fun filterPlatformUsages(
+        resolvedTarget: PsiElement,
+        usages: Array<UsageInfo>
+    ): Array<UsageInfo> {
+        if (usages.isEmpty()) return usages
+
+        val declarationFile = resolvedTarget.containingFile?.virtualFile
+        val declarationRange = resolvedTarget.textRange
+
+        return usages.filterNot { usage ->
+            val reference = usage.reference
+            if (reference !is AikenRenameReference) return@filterNot false
+
+            val usageFile = usage.virtualFile ?: usage.file?.virtualFile ?: usage.element?.containingFile?.virtualFile
+            usageFile == declarationFile && reference.renameRange == declarationRange
+        }.toTypedArray()
     }
 
     private fun collectTargetFiles(
         project: Project,
         element: PsiElement,
         config: RenameConfig,
-        name: String
+        name: String,
+        searchScope: LegacyIndexedSearchScope
     ): Collection<VirtualFile> {
-        val scope = GlobalSearchScope.allScope(project)
         val currentFile = element.containingFile?.virtualFile
-        return when (config.scope) {
-            RenameScope.CURRENT_FILE -> currentFile?.let { listOf(it) } ?: emptyList()
-            RenameScope.ALL_PROJECT_FILES -> collectProjectFiles(project, config, name)
-            RenameScope.IMPORTED_FILES -> {
-                val imported = collectImportedFiles(project, config, name, scope).toMutableSet()
-                if (currentFile != null) imported.add(currentFile)
-                imported
-            }
+        val files =
+            when (config.scope) {
+                RenameScope.CURRENT_FILE -> currentFile?.let { listOf(it) } ?: emptyList()
+                RenameScope.ALL_PROJECT_FILES -> collectProjectFiles(project, config, name, searchScope.indexScope)
         }
+        return files.filter(searchScope::contains)
     }
 
-    private fun collectImportedFiles(
+    private fun collectProjectFiles(
         project: Project,
         config: RenameConfig,
         name: String,
         scope: GlobalSearchScope
     ): Collection<VirtualFile> {
         if (DumbService.getInstance(project).isDumb) return emptyList()
-        if (config.fileType != AikenFileType) {
-            return emptyList()
-        }
-
-        return try {
-            // Import index is content-based and doesn't enforce a minimum key length.
-            FileBasedIndex.getInstance().getContainingFiles(AikenImportIndex.NAME, name, scope)
-        } catch (_: IndexNotReadyException) {
-            emptyList()
-        }
-    }
-
-    private fun collectProjectFiles(project: Project, config: RenameConfig, name: String): Collection<VirtualFile> {
-        if (DumbService.getInstance(project).isDumb) return emptyList()
-        val scope = GlobalSearchScope.allScope(project)
         return try {
             // Our identifier index only stores names with length >= 2.
             if (name.length < 2) {
@@ -237,64 +329,11 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         val fileType: com.intellij.openapi.fileTypes.FileType,
         val indexId: com.intellij.util.indexing.ID<String, Int>,
         val scope: RenameScope,
-        val limitFactory: ((PsiElement, String) -> TextRange?)? = null,
-        val includeImportedNameRanges: Boolean = false
+        val limitFactory: ((PsiElement, String) -> TextRange?)? = null
     ) {
         companion object {
-            fun fromElement(element: PsiElement, type: com.intellij.psi.tree.IElementType): RenameConfig? =
+            fun fromElement(type: com.intellij.psi.tree.IElementType): RenameConfig? =
                 when (type) {
-                    AikenTokenTypes.FUNCTION -> RenameConfig(
-                        lexerFactory = { AikenLexing.createLexer() },
-                        renameTokenTypes = setOf(AikenTokenTypes.FUNCTION),
-                        fileType = AikenFileType,
-                        indexId = AikenIdentifierIndex.NAME,
-                        scope = RenameScope.IMPORTED_FILES,
-                        includeImportedNameRanges = true
-                    )
-                    AikenTokenTypes.TYPE -> RenameConfig(
-                        lexerFactory = { AikenLexing.createLexer() },
-                        renameTokenTypes = setOf(AikenTokenTypes.TYPE),
-                        fileType = AikenFileType,
-                        indexId = AikenIdentifierIndex.NAME,
-                        scope = RenameScope.IMPORTED_FILES
-                    )
-                    AikenTokenTypes.IDENTIFIER -> {
-                        val isConst = isConstDeclaration(element)
-                        if (isConst) {
-                            RenameConfig(
-                                lexerFactory = { AikenLexing.createLexer() },
-                                renameTokenTypes = setOf(AikenTokenTypes.IDENTIFIER),
-                                fileType = AikenFileType,
-                                indexId = AikenIdentifierIndex.NAME,
-                                scope = RenameScope.IMPORTED_FILES
-                            )
-                        } else {
-                            RenameConfig(
-                                lexerFactory = { AikenLexing.createLexer() },
-                                renameTokenTypes = setOf(
-                                    AikenTokenTypes.IDENTIFIER,
-                                    AikenTokenTypes.FIELD,
-                                    AikenTokenTypes.FUNCTION
-                                ),
-                                fileType = AikenFileType,
-                                indexId = AikenIdentifierIndex.NAME,
-                                scope = RenameScope.CURRENT_FILE,
-                                limitFactory = ::computeAikenVariableScope
-                            )
-                        }
-                    }
-                    AikenTokenTypes.FIELD -> RenameConfig(
-                        lexerFactory = { AikenLexing.createLexer() },
-                        renameTokenTypes = setOf(
-                            AikenTokenTypes.IDENTIFIER,
-                            AikenTokenTypes.FIELD,
-                            AikenTokenTypes.FUNCTION
-                        ),
-                        fileType = AikenFileType,
-                        indexId = AikenIdentifierIndex.NAME,
-                        scope = RenameScope.CURRENT_FILE,
-                        limitFactory = ::computeAikenVariableScope
-                    )
                     UplcTokenTypes.FUNCTION -> RenameConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         renameTokenTypes = setOf(UplcTokenTypes.FUNCTION),
@@ -325,315 +364,12 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
                     )
                     else -> null
                 }
-
-            private fun computeAikenVariableScope(element: PsiElement, oldName: String): TextRange? {
-                val psiFile = element.containingFile ?: return null
-                val document = PsiDocumentManager.getInstance(element.project).getDocument(psiFile) ?: return null
-                val text = document.charsSequence
-                val caretOffset = element.textRange.startOffset
-                return findAikenVariableScope(document, text, oldName, caretOffset)
-            }
-
-            private data class ScopeCandidate(val declarationOffset: Int, val scope: TextRange)
-
-            private fun findAikenVariableScope(
-                document: Document,
-                text: CharSequence,
-                name: String,
-                caretOffset: Int
-            ): TextRange? {
-                val bracePairs = collectScopeBracePairs(document, text)
-                val bracePairsByStart = bracePairs.associate { it.openOffset to it.closeOffset }
-                val bracePairsByEnd = bracePairs.associate { it.closeOffset to it.openOffset }
-
-                val candidates = ArrayList<ScopeCandidate>()
-                val lexer = AikenLexing.createLexer()
-                lexer.start(text)
-
-                val openBraces = ArrayList<Int>()
-                var collectingBindings = false
-                var collectingParams = false
-                var afterParams = false
-                var parenDepth = 0
-                var pendingParamNames = ArrayList<Pair<Int, String>>()
-                while (lexer.tokenType != null) {
-                    val t = lexer.tokenType
-                    val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-
-                    when (t) {
-                        AikenTokenTypes.LBRACE -> {
-                            if (bracePairsByStart.containsKey(lexer.tokenStart)) {
-                                openBraces.add(lexer.tokenStart)
-                            }
-                        }
-                        AikenTokenTypes.RBRACE -> {
-                            val open = bracePairsByEnd[lexer.tokenEnd]
-                            if (open != null) {
-                                val idx = openBraces.lastIndexOf(open)
-                                if (idx != -1) openBraces.removeAt(idx)
-                            }
-                        }
-                    }
-
-                    if (collectingParams) {
-                        when (t) {
-                            AikenTokenTypes.LPAREN -> parenDepth += 1
-                            AikenTokenTypes.RPAREN -> {
-                                parenDepth -= 1
-                                if (parenDepth <= 0) {
-                                    collectingParams = false
-                                    afterParams = true
-                                }
-                            }
-                            AikenTokenTypes.IDENTIFIER,
-                            AikenTokenTypes.FIELD -> pendingParamNames.add(lexer.tokenStart to tokenText)
-                        }
-                        lexer.advance()
-                        continue
-                    }
-
-                    if (afterParams) {
-                        if (t == AikenTokenTypes.LBRACE && bracePairsByStart.containsKey(lexer.tokenStart)) {
-                            val start = lexer.tokenStart
-                            val end = bracePairsByStart[start] ?: text.length
-                            val scope = TextRange(start, end)
-                            for ((offset, paramName) in pendingParamNames) {
-                                if (paramName == name) {
-                                    candidates.add(ScopeCandidate(offset, scope))
-                                }
-                            }
-                            pendingParamNames = ArrayList()
-                            afterParams = false
-                        }
-                        lexer.advance()
-                        continue
-                    }
-
-                    if (collectingBindings) {
-                        when {
-                            t == TokenType.WHITE_SPACE -> {}
-                            t == AikenTokenTypes.OPERATOR && tokenText == "=" -> collectingBindings = false
-                            t == AikenTokenTypes.IDENTIFIER || t == AikenTokenTypes.FIELD -> {
-                                if (tokenText == name) {
-                                    val scope =
-                                        openBraces.lastOrNull()?.let { start ->
-                                            val end = bracePairsByStart[start] ?: text.length
-                                            TextRange(start, end)
-                                        } ?: TextRange(0, text.length)
-                                    candidates.add(ScopeCandidate(lexer.tokenStart, scope))
-                                }
-                            }
-                        }
-                        lexer.advance()
-                        continue
-                    }
-
-                    if (t == AikenTokenTypes.KEYWORD && (tokenText == "let" || tokenText == "expect")) {
-                        collectingBindings = true
-                        lexer.advance()
-                        continue
-                    }
-
-                    if (t == AikenTokenTypes.KEYWORD &&
-                        (tokenText == "fn" || tokenText == "test" || tokenText == "bench" || tokenText == "validator")
-                    ) {
-                        pendingParamNames = ArrayList()
-                        parenDepth = 0
-                        collectingParams = false
-                        afterParams = false
-
-                        lexer.advance()
-                        while (lexer.tokenType != null) {
-                            val tt = lexer.tokenType
-                            val tText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-                            if (tt == TokenType.WHITE_SPACE) {
-                                if (tText.contains('\n')) break
-                                lexer.advance()
-                                continue
-                            }
-                            if (tt == AikenTokenTypes.LPAREN) {
-                                collectingParams = true
-                                parenDepth = 0
-                                break
-                            }
-                            if (tt == AikenTokenTypes.LBRACE) {
-                                // No parameter list for this declaration.
-                                break
-                            }
-                            lexer.advance()
-                        }
-                        continue
-                    }
-
-                    lexer.advance()
-                }
-
-                val matchingDeclaration =
-                    candidates
-                        .asSequence()
-                        .filter {
-                            it.declarationOffset <= caretOffset &&
-                                (it.scope.containsOffset(caretOffset) || it.declarationOffset == caretOffset)
-                        }
-                        .maxByOrNull { it.declarationOffset }
-                if (matchingDeclaration != null) return matchingDeclaration.scope
-
-                return bracePairs
-                    .asSequence()
-                    .filter { (start, end) -> start < caretOffset && end > caretOffset }
-                    .minByOrNull { (start, end) -> end - start }
-                    ?.let { (start, end) -> TextRange(start, end) }
-            }
-
-            private data class ScopeBracePair(val openOffset: Int, val closeOffset: Int)
-
-            private fun collectScopeBracePairs(document: Document, text: CharSequence): List<ScopeBracePair> {
-                val pairs = ArrayList<ScopeBracePair>()
-                val stack = ArrayDeque<ScopeOpen>()
-
-                var i = 0
-                var inLineComment = false
-                var inString = false
-
-                while (i < text.length) {
-                    val ch = text[i]
-
-                    if (inLineComment) {
-                        if (ch == '\n' || ch == '\r') inLineComment = false
-                        i++
-                        continue
-                    }
-
-                    if (inString) {
-                        if (ch == '\\' && i + 1 < text.length) {
-                            i += 2
-                            continue
-                        }
-                        if (ch == '"') inString = false
-                        i++
-                        continue
-                    }
-
-                    if (ch == '/' && i + 1 < text.length && text[i + 1] == '/') {
-                        inLineComment = true
-                        i += 2
-                        continue
-                    }
-
-                    if (ch == '"') {
-                        inString = true
-                        i++
-                        continue
-                    }
-
-                    when (ch) {
-                        '{' -> {
-                            val isScope = isScopeBrace(document, text, i)
-                            stack.addLast(ScopeOpen(i, isScope))
-                        }
-                        '}' -> {
-                            if (stack.isNotEmpty()) {
-                                val open = stack.removeLast()
-                                if (open.isScope) {
-                                    pairs.add(ScopeBracePair(open.offset, i + 1))
-                                }
-                            }
-                        }
-                    }
-
-                    i++
-                }
-
-                return pairs
-            }
-
-            private data class ScopeOpen(val offset: Int, val isScope: Boolean)
-
-            private fun isScopeBrace(document: Document, text: CharSequence, openOffset: Int): Boolean {
-                val line = document.getLineNumber(openOffset)
-                val lineStart = document.getLineStartOffset(line)
-                val prefix = text.subSequence(lineStart, openOffset).toString()
-
-                if (prefix.contains("->")) return true
-                if (containsWord(prefix, "if") || containsWord(prefix, "else")) return true
-                if (containsWord(prefix, "when") && containsWord(prefix, "is")) return true
-                if (containsAnyWord(prefix, setOf("fn", "test", "bench", "validator", "type"))) return true
-                if (containsAnyWord(prefix, setOf("let", "const", "expect")) && !prefix.contains("->")) return false
-
-                if (prefix.contains(")")) {
-                    val startLine = (line - 20).coerceAtLeast(0)
-                    for (i in line downTo startLine) {
-                        val start = document.getLineStartOffset(i)
-                        val end = document.getLineEndOffset(i)
-                        val raw = text.subSequence(start, end).toString().trim()
-                        if (raw.isEmpty() || raw.startsWith("//")) continue
-                        if (containsAnyWord(raw, setOf("let", "const", "expect", "when", "if", "else"))) return false
-                        if (containsAnyWord(raw, setOf("fn", "test", "bench", "validator", "type"))) return true
-                    }
-                }
-
-                return false
-            }
-
-            private fun containsAnyWord(text: String, words: Set<String>): Boolean =
-                words.any { containsWord(text, it) }
-
-            private fun containsWord(text: String, word: String): Boolean {
-                if (text.length < word.length) return false
-                var i = 0
-                while (i + word.length <= text.length) {
-                    var j = 0
-                    while (j < word.length && text[i + j] == word[j]) j++
-                    if (j == word.length) {
-                        val beforeOk = i == 0 || !(text[i - 1].isLetterOrDigit() || text[i - 1] == '_')
-                        val afterIndex = i + word.length
-                        val afterOk = afterIndex >= text.length || !(text[afterIndex].isLetterOrDigit() || text[afterIndex] == '_')
-                        if (beforeOk && afterOk) return true
-                    }
-                    i++
-                }
-                return false
-            }
-
-            private fun isConstDeclaration(element: PsiElement): Boolean {
-                val psiFile = element.containingFile ?: return false
-                if (psiFile.fileType != AikenFileType) return false
-                val document = PsiDocumentManager.getInstance(element.project).getDocument(psiFile) ?: return false
-
-                val targetRange = element.textRange
-                val text = document.charsSequence
-                val lexer = AikenLexing.createLexer()
-                lexer.start(text)
-
-                var prevType: com.intellij.psi.tree.IElementType? = null
-                var prevText: String? = null
-                var braceDepth = 0
-                while (lexer.tokenType != null) {
-                    when (lexer.tokenType) {
-                        AikenTokenTypes.LBRACE -> braceDepth += 1
-                        AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
-                    }
-                    val start = lexer.tokenStart
-                    val end = lexer.tokenEnd
-                    if (start == targetRange.startOffset && end == targetRange.endOffset) {
-                        return braceDepth == 0 && prevType == AikenTokenTypes.KEYWORD && prevText == "const"
-                    }
-                    val t = lexer.tokenType
-                    if (t != null && t != TokenType.WHITE_SPACE && t != AikenTokenTypes.COMMENT) {
-                        prevType = t
-                        prevText = text.subSequence(start, end).toString()
-                    }
-                    lexer.advance()
-                }
-                return false
-            }
         }
     }
 
     private enum class RenameScope {
         CURRENT_FILE,
-        ALL_PROJECT_FILES,
-        IMPORTED_FILES
+        ALL_PROJECT_FILES
     }
 
     private class AikenRenameReference(
@@ -641,24 +377,22 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
         element: PsiElement,
         range: TextRange
     ) : PsiReferenceBase<PsiElement>(element, range, false) {
+        val renameRange: TextRange
+            get() = rangeInElement.shiftRight(element.textRange.startOffset)
+
         override fun resolve(): PsiElement = target
-        override fun getVariants(): Array<Any> = emptyArray()
-    }
 
-    private fun collectImportedNameRanges(document: Document, config: RenameConfig, oldName: String): List<TextRange> {
-        if (!config.includeImportedNameRanges) return emptyList()
-        if (config.fileType != AikenFileType) return emptyList()
+        override fun handleElementRename(newElementName: String): PsiElement {
+            val project = element.project
+            val file = element.containingFile ?: return element
+            val document = PsiDocumentManager.getInstance(project).getDocument(file) ?: return element
+            val range = renameRange
 
-        val text = document.charsSequence
-        val statements = AikenUseStatementParser.parse(text)
-        val ranges = ArrayList<TextRange>()
-        for (stmt in statements) {
-            for (item in stmt.items) {
-                if (item.name == oldName) {
-                    ranges.add(item.nameRange)
-                }
-            }
+            document.replaceString(range.startOffset, range.endOffset, newElementName)
+            PsiDocumentManager.getInstance(project).commitDocument(document)
+            return element
         }
-        return ranges
+
+        override fun getVariants(): Array<Any> = emptyArray()
     }
 }

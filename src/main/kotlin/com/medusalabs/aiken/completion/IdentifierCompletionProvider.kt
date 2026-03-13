@@ -25,6 +25,8 @@ class IdentifierCompletionProvider(
         context: ProcessingContext,
         result: CompletionResultSet
     ) {
+        if (qualifiedAccessContext(parameters.position)) return
+
         val elementType = parameters.position.node.elementType
         if (stopTokenTypes.contains(elementType)) return
 
@@ -146,4 +148,11 @@ class IdentifierCompletionProvider(
             CompletionSymbolKind.IDENTIFIER -> 0.0
             CompletionSymbolKind.KEYWORD -> 0.0
         }
+
+    private fun qualifiedAccessContext(position: com.intellij.psi.PsiElement): Boolean {
+        val text = position.containingFile?.text ?: return false
+        var index = position.textRange.startOffset - 1
+        while (index >= 0 && text[index].isWhitespace()) index--
+        return index >= 0 && text[index] == '.'
+    }
 }

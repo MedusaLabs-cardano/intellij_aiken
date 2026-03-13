@@ -9,6 +9,7 @@ import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.EnumeratorStringDescriptor
 import com.intellij.util.io.KeyDescriptor
 import com.medusalabs.aiken.lang.AikenFileType
+import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 import java.io.DataInput
 import java.io.DataOutput
@@ -21,11 +22,15 @@ import java.io.DataOutput
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
     companion object {
         val NAME: ID<String, String> = ID.create("aiken.functionSignatures")
+
+        fun nameKey(functionName: String): String = "name|$functionName"
+
+        fun moduleKey(modulePath: String, functionName: String): String = "module|$modulePath|$functionName"
     }
 
     override fun getName(): ID<String, String> = NAME
 
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 3
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -41,7 +46,17 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
     override fun getIndexer(): DataIndexer<String, String, FileContent> =
         DataIndexer { inputData ->
             val text = inputData.contentAsText
-            AikenFunctionSignatureExtractor.extract(text)
+            val modulePath = AikenModulePath.fromFile(inputData.file)
+            val result = LinkedHashMap<String, String>()
+
+            for (entry in AikenFunctionSignatureExtractor.extractEntries(text)) {
+                result[nameKey(entry.name)] = entry.signature
+                if (!modulePath.isNullOrBlank()) {
+                    result[moduleKey(modulePath, entry.name)] = entry.signature
+                }
+            }
+
+            result
         }
 
     private object StringExternalizer : DataExternalizer<String> {
@@ -52,4 +67,3 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
         override fun read(input: DataInput): String = input.readUTF()
     }
 }
-

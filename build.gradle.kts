@@ -18,6 +18,10 @@ repositories {
 
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 dependencies {
+    compileOnly(kotlin("stdlib"))
+    testCompileOnly(kotlin("stdlib"))
+    testImplementation("junit:junit:4.13.2")
+
     intellijPlatform {
         intellijIdeaUltimate("2025.2.4")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)

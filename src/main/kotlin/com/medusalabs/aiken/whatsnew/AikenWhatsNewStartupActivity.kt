@@ -19,6 +19,8 @@ import java.util.Locale
 
 class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
     override fun runActivity(project: Project) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+
         val currentVersion = currentPluginVersion()
         if (currentVersion.isBlank()) return
         subscribeToLafChanges(project)

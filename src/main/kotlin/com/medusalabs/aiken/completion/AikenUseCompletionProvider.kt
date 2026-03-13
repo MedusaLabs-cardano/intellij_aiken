@@ -7,20 +7,22 @@ import com.intellij.codeInsight.completion.CompletionUtilCore
 import com.intellij.codeInsight.completion.PrioritizedLookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.psi.PsiFile
+import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.util.ProcessingContext
+import com.intellij.util.indexing.FileBasedIndex
+import com.medusalabs.aiken.imports.AikenUseStatement
 import com.medusalabs.aiken.imports.AikenUseStatementParser
+import com.medusalabs.aiken.index.AikenExportIndex
 import com.medusalabs.aiken.lang.AikenFileType
-import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.io.path.Path
-import kotlin.io.path.extension
-import kotlin.io.path.invariantSeparatorsPathString
-import kotlin.io.path.isRegularFile
-import kotlin.io.path.readText
+import com.medusalabs.aiken.project.AikenModulePath
+import com.medusalabs.aiken.project.AikenSearchScopes
 
 class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
     override fun addCompletions(
@@ -35,7 +37,7 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
         val offset = parameters.offset.coerceIn(0, text.length)
         val useContext = UseContext.detect(text, offset) ?: return
 
-        val catalog = AikenImportCatalog.get(file.project)
+        val catalog = AikenImportCatalog.get(file)
         var added = 0
 
         when (useContext.mode) {
@@ -312,7 +314,7 @@ private data class UseContext(
         }
 
         private fun isInsideImportList(
-            statement: AikenUseStatementParser.UseStatement,
+            statement: AikenUseStatement,
             text: String,
             offset: Int
         ): Boolean {
@@ -516,93 +518,46 @@ private data class AikenImportCatalog(
     fun containsModule(module: String): Boolean = entitiesByModule.containsKey(module)
 
     companion object {
-        fun get(project: Project): AikenImportCatalog {
-            val manager = com.intellij.psi.util.CachedValuesManager.getManager(project)
-            return manager.getCachedValue(project) {
+        fun get(anchorFile: PsiFile): AikenImportCatalog {
+            val manager = com.intellij.psi.util.CachedValuesManager.getManager(anchorFile.project)
+            return manager.getCachedValue(anchorFile) {
                 com.intellij.psi.util.CachedValueProvider.Result.create(
-                    build(project),
+                    build(anchorFile),
                     PsiModificationTracker.MODIFICATION_COUNT,
                     VirtualFileManager.VFS_STRUCTURE_MODIFICATIONS
                 )
             }
         }
 
-        private fun build(project: Project): AikenImportCatalog {
-            val basePath = project.basePath?.takeIf { it.isNotBlank() }
-                ?: return AikenImportCatalog(emptyList(), emptyMap())
-            val root = Path(basePath)
-            if (!Files.isDirectory(root)) return AikenImportCatalog(emptyList(), emptyMap())
+        private fun build(anchorFile: PsiFile): AikenImportCatalog {
+            val project = anchorFile.project
+            if (DumbService.isDumb(project)) return AikenImportCatalog(emptyList(), emptyMap())
 
-            val moduleToFiles = LinkedHashMap<String, MutableList<Path>>()
-            Files.walk(root).use { stream ->
-                stream
-                    .filter { it.isRegularFile() && it.extension == "ak" }
-                    .forEach { file ->
-                        val relative = root.relativize(file).invariantSeparatorsPathString
-                        val module = modulePathFromRelative(relative) ?: return@forEach
-                        moduleToFiles.computeIfAbsent(module) { ArrayList() }.add(file)
+            val scope = AikenSearchScopes.forFile(project, anchorFile.virtualFile)
+            val index = FileBasedIndex.getInstance()
+
+            return try {
+                val moduleNames =
+                    FileTypeIndex.getFiles(AikenFileType, scope)
+                        .asSequence()
+                        .mapNotNull(AikenModulePath::fromFile)
+                        .toCollection(LinkedHashSet())
+                val entities = LinkedHashMap<String, List<String>>(moduleNames.size)
+                for (module in moduleNames.sorted()) {
+                    val names = LinkedHashSet<String>()
+                    for (value in index.getValues(AikenExportIndex.NAME, module, scope)) {
+                        names += AikenExportIndex.decode(value)
                     }
-            }
-
-            val entities = LinkedHashMap<String, List<String>>(moduleToFiles.size)
-            for ((module, files) in moduleToFiles) {
-                val names = LinkedHashSet<String>()
-                for (file in files) {
-                    for (name in extractPublicSymbols(file)) {
-                        names += name
-                    }
-                }
-                entities[module] = names.sorted()
-            }
-
-            return AikenImportCatalog(
-                moduleNames = moduleToFiles.keys.sorted(),
-                entitiesByModule = entities
-            )
-        }
-
-        private fun modulePathFromRelative(relativePath: String): String? {
-            val rel = relativePath.replace('\\', '/')
-            if (!rel.endsWith(".ak")) return null
-            val withoutExt = rel.removeSuffix(".ak")
-
-            fun tailAfter(root: String, source: String): String? =
-                if (source.startsWith(root)) source.removePrefix(root).takeIf { it.isNotBlank() } else null
-
-            val localModule =
-                tailAfter("lib/", withoutExt)
-                    ?: tailAfter("validators/", withoutExt)
-            if (localModule != null) return localModule
-
-            if (withoutExt.startsWith("build/packages/")) {
-                val tail = withoutExt.removePrefix("build/packages/")
-                val packageAndRest = tail.substringAfter('/', "")
-                val depModule =
-                    tailAfter("lib/", packageAndRest)
-                        ?: tailAfter("validators/", packageAndRest)
-                if (depModule != null) return depModule
-            }
-
-            return null
-        }
-
-        private val PUB_DECLARATION_REGEX =
-            Regex("""(?m)^\s*pub\s+(?:opaque\s+)?(?:fn|const|type|validator)\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
-
-        private fun extractPublicSymbols(file: Path): List<String> {
-            val source =
-                try {
-                    file.readText()
-                } catch (_: Throwable) {
-                    return emptyList()
+                    entities[module] = names.sorted()
                 }
 
-            return PUB_DECLARATION_REGEX
-                .findAll(source)
-                .map { it.groupValues.getOrNull(1).orEmpty() }
-                .filter { it.isNotBlank() }
-                .toCollection(LinkedHashSet())
-                .toList()
+                AikenImportCatalog(
+                    moduleNames = entities.keys.toList(),
+                    entitiesByModule = entities
+                )
+            } catch (_: IndexNotReadyException) {
+                AikenImportCatalog(emptyList(), emptyMap())
+            }
         }
     }
 }
