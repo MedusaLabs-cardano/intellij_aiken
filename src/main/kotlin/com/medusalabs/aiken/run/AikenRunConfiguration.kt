@@ -11,6 +11,7 @@ import com.intellij.execution.ExecutionException
 import com.intellij.execution.DefaultExecutionResult
 import com.intellij.execution.Location
 import com.intellij.execution.PsiLocation
+import com.intellij.execution.RunManager
 import com.intellij.execution.configurations.ConfigurationFactory
 import com.intellij.execution.configurations.CommandLineState
 import com.intellij.execution.configurations.GeneralCommandLine
@@ -296,6 +297,24 @@ class AikenRunConfiguration(
     }
 
     override fun suggestedName(): String = command.defaultConfigurationName()
+
+    override fun onNewConfigurationCreated() {
+        super.onNewConfigurationCreated()
+        applyPlatformUniqueName()
+    }
+
+    private fun applyPlatformUniqueName() {
+        val baseName = command.defaultConfigurationName()
+        if (name.isBlank()) {
+            name = baseName
+        }
+        RunManager.getInstance(project).setUniqueNameIfNeeded(this)
+        if (name == baseName) {
+            setGeneratedName()
+        } else {
+            setNameChangedByUser(true)
+        }
+    }
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
         if (command == AikenRunCommand.ADDRESS || command == AikenRunCommand.CONVERT) {
