@@ -2,6 +2,8 @@ package com.medusalabs.aiken.run
 
 import com.intellij.build.BuildTreeConsoleView
 import com.intellij.build.DefaultBuildDescriptor
+import com.intellij.build.ExecutionNode
+import com.intellij.build.FilePosition
 import com.intellij.build.events.MessageEvent
 import com.intellij.build.progress.BuildRootProgressImpl
 import com.intellij.build.progress.BuildProgress
@@ -42,8 +44,12 @@ import com.intellij.execution.testframework.actions.AbstractRerunFailedTestsActi
 import com.intellij.execution.testframework.TestConsoleProperties
 import com.intellij.execution.ui.ConsoleView
 import com.intellij.execution.ui.ExecutionConsole
+import com.intellij.execution.filters.LazyFileHyperlinkInfo
 import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
+import com.intellij.ide.DataManager
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.PlatformCoreDataKeys
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ide.CopyPasteManager
@@ -121,6 +127,7 @@ import javax.swing.border.AbstractBorder
 import javax.swing.border.TitledBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.TreeCellRenderer
 import java.awt.FlowLayout
 import java.awt.Font
@@ -3311,8 +3318,14 @@ class AikenRunConfiguration(
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
             val buildDescriptor = createBuildDescriptor(executionEnvironment)
-            val baseConsole = TextConsoleBuilderFactory.getInstance().createBuilder(project).console
+            val workDir = resolveProjectDirectory()
+            val diagnosticFilter = createBuildDiagnosticMessageFilter(workDir)
+            val baseConsoleBuilder = TextConsoleBuilderFactory.getInstance().createBuilder(project)
+            baseConsoleBuilder.addFilter(diagnosticFilter)
+            val baseConsole = baseConsoleBuilder.console
             val buildConsole = BuildTreeConsoleView(project, buildDescriptor, baseConsole)
+            installBuildTreeNavigationDataProvider(buildConsole)
+            buildConsole.addMessageFilter(diagnosticFilter)
             buildConsole.attachToProcess(processHandler)
             val buildProgress = createBuildProgress(buildConsole, buildDescriptor)
             AppExecutorUtil.getAppExecutorService().execute {
@@ -3372,7 +3385,7 @@ class AikenRunConfiguration(
                 val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
                 lastExitCode = run.exitCode
                 if (run.output.isNotBlank()) {
-                    buildProgress.output(ensureTrailingNewline(stripAnsi(run.output)), false)
+                    buildProgress.output(ensureTrailingNewline(run.output), true)
                 }
 
                 val diagnostics =
@@ -3414,23 +3427,28 @@ class AikenRunConfiguration(
             diagnostics: DiagnosticsSections
         ) {
             diagnostics.warnings.forEachIndexed { index, block ->
-                val sanitizedBlock = stripAnsi(block)
-                buildProgress.message(
-                    buildDiagnosticNodeTitle("warnings", index, sanitizedBlock),
-                    sanitizedBlock,
-                    MessageEvent.Kind.WARNING,
-                    null
-                )
+                emitBuildMessage(buildProgress, "warnings", index, block, MessageEvent.Kind.WARNING)
             }
             diagnostics.errors.forEachIndexed { index, block ->
-                val sanitizedBlock = stripAnsi(block)
-                buildProgress.message(
-                    buildDiagnosticNodeTitle("errors", index, sanitizedBlock),
-                    sanitizedBlock,
-                    MessageEvent.Kind.ERROR,
-                    null
-                )
+                emitBuildMessage(buildProgress, "errors", index, block, MessageEvent.Kind.ERROR)
             }
+        }
+
+        private fun emitBuildMessage(
+            buildProgress: BuildProgress<BuildProgressDescriptor>,
+            sectionName: String,
+            index: Int,
+            block: String,
+            kind: MessageEvent.Kind
+        ) {
+            val title = buildDiagnosticNodeTitle(sectionName, index, block)
+            val filePosition = extractDiagnosticFilePosition(block, resolveProjectDirectory())
+            if (filePosition != null) {
+                buildProgress.fileMessage(title, block, kind, filePosition)
+                return
+            }
+
+            buildProgress.message(title, block, kind, null)
         }
     }
 
@@ -5766,9 +5784,33 @@ class AikenRunConfiguration(
     }
 
     private fun extractDiagnosticLocationHint(block: String, workDir: String?): String? {
+        val location = extractDiagnosticLocation(block, workDir) ?: return null
+        return TestSourceLocation(location.absolutePath, location.line).toLocationHint()
+    }
+
+    private fun extractDiagnosticFilePosition(block: String, workDir: String?): FilePosition? {
+        val location = extractDiagnosticLocation(block, workDir) ?: return null
+        val startLine = (location.line - 1).coerceAtLeast(0)
+        val startColumn = location.column?.minus(1)?.coerceAtLeast(0) ?: 0
+        return FilePosition(File(location.absolutePath), startLine, startColumn)
+    }
+
+    private fun extractDiagnosticLocation(block: String, workDir: String?): DiagnosticLocation? {
         val match = DIAGNOSTIC_LOCATION_REGEX.find(stripAnsi(block)) ?: return null
-        val rawPath = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        val line = match.groupValues.getOrNull(2)?.toIntOrNull()?.coerceAtLeast(1) ?: return null
+        return resolveDiagnosticLocation(
+            rawPath = match.groupValues.getOrNull(1)?.trim().orEmpty(),
+            line = match.groupValues.getOrNull(2)?.toIntOrNull()?.coerceAtLeast(1) ?: return null,
+            column = match.groupValues.getOrNull(3)?.toIntOrNull()?.coerceAtLeast(1),
+            workDir = workDir
+        )
+    }
+
+    private fun resolveDiagnosticLocation(
+        rawPath: String,
+        line: Int,
+        column: Int?,
+        workDir: String?
+    ): DiagnosticLocation? {
         if (rawPath.isEmpty()) return null
 
         val file = File(rawPath).let { candidate ->
@@ -5781,7 +5823,96 @@ class AikenRunConfiguration(
                 file.absolutePath
             }
 
-        return TestSourceLocation(absolutePath, line).toLocationHint()
+        return DiagnosticLocation(
+            absolutePath = absolutePath,
+            line = line,
+            column = column
+        )
+    }
+
+    private fun createBuildDiagnosticMessageFilter(workDir: String?): com.intellij.execution.filters.Filter {
+        return com.intellij.execution.filters.Filter { line, entireLength ->
+            val match = extractBuildMessageLocationMatch(line) ?: return@Filter null
+            val location =
+                resolveDiagnosticLocation(
+                    rawPath = match.path,
+                    line = match.line,
+                    column = match.column,
+                    workDir = workDir
+                ) ?: return@Filter null
+
+            val lineStartOffset = entireLength - line.length
+            val startOffset = lineStartOffset + match.startIndex
+            val endOffset = lineStartOffset + match.endIndex
+            val hyperlink =
+                LazyFileHyperlinkInfo(
+                    project,
+                    location.absolutePath,
+                    (location.line - 1).coerceAtLeast(0),
+                    location.column?.minus(1)?.coerceAtLeast(0) ?: 0
+                )
+
+            com.intellij.execution.filters.Filter.Result(startOffset, endOffset, hyperlink)
+        }
+    }
+
+    private fun installBuildTreeNavigationDataProvider(buildConsole: BuildTreeConsoleView) {
+        DataManager.registerDataProvider(buildConsole.tree, createBuildTreeNavigationDataProvider(buildConsole.tree))
+    }
+
+    private fun createBuildTreeNavigationDataProvider(tree: JTree): com.intellij.openapi.actionSystem.DataProvider {
+        return object : com.intellij.openapi.actionSystem.DataProvider {
+            override fun getData(dataId: String): Any? {
+                return when {
+                    CommonDataKeys.NAVIGATABLE.`is`(dataId) -> extractSelectedBuildTreeNavigatable(tree)
+                    CommonDataKeys.NAVIGATABLE_ARRAY.`is`(dataId) -> extractSelectedBuildTreeNavigatables(tree)
+                    CommonDataKeys.PROJECT.`is`(dataId) -> project
+                    PlatformCoreDataKeys.HELP_ID.`is`(dataId) -> "reference.build.tool.window"
+                    else -> null
+                }
+            }
+        }
+    }
+
+    private fun extractSelectedBuildTreeNavigatable(tree: JTree): com.intellij.pom.Navigatable? {
+        val navigatables = extractSelectedBuildTreeNavigatables(tree)
+        return if (navigatables.size == 1) navigatables.first() else null
+    }
+
+    private fun extractSelectedBuildTreeNavigatables(tree: JTree): Array<com.intellij.pom.Navigatable> {
+        return tree.selectionPaths
+            .orEmpty()
+            .mapNotNull { path -> (path.lastPathComponent as? DefaultMutableTreeNode)?.userObject as? ExecutionNode }
+            .flatMap { node -> node.navigatables }
+            .filter { it.canNavigate() || it.canNavigateToSource() }
+            .distinct()
+            .toTypedArray()
+    }
+
+    private fun extractBuildMessageLocationMatch(text: String): BuildMessageLocationMatch? {
+        val bracketMatch = DIAGNOSTIC_LOCATION_REGEX.find(text)
+        if (bracketMatch != null) {
+            val line = bracketMatch.groupValues.getOrNull(2)?.toIntOrNull()?.coerceAtLeast(1) ?: return null
+            val column = bracketMatch.groupValues.getOrNull(3)?.toIntOrNull()?.coerceAtLeast(1)
+            return BuildMessageLocationMatch(
+                path = bracketMatch.groupValues.getOrNull(1)?.trim().orEmpty(),
+                line = line,
+                column = column,
+                startIndex = bracketMatch.range.first,
+                endIndex = bracketMatch.range.last + 1
+            )
+        }
+
+        val prefixMatch = BUILD_MESSAGE_LOCATION_PREFIX_REGEX.find(text) ?: return null
+        val line = prefixMatch.groupValues.getOrNull(2)?.toIntOrNull()?.coerceAtLeast(1) ?: return null
+        val column = prefixMatch.groupValues.getOrNull(3)?.toIntOrNull()?.coerceAtLeast(1)
+        return BuildMessageLocationMatch(
+            path = prefixMatch.groupValues.getOrNull(1)?.trim().orEmpty(),
+            line = line,
+            column = column,
+            startIndex = prefixMatch.range.first,
+            endIndex = prefixMatch.range.last + 1
+        )
     }
 
     private fun shrinkMiddle(text: String, maxLength: Int): String {
@@ -6524,6 +6655,20 @@ class AikenRunConfiguration(
         val line: Int
     )
 
+    private data class DiagnosticLocation(
+        val absolutePath: String,
+        val line: Int,
+        val column: Int?
+    )
+
+    private data class BuildMessageLocationMatch(
+        val path: String,
+        val line: Int,
+        val column: Int?,
+        val startIndex: Int,
+        val endIndex: Int
+    )
+
     private fun TestSourceLocation.toLocationHint(): String {
         val encodedPath =
             Base64.getUrlEncoder().withoutPadding()
@@ -6822,7 +6967,8 @@ class AikenRunConfiguration(
             """^(compiling|collecting|testing|building|resolving|watching|generating|dumping|packages?\s+downloaded|summary)\b""",
             RegexOption.IGNORE_CASE
         )
-        val DIAGNOSTIC_LOCATION_REGEX = Regex("""\[(.+?\.ak):(\d+)(?::\d+)?]""")
+        val DIAGNOSTIC_LOCATION_REGEX = Regex("""\[(.+?\.ak):(\d+)(?::(\d+))?]""")
+        val BUILD_MESSAGE_LOCATION_PREFIX_REGEX = Regex("""(?<!\[)(.+?\.ak):(\d+)(?::(\d+))?:""")
         val DIAGNOSTIC_LOCATION_BRACKET_LINE_REGEX = Regex("""^\[.+:\d+(?::\d+)?]$""")
         val DIAGNOSTIC_ERROR_TYPE_LINE_REGEX = Regex("""^error\s+[A-Za-z0-9_:.\\/-]+$""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_GENERIC_WHILE_LINE_REGEX = Regex("""^while\s+.+\.\.\.$""", RegexOption.IGNORE_CASE)

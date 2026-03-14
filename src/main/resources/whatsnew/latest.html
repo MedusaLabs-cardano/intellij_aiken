@@ -103,27 +103,30 @@
   <h2>Version {{VERSION}}</h2>
 
   <p class="hero">
-    This release turns Aiken support into a complete in-IDE workflow:
-    project scaffolding, deep navigation, rich run integrations, artifact generation,
-    parameterization flows, and polished daily UX from first file to final build output.
+    This update expands the plugin into a much more complete Aiken workflow inside JetBrains IDEs:
+    project scaffolding, file creation, indexing, navigation, usages and rename, parameter info,
+    integrated runners, parameterization, artifact generation, and cleanup.
   </p>
 
   <div class="grid">
     <div class="card">
-      <b>End-to-End Integration</b><br/>
-      Full loop inside JetBrains IDEs: edit, run, test, parametrize, and build artifacts.
+      <b>Workflow Upgrade</b><br/>
+      The plugin is no longer just editor support plus formatting. It now provides a real
+      end-to-end Aiken workflow inside the IDE.
     </div>
     <div class="card">
-      <b>Dedicated Runner Stack</b><br/>
-      <code>Run checks</code>, <code>Build blueprint</code>, <code>Parametrize</code>, <code>Make artifacts</code>, <code>Clean artifacts</code>.
+      <b>New Runner Stack</b><br/>
+      Dedicated Aiken run configurations: <code>Run checks</code>, <code>Build blueprint</code>,
+      <code>Parametrize</code>, <code>Make artifacts</code>, <code>Clean artifacts</code>.
     </div>
     <div class="card">
-      <b>Scaffold + Templates</b><br/>
-      New Project Wizard and New Aiken File templates ready for immediate coding.
+      <b>Code Intelligence Overhaul</b><br/>
+      New module/export/symbol indexing powers smarter completion, navigation, usages,
+      rename, and structure tools.
     </div>
   </div>
 
-  <div class="shot">[Screenshot placeholder: Full IDE workflow overview]</div>
+  <div class="shot">[Screenshot placeholder: Full Aiken workflow inside JetBrains IDE]</div>
 
   <hr class="divider"/>
   <h3>Runner Integrations</h3>
@@ -131,22 +134,25 @@
   <div class="runner">
     <p class="runner-title">Run checks</p>
     <ul>
-      <li>Output modes: <code>tty</code>, <code>json</code>, and <code>ide integrated</code>.</li>
-      <li>Structured tree by modules and tests with better labels and counters.</li>
-      <li>Warnings and errors are grouped as dedicated sections.</li>
-      <li>Detailed diagnostics are preserved with full context.</li>
-      <li>Selected test rerun and richer per-test details (including mem/cpu).</li>
-      <li>Improved match pattern UX and parser behavior for real CLI output streams.</li>
+      <li>Three output modes: <code>TTY</code>, <code>JSON</code>, and <code>IDE integrated</code>.</li>
+      <li>IDE mode now builds a real test tree grouped by module and test instead of flattening everything into console text.</li>
+      <li>Warnings and errors are grouped as dedicated sections and keep full Aiken diagnostic context.</li>
+      <li>Per-test details are richer, including traces and execution metrics such as mem/cpu.</li>
+      <li>Selected test rerun is supported where Aiken CLI semantics allow it.</li>
+      <li>Test matching UX was improved, including pattern handling and exact-match behavior.</li>
+      <li><code>Skip tests</code> now works cleanly in integrated scenarios instead of forcing a degraded flow.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Run checks with tests + warnings/errors tree]</div>
+    <div class="shot">[Screenshot placeholder: Run checks with module tree, tests, warnings, and errors]</div>
+    <div class="shot">[Screenshot placeholder: Per-test details with traces and mem/cpu]</div>
   </div>
 
   <div class="runner">
     <p class="runner-title">Build blueprint</p>
     <ul>
-      <li>Supports <code>tty</code> and IDE-integrated reporting.</li>
-      <li>Build-style result handling without running tests.</li>
-      <li>Clear success and failure messages with warning/error visibility.</li>
+      <li>Supports <code>TTY</code> and <code>IDE integrated</code>.</li>
+      <li>Integrated mode behaves like a build runner, not a fake test run.</li>
+      <li>Warnings and errors are preserved as build diagnostics without inventing test nodes.</li>
+      <li>Build watch behavior was aligned with the integrated path.</li>
     </ul>
     <div class="shot">[Screenshot placeholder: Build blueprint integrated output]</div>
   </div>
@@ -154,27 +160,29 @@
   <div class="runner">
     <p class="runner-title">Parametrize</p>
     <ul>
-      <li>Both <code>tty</code> and IDE-integrated modes are supported.</li>
-      <li>Auto-repeat parameterization until no undefined parameters are left.</li>
-      <li>Smart completion handling for "no parameters left" terminal state.</li>
-      <li>Applied CBOR parameters are collected and shown for reuse.</li>
-      <li>Queue-based auto-applied CBOR input with comma/space parsing.</li>
-      <li>Rich GUI handling for nested data, constructors, lists, options, booleans, and opaque data input.</li>
+      <li>Supports both <code>TTY</code> and <code>IDE integrated</code> modes.</li>
+      <li>TTY mode now handles repeated application correctly, including default CBOR queues, <code>in</code>/<code>out</code> tracking, and build invalidation.</li>
+      <li>Auto-repeat can keep applying parameters until no undefined parameters remain.</li>
+      <li>Applied CBOR parameters are collected and shown at the end of the flow for reuse.</li>
+      <li>The new IDE-integrated editor understands nested Aiken schemas: constructors, records, tuples, pairs, lists, maps, booleans, options, and opaque <code>Data</code>.</li>
+      <li>Default CBOR parameters can now be applied behind the scenes first, so the GUI only shows unresolved parameters.</li>
+      <li>Live validation, debounced error highlighting, and better retry behavior make the GUI path practical for real work.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Parametrize GUI with nested structures]</div>
+    <div class="shot">[Screenshot placeholder: Parametrize GUI with nested constructors and collections]</div>
+    <div class="shot">[Screenshot placeholder: Parametrize TTY mode with applied CBOR summary]</div>
   </div>
 
   <div class="runner">
     <p class="runner-title">Make artifacts</p>
     <ul>
-      <li>Unified pipeline for script conversion, addresses, and policy output.</li>
-      <li>Per-artifact generation toggles (script, testnet address, mainnet address, policy).</li>
-      <li>Dynamic file templates with <code>%module%</code> and <code>%validator%</code>.</li>
-      <li>Template paths support subdirectories for advanced artifact layout.</li>
-      <li>Aggregates multiple module/validator targets in one run.</li>
-      <li>Result panel with copy-friendly fields and saved-file summary.</li>
+      <li>A unified pipeline now covers script conversion, mainnet/testnet address generation, policy ID generation, and optional script CBOR display.</li>
+      <li>Each artifact type can be enabled or disabled independently.</li>
+      <li>Artifact filenames are now template-driven, with support for <code>%module%</code>, <code>%validator%</code>, and even subdirectories.</li>
+      <li>Multiple module/validator targets can be processed in a single run.</li>
+      <li>The result view is IDE-integrated, copy-friendly, and summarizes saved files instead of dumping raw CLI output.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Make artifacts result view + saved files]</div>
+    <div class="shot">[Screenshot placeholder: Make artifacts result view with CBOR, addresses, and policy]</div>
+    <div class="shot">[Screenshot placeholder: Artifact filename templates and saved-file summary]</div>
   </div>
 
   <div class="runner">
@@ -182,46 +190,102 @@
     <ul>
       <li>Dedicated cleanup runner for artifact directories.</li>
       <li>Safer target validation and predictable cleanup scope.</li>
-      <li>Completes the full artifact lifecycle directly in IDE.</li>
+      <li>Completes the full build → parametrize → generate → clean lifecycle inside the IDE.</li>
     </ul>
     <div class="shot">[Screenshot placeholder: Clean artifacts runner]</div>
   </div>
 
   <hr class="divider"/>
   <h3>Scaffolding and File Templates</h3>
-  <ul>
-    <li>New Project Wizard with vendor/project validation and subtype selection (<code>validator</code> / <code>lib</code>).</li>
-    <li>Post-init defaults for validator projects:
-      <ul>
-        <li><code>artifacts/</code> is added to <code>.gitignore</code>,</li>
-        <li>starter test module is created in <code>validators/tests/test_module.ak</code>.</li>
-      </ul>
-    </li>
-    <li>Improved project recognition stability after creation and reopen.</li>
-    <li><code>New → Aiken File</code> with 3 subtypes:
-      <ul>
-        <li><b>Aiken Validator</b> (template resolved from cached/generated <code>placeholder.ak</code>),</li>
-        <li><b>Aiken Test</b>,</li>
-        <li><b>Common File</b> (empty <code>.ak</code>).</li>
-      </ul>
-    </li>
-  </ul>
-  <div class="shot">[Screenshot placeholder: Aiken New Project Wizard]</div>
-  <div class="shot">[Screenshot placeholder: New Aiken File dialog + subtype picker]</div>
+  <div class="runner">
+    <p class="runner-title">New Project Wizard</p>
+    <ul>
+      <li>A dedicated Aiken project type was added to the New Project flow.</li>
+      <li>It supports vendor input, project type selection (<code>validator</code> / <code>lib</code>), and token normalization/validation.</li>
+      <li>Project creation now runs <code>aiken new</code> in a way that keeps JetBrains project recognition and Git mapping stable after reopen.</li>
+      <li>Validator projects receive practical post-init defaults such as <code>artifacts/</code> in <code>.gitignore</code> and a starter test module.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Aiken New Project Wizard]</div>
+    <div class="shot">[Screenshot placeholder: Fresh Aiken project with post-init defaults]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">New → Aiken File</p>
+    <ul>
+      <li>A new file-creation action was added directly to the IDE <code>New</code> menu.</li>
+      <li>Supported subtypes: <b>Aiken Validator</b>, <b>Aiken Test</b>, and <b>Common File</b>.</li>
+      <li>Validator file generation uses a cached/generated template resolved from real Aiken scaffolding instead of a stale hand-written snippet.</li>
+      <li>File names are validated against Aiken-friendly naming rules up front.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: New Aiken File dialog]</div>
+    <div class="shot">[Screenshot placeholder: Validator / Test / Common subtype picker]</div>
+  </div>
 
   <hr class="divider"/>
-  <h3>Navigation and Editing UX</h3>
-  <ul>
-    <li>Better usage/declaration popup readability and contextual rendering.</li>
-    <li>Alias imports in <code>use ... as ...</code> now index and resolve consistently.</li>
-    <li>Autocomplete noise reduced by filtering out non-callable test signatures.</li>
-    <li>General UI consistency updates across runner cards, labels, and descriptions.</li>
-  </ul>
-  <div class="shot">[Screenshot placeholder: Usage popup + declaration selection improvements]</div>
+  <h3>Indexing, Navigation, and Editing</h3>
+
+  <div class="runner">
+    <p class="runner-title">Indexation overhaul</p>
+    <ul>
+      <li>The plugin now indexes modules, exports, top-level symbols, and function signatures more explicitly.</li>
+      <li>The new model is much better suited to cross-module resolution and project-scale navigation.</li>
+      <li>As a result, completion, usages, rename, declaration resolution, and symbol navigation now operate on a stronger foundation.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Module/export/top-level symbol indexing in action]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Navigation and references</p>
+    <ul>
+      <li><code>Go to Declaration</code> became more stable for aliases, locals, shadowed names, and ambiguous targets.</li>
+      <li><code>Find Usages</code> and <code>Rename</code> now work more consistently across files and modules.</li>
+      <li>The usage/declaration chooser was redesigned to show more useful contextual information.</li>
+      <li>Error and warning nodes produced by integrated runners can now navigate back to source locations.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Usage popup with contextual entries]</div>
+    <div class="shot">[Screenshot placeholder: Warning/error navigation back to source]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Completion and imports</p>
+    <ul>
+      <li><code>use</code>-completion now understands module paths, nested modules, and public exports.</li>
+      <li>Completion can insert into <code>use module.{...}</code> blocks correctly and behaves better after <code>.</code> and commas.</li>
+      <li>Alias imports in <code>use ... as ...</code> now index and resolve consistently.</li>
+      <li>Noise was reduced by filtering out non-callable test signatures from normal callable completion contexts.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: use-completion for module paths and public exports]</div>
+    <div class="shot">[Screenshot placeholder: Alias import resolution and completion]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Structure and parameter info</p>
+    <ul>
+      <li><code>Go to Symbol</code> was added for top-level Aiken declarations.</li>
+      <li><code>Structure View</code> was added for quick file-level browsing.</li>
+      <li><code>Ctrl+P</code> / parameter info was expanded to handle more real Aiken call forms.</li>
+      <li>Breadcrumbs and folding support remain available and are now backed by stronger test coverage.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Go to Symbol and Structure View]</div>
+    <div class="shot">[Screenshot placeholder: Ctrl+P parameter info in real Aiken calls]</div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Formatting and polish</p>
+    <ul>
+      <li>Formatting now normalizes whitespace-only lines before calling <code>aiken fmt</code>, which fixes real empty-line edge cases.</li>
+      <li>Runner cards, labels, descriptions, and integrated views were polished for denser and more predictable UX.</li>
+      <li>A versioned in-IDE <b>What's New</b> tab was added and is now theme-aware through IDE-provided variables.</li>
+    </ul>
+    <div class="shot">[Screenshot placeholder: Formatter-sensitive empty-line case]</div>
+    <div class="shot">[Screenshot placeholder: In-IDE What's New tab]</div>
+  </div>
 
   <div class="note">
-    This page supports versioned content files. Add <code>whatsnew/&lt;version&gt;.html</code>
-    to ship custom notes for a specific release, while keeping <code>whatsnew/latest.html</code> as fallback.
+    This release adds a dedicated runner stack, a project wizard, a new file creation workflow,
+    a much stronger indexing/navigation/search layer, and a practical schema-driven
+    parameterization GUI. Aiken development inside JetBrains IDEs is now faster, deeper,
+    and far more self-contained.
   </div>
 </body>
 </html>
