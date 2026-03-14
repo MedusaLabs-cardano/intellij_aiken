@@ -84,6 +84,12 @@
 
         <!-- LSP integration -->
         <platform.lsp.serverSupportProvider implementation="com.medusalabs.aiken.lsp.AikenLspServerSupportProvider"/>
+
+        <intentionAction>
+            <language>Aiken</language>
+            <className>com.medusalabs.aiken.lsp.AikenRemoveAllUnusedImportsIntention</className>
+            <category>Aiken</category>
+        </intentionAction>
     </extensions>
 
     <applicationListeners>

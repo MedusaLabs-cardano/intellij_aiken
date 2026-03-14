@@ -34,6 +34,8 @@ class AikenLspDiagnosticsProjectViewService(private val project: Project) {
         scheduleUpdate(file)
     }
 
+    fun getDiagnostics(file: VirtualFile): List<Diagnostic> = diagnosticsByFile[file] ?: emptyList()
+
     private fun isSupportedFile(file: VirtualFile): Boolean =
         file.fileType == AikenFileType || file.fileType == UplcFileType
 
