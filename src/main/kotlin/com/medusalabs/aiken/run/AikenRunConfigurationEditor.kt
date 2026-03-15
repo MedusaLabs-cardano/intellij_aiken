@@ -76,7 +76,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
         isOpaque = false
     }
-    private val applyAutoRepeatComment = JLabel("If disabled, run Parametrize separately for each parameter.")
+    private val applyAutoRepeatComment = JLabel("If disabled, run Parametrize blueprint separately for each parameter.")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())

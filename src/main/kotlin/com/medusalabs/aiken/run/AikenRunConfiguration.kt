@@ -7424,7 +7424,7 @@ class AikenRunConfiguration(
             AikenRunCommand.BUILD -> "Build blueprint"
             AikenRunCommand.ADDRESS -> "Make artifacts"
             AikenRunCommand.CLEAN -> "Clean artifacts"
-            AikenRunCommand.APPLY -> "Parametrize"
+            AikenRunCommand.APPLY -> "Parametrize blueprint"
             AikenRunCommand.CONVERT -> "Make artifacts"
         }
 
