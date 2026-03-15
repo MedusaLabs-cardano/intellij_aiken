@@ -31,18 +31,8 @@ class AikenRunConfigurationLocalBinaryTest : AikenPlatformTestCase() {
 
         val configuration = buildConfiguration()
         configuration.projectDirectory = projectDir.toString()
-        configuration.aikenBinaryPath = "aiken"
 
         assertEquals(binaryPath.toString(), configuration.resolveAikenExecutableForTest())
-    }
-
-    @Test
-    fun resolveAikenExecutableKeepsExplicitCustomPath() {
-        val configuration = buildConfiguration()
-        configuration.projectDirectory = Files.createTempDirectory("aiken-custom-runner").toString()
-        configuration.aikenBinaryPath = "/custom/tools/aiken"
-
-        assertEquals("/custom/tools/aiken", configuration.resolveAikenExecutableForTest())
     }
 
     @Test
@@ -52,7 +42,6 @@ class AikenRunConfigurationLocalBinaryTest : AikenPlatformTestCase() {
 
         val configuration = buildConfiguration()
         configuration.projectDirectory = Files.createTempDirectory("aiken-global-runner").toString()
-        configuration.aikenBinaryPath = "aiken"
 
         assertEquals("/global/aiken", configuration.resolveAikenExecutableForTest())
     }

@@ -151,9 +151,6 @@ class AikenRunConfiguration(
     var projectDirectory: String = project.basePath ?: ""
 
     @JvmField
-    var aikenBinaryPath: String = "aiken"
-
-    @JvmField
     var extraArgs: String = ""
 
     @JvmField
@@ -297,7 +294,6 @@ class AikenRunConfiguration(
 
     override fun checkConfiguration() {
         validateDirectory(projectDirectory, "Project directory")
-        validateFilePath(aikenBinaryPath, "Aiken binary path")
         if (command == AikenRunCommand.CHECK) {
             validateUnsignedInteger(checkSeed, "Seed")
             validateUnsignedInteger(checkMaxSuccess, "Max success")
@@ -4728,7 +4724,6 @@ class AikenRunConfiguration(
         super.readExternal(element)
         command = readEnum(element, "command", AikenRunCommand.CHECK)
         projectDirectory = readString(element, "projectDirectory", projectDirectory)
-        aikenBinaryPath = readString(element, "aikenBinaryPath", aikenBinaryPath)
         extraArgs = readString(element, "extraArgs", extraArgs)
 
         denyWarnings = readBoolean(element, "denyWarnings", false)
@@ -4793,7 +4788,6 @@ class AikenRunConfiguration(
         super.writeExternal(element)
         writeField(element, "command", command.name)
         writeField(element, "projectDirectory", projectDirectory)
-        writeField(element, "aikenBinaryPath", aikenBinaryPath)
         writeField(element, "extraArgs", extraArgs)
 
         writeField(element, "denyWarnings", denyWarnings.toString())
@@ -4849,10 +4843,6 @@ class AikenRunConfiguration(
     }
 
     private fun resolveAikenExecutable(): String {
-        val configured = aikenBinaryPath.trim()
-        if (configured.isNotEmpty() && configured != "aiken") {
-            return configured
-        }
         val projectDirectory = resolveProjectDirectory()
         ensureLocalAikenInstalledIfNeeded(projectDirectory)
         return AikenNodeToolchain.resolvePreferredAikenExecutable(project, projectDirectory)

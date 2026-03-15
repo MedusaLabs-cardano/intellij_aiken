@@ -24,6 +24,7 @@ dependencies {
 
     intellijPlatform {
         intellijIdeaUltimate("2025.2.4")
+        bundledPlugin("org.jetbrains.plugins.terminal")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         // Keep dependency surface minimal; custom lexer handles syntax

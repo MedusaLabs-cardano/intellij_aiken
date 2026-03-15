@@ -196,6 +196,19 @@ internal object AikenNodeToolchain {
 
     fun isSystemNpmAvailable(): Boolean = resolveSystemNpmExecutable() != null
 
+    fun applyProjectLocalAikenToTerminalEnvironment(project: Project, environment: MutableMap<String, String>): Boolean {
+        val settings = project.service<AikenProjectToolchainSettings>()
+        if (settings.getMode() != AikenToolchainMode.LOCAL) {
+            return false
+        }
+
+        val projectDirectory = project.basePath?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val executable = resolveProjectLocalAikenExecutable(projectDirectory) ?: return false
+        val executableDirectory = Path.of(executable).parent?.toString() ?: return false
+        prependPathEntry(environment, executableDirectory)
+        return true
+    }
+
     fun isSupportedAikenVersion(version: String): Boolean {
         val normalized = normalizeRequestedVersion(version)
         if (normalized == DEFAULT_AIKEN_VERSION) {
@@ -508,6 +521,35 @@ internal object AikenNodeToolchain {
                 }
             }
             .toList()
+
+    internal fun prependPathEntry(environment: MutableMap<String, String>, entry: String) {
+        val trimmedEntry = entry.trim()
+        if (trimmedEntry.isEmpty()) return
+
+        val pathKey =
+            environment.keys.firstOrNull { it.equals("PATH", ignoreCase = true) }
+                ?: if (SystemInfo.isWindows) "Path" else "PATH"
+        val separator = File.pathSeparator
+        val normalizedEntry = normalizePathEntry(trimmedEntry)
+        val existingEntries =
+            environment[pathKey]
+                .orEmpty()
+                .split(separator)
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .filterNot { normalizePathEntry(it) == normalizedEntry }
+
+        environment[pathKey] = buildString {
+            append(trimmedEntry)
+            if (existingEntries.isNotEmpty()) {
+                append(separator)
+                append(existingEntries.joinToString(separator))
+            }
+        }
+    }
+
+    private fun normalizePathEntry(value: String): String =
+        if (SystemInfo.isWindows) value.lowercase() else value
 
     private fun runCommandLine(commandLine: GeneralCommandLine, timeoutSeconds: Long): ProcessResult {
         val process = commandLine.createProcess()

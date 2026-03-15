@@ -141,6 +141,23 @@ class AikenNodeToolchainTest {
     }
 
     @Test
+    fun prependPathEntryMovesToolchainDirectoryToFrontWithoutDuplicates() {
+        val environment = linkedMapOf("PATH" to "/usr/bin${java.io.File.pathSeparator}/opt/aiken/bin")
+
+        AikenNodeToolchain.prependPathEntry(environment, "/opt/aiken/bin")
+        AikenNodeToolchain.prependPathEntry(environment, "/home/me/project/bin/node_modules/@aiken-lang/aiken/node_modules/.bin_real")
+
+        assertEquals(
+            "/home/me/project/bin/node_modules/@aiken-lang/aiken/node_modules/.bin_real" +
+                java.io.File.pathSeparator +
+                "/opt/aiken/bin" +
+                java.io.File.pathSeparator +
+                "/usr/bin",
+            environment["PATH"]
+        )
+    }
+
+    @Test
     fun cleanupLegacyToolchainManifestDeletesManagedFiles() {
         val projectDir = Files.createTempDirectory("aiken-package-json")
         val toolchainRoot = projectDir.resolve("bin")

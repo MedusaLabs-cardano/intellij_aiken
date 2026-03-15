@@ -2,15 +2,14 @@ package com.medusalabs.aiken.run
 
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.SettingsEditor
-import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.TextBrowseFolderListener
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
-import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -35,7 +34,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private var rootContent: JComponent? = null
 
     private val projectDirectoryField = TextFieldWithBrowseButton(JBTextField())
-    private val aikenBinaryField = TextFieldWithBrowseButton(JBTextField())
     private val extraArgsField = JBTextField()
 
     private val buildDenyWarningsCheck = JBCheckBox("Treat warnings as errors")
@@ -99,14 +97,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 .withDescription("Directory passed to `aiken ... [DIRECTORY]` and used as working directory.")
         projectDirectoryField.addBrowseFolderListener(TextBrowseFolderListener(projectDirectoryDescriptor, null))
 
-        val aikenBinaryDescriptor =
-            FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
-                .withTitle("Select aiken binary")
-                .withDescription("Path to `aiken` executable.")
-        aikenBinaryField.addBrowseFolderListener(TextBrowseFolderListener(aikenBinaryDescriptor, null))
-
         (projectDirectoryField.textField as? JBTextField)?.emptyText?.text = "e.g. /home/user/my-aiken-project"
-        (aikenBinaryField.textField as? JBTextField)?.emptyText?.text = "aiken"
         extraArgsField.emptyText.text = "e.g. --help"
 
         buildEnvField.emptyText.text = "e.g. preprod"
@@ -148,7 +139,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         updatePreferredSize(configuration.command)
         projectDirectoryField.text =
             configuration.projectDirectory.ifBlank { configuration.project.basePath ?: "" }
-        aikenBinaryField.text = configuration.aikenBinaryPath.ifBlank { "aiken" }
         extraArgsField.text = configuration.extraArgs
 
         buildDenyWarningsCheck.isSelected = configuration.denyWarnings
@@ -208,7 +198,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     override fun applyEditorTo(configuration: AikenRunConfiguration) {
         configuration.projectDirectory = projectDirectoryField.text.trim()
-        configuration.aikenBinaryPath = aikenBinaryField.text.trim().ifEmpty { "aiken" }
         configuration.extraArgs = extraArgsField.text.trim()
 
         when (configuration.command) {
@@ -312,13 +301,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("Working directory for Aiken command. Relative paths resolve from here.")
-                }
-
-                row("Aiken binary path:") {
-                    cell(aikenBinaryField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Binary name or full path. Default `aiken` follows the project toolchain settings. In local mode, runners install the selected Aiken version directly into `${AikenNodeToolchain.LOCAL_TOOLCHAIN_DIRECTORY}/` when needed.")
                 }
 
                 row("Extra arguments:") {

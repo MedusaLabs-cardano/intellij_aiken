@@ -19,6 +19,7 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lang</depends>
     <depends>com.intellij.modules.lsp</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.medusalabs.aiken.lang.AikenFileType" fieldName="INSTANCE"/>
@@ -94,6 +95,10 @@
         </intentionAction>
 
         <notificationGroup id="Aiken Toolchain" displayType="BALLOON"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="org.jetbrains.plugins.terminal">
+        <localTerminalCustomizer implementation="com.medusalabs.aiken.terminal.AikenLocalTerminalCustomizer"/>
     </extensions>
 
     <applicationListeners>
