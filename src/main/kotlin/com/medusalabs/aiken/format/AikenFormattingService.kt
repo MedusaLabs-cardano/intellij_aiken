@@ -11,6 +11,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 
 class AikenFormattingService : FormattingService {
     private val log = Logger.getInstance(AikenFormattingService::class.java)
@@ -48,9 +49,10 @@ class AikenFormattingService : FormattingService {
 
     private fun formatFileIfSupported(file: PsiFile) {
         val fileType = file.fileType
+        val executable = AikenNodeToolchain.resolvePreferredAikenExecutable(file.project)
         val command = when (fileType) {
-            AikenFileType -> listOf("aiken", "fmt", "--stdin")
-            UplcFileType -> listOf("aiken", "uplc", "fmt", "--stdin")
+            AikenFileType -> listOf(executable, "fmt", "--stdin")
+            UplcFileType -> listOf(executable, "uplc", "fmt", "--stdin")
             else -> null
         } ?: return
 

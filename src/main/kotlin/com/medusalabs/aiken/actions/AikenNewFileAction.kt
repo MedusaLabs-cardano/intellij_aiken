@@ -21,6 +21,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.panel
 import com.medusalabs.aiken.icons.AikenIcons
 import com.medusalabs.aiken.naming.AikenNamingRules
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -56,7 +57,7 @@ class AikenNewFileAction : AnAction("Aiken File", "Create a new Aiken file", Aik
                 if (text == null) {
                     Messages.showErrorDialog(
                         project,
-                        "Failed to resolve validator template. Please ensure `aiken` is installed and available in PATH.",
+                        "Failed to resolve validator template. Please ensure the project has a local Aiken toolchain or that `aiken` is available globally.",
                         "New Aiken File"
                     )
                     return
@@ -213,7 +214,7 @@ private object AikenValidatorTemplateProvider {
     private fun fetchFromAikenNew(project: Project): String? {
         return try {
             runWithProgress(project, "Resolving Aiken validator template") {
-                loadTemplateFromCli()
+                loadTemplateFromCli(project)
             }
         } catch (t: Throwable) {
             logger.warn("Failed to fetch validator template from `aiken new`", t)
@@ -221,10 +222,14 @@ private object AikenValidatorTemplateProvider {
         }
     }
 
-    private fun loadTemplateFromCli(): String? {
+    private fun loadTemplateFromCli(project: Project): String? {
         val tempRoot = Files.createTempDirectory("aiken-template-")
         try {
-            val cmd = listOf("aiken", "new", "codex/template")
+            val cmd = listOf(
+                AikenNodeToolchain.resolvePreferredAikenExecutable(project),
+                "new",
+                "codex/template"
+            )
             val process = ProcessBuilder(cmd)
                 .directory(tempRoot.toFile())
                 .redirectErrorStream(true)

@@ -48,6 +48,7 @@
 
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.project.AikenNodeEnvironmentStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.whatsnew.AikenWhatsNewStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
@@ -64,6 +65,7 @@
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>
         <newProjectWizard.languageGenerator implementation="com.medusalabs.aiken.project.AikenNewProjectWizard"/>
+        <projectConfigurable id="aiken.toolchain.settings" groupId="tools" displayName="Aiken Toolchain" instance="com.medusalabs.aiken.tooling.AikenToolchainConfigurable" nonDefaultProject="true"/>
 
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenImportIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenModuleIndex"/>
@@ -90,6 +92,8 @@
             <className>com.medusalabs.aiken.lsp.AikenRemoveAllUnusedImportsIntention</className>
             <category>Aiken</category>
         </intentionAction>
+
+        <notificationGroup id="Aiken Toolchain" displayType="BALLOON"/>
     </extensions>
 
     <applicationListeners>

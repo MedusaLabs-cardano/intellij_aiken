@@ -54,6 +54,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.options.SettingsEditor
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComponentContainer
 import com.intellij.openapi.util.JDOMExternalizerUtil
@@ -110,6 +111,9 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
+import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
+import com.medusalabs.aiken.tooling.AikenToolchainMode
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.BorderFactory
@@ -364,6 +368,7 @@ class AikenRunConfiguration(
             override fun startProcess(): ProcessHandler {
                 val executable = resolveAikenExecutable()
                 val workDir = resolveProjectDirectory()
+                val commandSupport = resolveManagedCommandSupport(executable, workDir)
                 val applySessionKey = if (command == AikenRunCommand.APPLY) applyAutoSessionKey(workDir) else null
                 val args =
                     if (command == AikenRunCommand.APPLY) {
@@ -391,7 +396,7 @@ class AikenRunConfiguration(
                             includeExtraArgs = true
                         )
                     } else {
-                        buildCommandParameters()
+                        buildCommandParameters(support = commandSupport)
                     }
                 val invocation = buildInvocation(executable, args, workDir)
 
@@ -3091,6 +3096,7 @@ class AikenRunConfiguration(
             handler.startNotify()
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
+            val commandSupport = resolveManagedCommandSupport(executable, workDir)
             val ideWatchEnabled = watch && checkOutputMode == AikenCheckOutputMode.IDE_INTEGRATED
             val restartRequested = AtomicBoolean(false)
             val watchConnection =
@@ -3102,7 +3108,7 @@ class AikenRunConfiguration(
             var lastExitCode = 0
 
             try {
-                val preflightRun = runTtyDiagnosticsPass(executable, workDir, handler)
+                val preflightRun = runTtyDiagnosticsPass(executable, workDir, handler, commandSupport)
                 lastExitCode = preflightRun.exitCode
 
                 if (preflightRun.exitCode != 0) {
@@ -3120,22 +3126,37 @@ class AikenRunConfiguration(
                 }
 
                 var diagnostics = diagnosticsFromText(preflightRun.output)
-                val args = buildCommandParameters()
-                val invocation = buildInvocation(executable, args, workDir)
-                val mainRun = runCommandCollectingOutput(invocation, workDir, handler, usePty = false)
+                val args = buildCommandParameters(support = commandSupport)
+                val mainRun =
+                    runManagedCommandCollectingOutput(
+                        executable = executable,
+                        args = args,
+                        workDir = workDir,
+                        handler = handler,
+                        usePty = false,
+                        support = commandSupport
+                    )
                 val output = mainRun.output
                 lastExitCode = mainRun.exitCode
-                val report = parseCheckReport(output, workDir)
+                val report =
+                    parseCheckReport(output, workDir)
+                        ?: if (commandSupport?.supportsStructuredCheckJson() != true) {
+                            parseLegacyCheckReport(output, workDir)
+                        } else {
+                            null
+                        }
                 val parsedTestsCount = report?.modules?.sumOf { it.tests.size } ?: 0
                 if (report != null) {
-                    val prefix = output.substring(0, report.jsonStart).trimEnd()
-                    val suffix = output.substring(report.jsonEndExclusive).trimStart()
+                    val prefix = output.substring(0, report.payloadStart).trimEnd()
+                    val suffix = output.substring(report.payloadEndExclusive).trimStart()
                     diagnostics = mergeDiagnosticsSections(diagnostics, extractDiagnosticsSections(prefix, suffix))
-                    if (prefix.isNotEmpty()) {
-                        handler.notifyTextAvailable("$prefix\n", ProcessOutputTypes.STDOUT)
+                    val prefixForConsole = stripDiagnosticsFromCheckConsoleOutput(prefix)
+                    if (prefixForConsole.isNotBlank()) {
+                        handler.notifyTextAvailable("$prefixForConsole\n", ProcessOutputTypes.STDOUT)
                     }
-                    if (suffix.isNotEmpty()) {
-                        handler.notifyTextAvailable("\n$suffix\n", ProcessOutputTypes.STDOUT)
+                    val suffixForConsole = stripDiagnosticsFromCheckConsoleOutput(suffix)
+                    if (suffixForConsole.isNotBlank()) {
+                        handler.notifyTextAvailable("\n$suffixForConsole\n", ProcessOutputTypes.STDOUT)
                     }
                 } else {
                     diagnostics =
@@ -3145,7 +3166,10 @@ class AikenRunConfiguration(
                                 diagnosticsForFailedRun(output, treatWarningsAsErrors = denyWarnings)
                             )
                         } else {
-                            handler.notifyTextAvailable(output, ProcessOutputTypes.STDOUT)
+                            val outputForConsole = stripDiagnosticsFromCheckConsoleOutput(output)
+                            if (outputForConsole.isNotBlank()) {
+                                handler.notifyTextAvailable(outputForConsole, ProcessOutputTypes.STDOUT)
+                            }
                             mergeDiagnosticsSections(diagnostics, diagnosticsFromText(output))
                         }
                 }
@@ -3268,11 +3292,18 @@ class AikenRunConfiguration(
         private fun runTtyDiagnosticsPass(
             executable: String,
             workDir: String?,
-            handler: AikenAsyncProcessHandler
+            handler: AikenAsyncProcessHandler,
+            support: AikenCliCompatibility.CommandSupport?
         ): CommandRunResult {
-            val diagnosticArgs = buildCommandParameters(forceSkipTests = true)
-            val invocation = buildInvocation(executable, diagnosticArgs, workDir)
-            return runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
+            val diagnosticArgs = buildCommandParameters(forceSkipTests = true, support = support)
+            return runManagedCommandCollectingOutput(
+                executable = executable,
+                args = diagnosticArgs,
+                workDir = workDir,
+                handler = handler,
+                usePty = true,
+                support = support
+            )
         }
 
         private fun runCommandCollectingOutput(
@@ -3368,6 +3399,7 @@ class AikenRunConfiguration(
             handler.startNotify()
             val executable = resolveAikenExecutable()
             val workDir = resolveProjectDirectory()
+            val commandSupport = resolveManagedCommandSupport(executable, workDir)
             val ideWatchEnabled = watch && buildOutputMode == AikenBuildOutputMode.IDE_INTEGRATED
             val restartRequested = AtomicBoolean(false)
             val watchConnection =
@@ -3380,9 +3412,16 @@ class AikenRunConfiguration(
 
             try {
                 buildProgress.progress("Running aiken build")
-                val args = buildCommandParameters()
-                val invocation = buildInvocation(executable, args, workDir)
-                val run = runCommandCollectingOutput(invocation, workDir, handler, usePty = true)
+                val args = buildCommandParameters(support = commandSupport)
+                val run =
+                    runManagedCommandCollectingOutput(
+                        executable = executable,
+                        args = args,
+                        workDir = workDir,
+                        handler = handler,
+                        usePty = true,
+                        support = commandSupport
+                    )
                 lastExitCode = run.exitCode
                 if (run.output.isNotBlank()) {
                     buildProgress.output(ensureTrailingNewline(run.output), true)
@@ -4545,6 +4584,37 @@ class AikenRunConfiguration(
         return path.endsWith(".ak") || path.endsWith(".toml") || path.endsWith(".json")
     }
 
+    private fun runManagedCommandCollectingOutput(
+        executable: String,
+        args: List<String>,
+        workDir: String?,
+        handler: AikenAsyncProcessHandler,
+        usePty: Boolean,
+        support: AikenCliCompatibility.CommandSupport?
+    ): CommandRunResult {
+        var currentArgs = args
+        val currentSupport = support
+        val removedFlags = LinkedHashSet<String>()
+
+        repeat(4) {
+            val invocation = buildInvocation(executable, currentArgs, workDir)
+            val run = runCommandCollectingOutput(invocation, workDir, handler, usePty)
+            val compatSupport = currentSupport ?: return run
+            val retry = AikenCliCompatibility.buildRetryPlan(currentArgs, compatSupport, run.output) ?: return run
+            if (!removedFlags.add(retry.removedFlag)) {
+                return run
+            }
+            handler.notifyTextAvailable(
+                "[compat] ${command.cliValue} does not support ${retry.removedFlag}; retrying without it.\n",
+                ProcessOutputTypes.STDOUT
+            )
+            currentArgs = retry.args
+        }
+
+        val finalInvocation = buildInvocation(executable, currentArgs, workDir)
+        return runCommandCollectingOutput(finalInvocation, workDir, handler, usePty)
+    }
+
     private fun runCommandCollectingOutput(
         invocation: List<String>,
         workDir: String?,
@@ -4779,7 +4849,13 @@ class AikenRunConfiguration(
     }
 
     private fun resolveAikenExecutable(): String {
-        return aikenBinaryPath.trim().ifEmpty { "aiken" }
+        val configured = aikenBinaryPath.trim()
+        if (configured.isNotEmpty() && configured != "aiken") {
+            return configured
+        }
+        val projectDirectory = resolveProjectDirectory()
+        ensureLocalAikenInstalledIfNeeded(projectDirectory)
+        return AikenNodeToolchain.resolvePreferredAikenExecutable(project, projectDirectory)
     }
 
     private fun resolveProjectDirectory(): String? {
@@ -4788,19 +4864,165 @@ class AikenRunConfiguration(
         return project.basePath?.trim()?.takeIf { it.isNotEmpty() }
     }
 
-    private fun buildCommandParameters(forceSkipTests: Boolean = false): List<String> {
+    private fun ensureLocalAikenInstalledIfNeeded(projectDirectory: String?) {
+        val settings = project.getService(AikenProjectToolchainSettings::class.java)
+        if (settings.getMode() != AikenToolchainMode.LOCAL) {
+            return
+        }
+
+        val basePath = projectDirectory?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        val desiredVersion = AikenNodeToolchain.resolveDesiredLocalAikenVersion(project, basePath)
+        if (settings.getLocalAikenVersion() != desiredVersion) {
+            settings.update(
+                mode = AikenToolchainMode.LOCAL,
+                globalAikenCommand = settings.getGlobalAikenCommand(),
+                localAikenVersion = desiredVersion
+            )
+        }
+
+        var probe = AikenNodeToolchain.inspectProjectLocalAiken(basePath)
+        if (AikenNodeToolchain.installedVersionMatchesRequested(probe, desiredVersion)) {
+            AikenNodeToolchain.cleanupLegacyToolchainManifest(Paths.get(basePath))
+            return
+        }
+
+        val npmAvailability = AikenNodeToolchain.describeNpmAvailability(project)
+        if (!npmAvailability.available) {
+            throw IllegalStateException(
+                "Local Aiken is selected for this project, but npm is unavailable. Install Node.js/npm, or switch the project toolchain to `Use global Aiken`."
+            )
+        }
+
+        val workingDirectory = Paths.get(basePath)
+        AikenNodeToolchain.cleanupLegacyToolchainManifest(workingDirectory)
+
+        runCatching {
+            val installResult = runWithProgress("Installing project-local Aiken") {
+                AikenNodeToolchain.runNpmCommand(
+                    project = project,
+                    workingDirectory = workingDirectory,
+                    commandName = "INSTALL",
+                    arguments = AikenNodeToolchain.buildLocalInstallArguments(desiredVersion)
+                )
+            }
+            if (installResult.exitCode != 0) {
+                val details = installResult.output.ifBlank { "(no output)" }
+                throw IllegalStateException("Failed to install the project-local Aiken toolchain.\n$details")
+            }
+        }
+        probe = AikenNodeToolchain.inspectProjectLocalAiken(basePath)
+        if (AikenNodeToolchain.installedVersionMatchesRequested(probe, desiredVersion)) {
+            AikenNodeToolchain.cleanupLegacyToolchainManifest(workingDirectory)
+            return
+        }
+
+        val repairResult = runCatching {
+            val result = runWithProgress("Repairing project-local Aiken") {
+                AikenNodeToolchain.runNpmCommand(
+                    project = project,
+                    workingDirectory = workingDirectory,
+                    commandName = "INSTALL",
+                    arguments = AikenNodeToolchain.buildRepairInstallArguments(desiredVersion)
+                )
+            }
+            if (result.exitCode != 0) {
+                val details = result.output.ifBlank { "(no output)" }
+                throw IllegalStateException("Failed to repair the project-local Aiken toolchain.\n$details")
+            }
+        }
+        probe = AikenNodeToolchain.inspectProjectLocalAiken(basePath)
+        if (AikenNodeToolchain.installedVersionMatchesRequested(probe, desiredVersion)) {
+            AikenNodeToolchain.cleanupLegacyToolchainManifest(workingDirectory)
+            return
+        }
+
+        val repairFailure = repairResult.exceptionOrNull()?.message
+        val details = listOfNotNull(probe.details, repairFailure).joinToString("\n").ifBlank {
+            "The project-local Aiken executable is still unavailable after installation."
+        }
+        throw IllegalStateException(details)
+    }
+
+    private fun runWithProgress(
+        title: String,
+        action: () -> AikenNodeToolchain.ProcessResult
+    ): AikenNodeToolchain.ProcessResult {
+        var result: AikenNodeToolchain.ProcessResult? = null
+        var failure: Throwable? = null
+        val finished = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                try {
+                    val future = ApplicationManager.getApplication().executeOnPooledThread<AikenNodeToolchain.ProcessResult> {
+                        action()
+                    }
+                    result = future.get()
+                } catch (e: ExecutionException) {
+                    failure = e.cause ?: e
+                } catch (t: Throwable) {
+                    failure = t
+                }
+            },
+            title,
+            false,
+            project
+        )
+        if (!finished) {
+            throw IllegalStateException("$title was cancelled.")
+        }
+        failure?.let { throw it }
+        return result ?: throw IllegalStateException("$title failed with no result.")
+    }
+
+    private fun resolveManagedCommandSupport(executable: String, workDir: String?): AikenCliCompatibility.CommandSupport? =
+        when (command) {
+            AikenRunCommand.BUILD,
+            AikenRunCommand.CHECK ->
+                runCatching {
+                    AikenCliCompatibility.resolveCommandSupport(executable, workDir, command, commandInvocationTokens())
+                }.getOrNull()
+
+            else -> null
+        }
+
+    private fun buildCommandParameters(
+        forceSkipTests: Boolean = false,
+        support: AikenCliCompatibility.CommandSupport? = null
+    ): List<String> {
         val parameters = ArrayList<String>()
 
         when (command) {
             AikenRunCommand.BUILD -> {
-                if (denyWarnings) parameters += "--deny"
-                if (silentWarnings) parameters += "--silent"
-                if (watch && buildOutputMode != AikenBuildOutputMode.IDE_INTEGRATED) parameters += "--watch"
-                if (buildUplc) parameters += "--uplc"
-                appendValueOption(parameters, "--env", buildEnv)
-                appendValueOption(parameters, "--out", buildOut)
-                parameters += listOf("--trace-filter", buildTraceFilter.cliValue)
-                parameters += listOf("--trace-level", buildTraceLevel.cliValue)
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.DENY, denyWarnings)
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.SILENT, silentWarnings)
+                appendManagedFlag(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.WATCH,
+                    watch && buildOutputMode != AikenBuildOutputMode.IDE_INTEGRATED
+                )
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.UPLC, buildUplc)
+                appendManagedValueOption(parameters, support, AikenCliCompatibility.ManagedAikenOption.ENV, buildEnv)
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.OUT,
+                    buildOut,
+                    defaultValue = "plutus.json"
+                )
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.TRACE_FILTER,
+                    buildTraceFilter.cliValue,
+                    defaultValue = AikenTraceFilter.ALL.cliValue
+                )
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.TRACE_LEVEL,
+                    buildTraceLevel.cliValue,
+                    defaultValue = AikenTraceLevel.SILENT.cliValue
+                )
             }
 
             AikenRunCommand.ADDRESS -> {
@@ -4826,25 +5048,69 @@ class AikenRunConfiguration(
             }
 
             AikenRunCommand.CHECK -> {
-                if (denyWarnings) parameters += "--deny"
-                if (silentWarnings) parameters += "-S"
-                if (watch && checkOutputMode != AikenCheckOutputMode.IDE_INTEGRATED) parameters += "--watch"
-                if (checkSkipTests || forceSkipTests) parameters += "--skip-tests"
-                if (checkDebug) parameters += "--debug"
-                appendValueOption(parameters, "--seed", checkSeed)
-                appendValueOption(parameters, "--max-success", checkMaxSuccess)
-                parameters += listOf("--property-coverage", checkPropertyCoverage.cliValue)
-                appendValueOption(parameters, "--match-tests", normalizeMatchTestsPattern(checkMatchTests))
-                if (checkExactMatch) parameters += "--exact-match"
-                appendValueOption(parameters, "--env", checkEnv)
-                parameters += listOf("--trace-filter", checkTraceFilter.cliValue)
-                parameters += listOf("--trace-level", checkTraceLevel.cliValue)
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.DENY, denyWarnings)
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.SILENT, silentWarnings)
+                appendManagedFlag(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.WATCH,
+                    watch && checkOutputMode != AikenCheckOutputMode.IDE_INTEGRATED
+                )
+                appendManagedFlag(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.SKIP_TESTS,
+                    checkSkipTests || forceSkipTests
+                )
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.DEBUG, checkDebug)
+                appendManagedValueOption(parameters, support, AikenCliCompatibility.ManagedAikenOption.SEED, checkSeed)
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.MAX_SUCCESS,
+                    checkMaxSuccess,
+                    defaultValue = "100"
+                )
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.PROPERTY_COVERAGE,
+                    checkPropertyCoverage.cliValue,
+                    defaultValue = AikenPropertyCoverage.RELATIVE_TO_LABELS.cliValue
+                )
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.MATCH_TESTS,
+                    normalizeMatchTestsPattern(checkMatchTests)
+                )
+                appendManagedFlag(parameters, support, AikenCliCompatibility.ManagedAikenOption.EXACT_MATCH, checkExactMatch)
+                appendManagedValueOption(parameters, support, AikenCliCompatibility.ManagedAikenOption.ENV, checkEnv)
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.TRACE_FILTER,
+                    checkTraceFilter.cliValue,
+                    defaultValue = AikenTraceFilter.ALL.cliValue
+                )
+                appendManagedValueOption(
+                    parameters,
+                    support,
+                    AikenCliCompatibility.ManagedAikenOption.TRACE_LEVEL,
+                    checkTraceLevel.cliValue,
+                    defaultValue = AikenTraceLevel.VERBOSE.cliValue
+                )
             }
         }
 
         val extra = extraArgs.trim()
         if (extra.isNotEmpty()) {
-            parameters += ParametersListUtil.parse(extra)
+            val parsedExtra = ParametersListUtil.parse(extra)
+            if (support != null) {
+                parameters += AikenCliCompatibility.sanitizeUnsupportedManagedFlags(parsedExtra, support).args
+            } else {
+                parameters += parsedExtra
+            }
         }
         return parameters
     }
@@ -5151,8 +5417,8 @@ class AikenRunConfiguration(
 
     private data class ParsedCheckReport(
         val modules: List<ParsedModule>,
-        val jsonStart: Int,
-        val jsonEndExclusive: Int
+        val payloadStart: Int,
+        val payloadEndExclusive: Int
     )
 
     private data class ParsedModule(
@@ -5205,9 +5471,154 @@ class AikenRunConfiguration(
         val withLocations = attachTestLocations(modules, workDir)
         return ParsedCheckReport(
             modules = withLocations,
-            jsonStart = extracted.start,
-            jsonEndExclusive = extracted.endExclusive
+            payloadStart = extracted.start,
+            payloadEndExclusive = extracted.endExclusive
         )
+    }
+
+    private fun parseLegacyCheckReport(rawOutput: String, workDir: String?): ParsedCheckReport? {
+        val normalized = rawOutput.replace("\r\n", "\n")
+        val lines = normalized.split('\n')
+
+        val modules = ArrayList<ParsedModule>()
+        var firstPayloadLine: Int? = null
+        var lastPayloadLineExclusive: Int? = null
+        var index = 0
+
+        while (index < lines.size) {
+            val title =
+                LEGACY_TEST_MODULE_HEADER_REGEX
+                    .find(stripAnsi(lines[index]).trimStart())
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.trim()
+
+            if (title.isNullOrBlank()) {
+                index += 1
+                continue
+            }
+
+            val footerLine =
+                ((index + 1) until lines.size).firstOrNull { candidate ->
+                    stripAnsi(lines[candidate]).trimStart().startsWith("┕")
+                }
+
+            if (footerLine == null || footerLine <= index + 1) {
+                index += 1
+                continue
+            }
+
+            val tests =
+                parseLegacyModuleTests(
+                    lines = lines.subList(index + 1, footerLine)
+                )
+
+            if (tests.isNotEmpty()) {
+                if (firstPayloadLine == null) {
+                    firstPayloadLine = index
+                }
+                lastPayloadLineExclusive = footerLine + 1
+                modules += ParsedModule(name = title, tests = tests)
+            }
+
+            index = footerLine + 1
+        }
+
+        if (modules.isEmpty() || firstPayloadLine == null || lastPayloadLineExclusive == null) {
+            return null
+        }
+
+        val withLocations = attachTestLocations(modules, workDir)
+        return ParsedCheckReport(
+            modules = withLocations,
+            payloadStart = lineStartOffset(normalized, firstPayloadLine),
+            payloadEndExclusive = lineStartOffset(normalized, lastPayloadLineExclusive)
+        )
+    }
+
+    private fun parseLegacyModuleTests(lines: List<String>): List<ParsedTest> {
+        data class PendingLegacyTest(
+            val title: String,
+            val passed: Boolean,
+            val memUnits: Long?,
+            val cpuUnits: Long?,
+            val details: MutableList<String>
+        )
+
+        val tests = ArrayList<ParsedTest>()
+        var current: PendingLegacyTest? = null
+
+        fun flushCurrent() {
+            val pending = current ?: return
+            tests +=
+                ParsedTest(
+                    title = pending.title,
+                    kind = null,
+                    passed = pending.passed,
+                    details = pending.details.joinToString("\n").ifBlank { null },
+                    traces = emptyList(),
+                    memUnits = pending.memUnits,
+                    cpuUnits = pending.cpuUnits,
+                    locationHint = null
+                )
+            current = null
+        }
+
+        for (rawLine in lines) {
+            val contentLine =
+                stripAnsi(rawLine)
+                    .trimStart()
+                    .removePrefix("│")
+                    .trimStart()
+
+            val match = LEGACY_TEST_RESULT_LINE_REGEX.matchEntire(contentLine)
+            if (match != null) {
+                flushCurrent()
+
+                val status = match.groupValues[1]
+                val metadata = match.groupValues[2].takeIf { it.isNotBlank() }
+                val title = match.groupValues[3].trim()
+                val executionUnits = parseLegacyExecutionUnits(metadata)
+
+                current =
+                    PendingLegacyTest(
+                        title = title,
+                        passed = status == "PASS",
+                        memUnits = executionUnits.first,
+                        cpuUnits = executionUnits.second,
+                        details = ArrayList()
+                    )
+                continue
+            }
+
+            if (contentLine.isBlank()) continue
+            current?.details?.add(contentLine)
+        }
+
+        flushCurrent()
+        return tests
+    }
+
+    private fun parseLegacyExecutionUnits(metadata: String?): Pair<Long?, Long?> {
+        if (metadata.isNullOrBlank()) return null to null
+
+        val match = LEGACY_TEST_EXECUTION_UNITS_REGEX.find(metadata) ?: return null to null
+        val mem = match.groupValues[1].replace(",", "").toLongOrNull()
+        val cpu = match.groupValues[2].replace(",", "").toLongOrNull()
+        return mem to cpu
+    }
+
+    private fun lineStartOffset(text: String, lineIndex: Int): Int {
+        if (lineIndex <= 0) return 0
+        var offset = 0
+        var currentLine = 0
+        while (offset < text.length && currentLine < lineIndex) {
+            if (text[offset] == '\n') {
+                currentLine += 1
+            }
+            offset += 1
+        }
+        return offset
     }
 
     private fun extractTestObjects(moduleObject: JsonObject): List<JsonObject> {
@@ -6118,6 +6529,59 @@ class AikenRunConfiguration(
         )
     }
 
+    private fun stripDiagnosticsFromCheckConsoleOutput(text: String): String {
+        if (text.isBlank()) return text
+
+        val normalized = text.replace("\r\n", "\n")
+        val lines = normalized.split('\n')
+        val summaryLineIndex =
+            lines.indexOfFirst { line ->
+                SUMMARY_ERRORS_WARNINGS_REGEX.containsMatchIn(stripAnsi(line).lowercase())
+            }.let { index -> if (index >= 0) index else lines.size }
+
+        val markers = extractDiagnosticMarkers(lines, summaryLineIndex)
+        if (markers.isNotEmpty()) {
+            val keptLines = ArrayList<String>()
+            var cursor = 0
+            for ((index, marker) in markers.withIndex()) {
+                if (marker.startLine > cursor) {
+                    keptLines += lines.subList(cursor, marker.startLine)
+                }
+                val nextStart =
+                    if (index + 1 < markers.size) markers[index + 1].startLine
+                    else summaryLineIndex
+                cursor = maxOf(cursor, nextStart)
+            }
+            if (cursor < lines.size) {
+                keptLines += lines.subList(cursor, lines.size)
+            }
+            return cleanupCheckConsoleOutput(keptLines.joinToString("\n"))
+        }
+
+        var cleaned = normalized
+        val blocksToStrip =
+            (splitDiagnosticBlocks(normalized).warnings + splitDiagnosticBlocks(normalized).errors)
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sortedByDescending { it.length }
+
+        for (block in blocksToStrip) {
+            while (true) {
+                val index = cleaned.indexOf(block)
+                if (index < 0) break
+                cleaned = cleaned.removeRange(index, index + block.length)
+            }
+        }
+
+        return cleanupCheckConsoleOutput(cleaned)
+    }
+
+    private fun cleanupCheckConsoleOutput(text: String): String {
+        return text
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim('\n', '\r')
+    }
+
     private fun classifyDiagnosticBlock(block: String): DiagnosticKind {
         val sanitizedBlock = stripAnsi(block)
         val loweredBlock = sanitizedBlock.lowercase()
@@ -6216,17 +6680,26 @@ class AikenRunConfiguration(
     }
 
     private fun mergeDiagnosticsSections(vararg sections: DiagnosticsSections): DiagnosticsSections {
-        val warnings = LinkedHashSet<String>()
-        val errors = LinkedHashSet<String>()
+        val warnings = LinkedHashMap<String, String>()
+        val errors = LinkedHashMap<String, String>()
         for (section in sections) {
-            warnings += section.warnings
-            errors += section.errors
+            section.warnings.forEach { block ->
+                warnings.putIfAbsent(normalizeDiagnosticBlock(block), block)
+            }
+            section.errors.forEach { block ->
+                errors.putIfAbsent(normalizeDiagnosticBlock(block), block)
+            }
         }
         return DiagnosticsSections(
-            warnings = warnings.toList(),
-            errors = errors.toList()
+            warnings = warnings.values.toList(),
+            errors = errors.values.toList()
         )
     }
+
+    private fun normalizeDiagnosticBlock(block: String): String =
+        stripAnsi(block)
+            .replace("\r\n", "\n")
+            .trim()
 
     private fun attachTestLocations(modules: List<ParsedModule>, workDir: String?): List<ParsedModule> {
         if (workDir.isNullOrBlank()) return modules
@@ -6650,6 +7123,34 @@ class AikenRunConfiguration(
         target += trimmed
     }
 
+    private fun appendManagedFlag(
+        target: MutableList<String>,
+        support: AikenCliCompatibility.CommandSupport?,
+        option: AikenCliCompatibility.ManagedAikenOption,
+        enabled: Boolean
+    ) {
+        if (!enabled) return
+        if (support != null && !support.supports(option)) return
+        val token = support?.preferredToken(option) ?: option.preferredTokens.first()
+        target += token
+    }
+
+    private fun appendManagedValueOption(
+        target: MutableList<String>,
+        support: AikenCliCompatibility.CommandSupport?,
+        option: AikenCliCompatibility.ManagedAikenOption,
+        value: String,
+        defaultValue: String? = null
+    ) {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return
+        if (defaultValue != null && trimmed == defaultValue) return
+        val token = support?.preferredToken(option) ?: option.preferredTokens.first()
+        if (support != null && !support.supports(option)) return
+        target += token
+        target += trimmed
+    }
+
     private data class TestSourceLocation(
         val absolutePath: String,
         val line: Int
@@ -6974,6 +7475,9 @@ class AikenRunConfiguration(
         val DIAGNOSTIC_GENERIC_WHILE_LINE_REGEX = Regex("""^while\s+.+\.\.\.$""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_PREFIX_REGEX = Regex("""^(warning|error)(\[[^\]]+])?:\s*""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_LEADING_SYMBOLS_REGEX = Regex("""^[^A-Za-z0-9]+""")
+        val LEGACY_TEST_MODULE_HEADER_REGEX = Regex("""^┍━\s+(.*?)\s+━*$""")
+        val LEGACY_TEST_RESULT_LINE_REGEX = Regex("""^(PASS|FAIL)\s+(?:\[(.+?)])?\s*(.+)$""")
+        val LEGACY_TEST_EXECUTION_UNITS_REGEX = Regex("""mem:\s*([0-9,]+)\s*,\s*cpu:\s*([0-9,]+)""")
         val ANSI_ESCAPE_REGEX = Regex("""(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]""")
         val BROKEN_ANSI_ESCAPE_REGEX = Regex("""\uFFFD\[[0-?]*[ -/]*[@-~]""")
         val STRAY_CSI_REGEX = Regex("""[\u001B\u009B\uFFFD]""")

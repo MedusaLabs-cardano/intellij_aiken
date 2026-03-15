@@ -10,6 +10,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.JBUI
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -317,7 +318,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                     cell(aikenBinaryField)
                         .resizableColumn()
                         .align(AlignX.FILL)
-                        .comment("Binary name or full path. Default: aiken.")
+                        .comment("Binary name or full path. Default `aiken` follows the project toolchain settings. In local mode, runners install the selected Aiken version directly into `${AikenNodeToolchain.LOCAL_TOOLCHAIN_DIRECTORY}/` when needed.")
                 }
 
                 row("Extra arguments:") {

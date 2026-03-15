@@ -7,6 +7,7 @@ import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.project.ProjectManager
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 
 /**
  * Simple on-save formatter that shells out to the Aiken CLI.
@@ -19,9 +20,11 @@ class AikenSaveFormatter : FileDocumentManagerListener {
     override fun beforeDocumentSaving(document: com.intellij.openapi.editor.Document) {
         val file = FileDocumentManager.getInstance().getFile(document) ?: return
         val fileType = file.fileType
+        val project = ProjectManager.getInstance().openProjects.firstOrNull()
+        val executable = AikenNodeToolchain.resolvePreferredAikenExecutable(project)
         val command = when (fileType) {
-            AikenFileType -> listOf("aiken", "fmt", "--stdin")
-            UplcFileType -> listOf("aiken", "uplc", "fmt", "--stdin")
+            AikenFileType -> listOf(executable, "fmt", "--stdin")
+            UplcFileType -> listOf(executable, "uplc", "fmt", "--stdin")
             else -> null
         } ?: return
 
@@ -29,7 +32,6 @@ class AikenSaveFormatter : FileDocumentManagerListener {
         val formatted = runFormatter(command, input) ?: return
         if (formatted == document.text) return
 
-        val project = ProjectManager.getInstance().openProjects.firstOrNull()
         WriteCommandAction.runWriteCommandAction(project) {
             document.setText(formatted)
         }

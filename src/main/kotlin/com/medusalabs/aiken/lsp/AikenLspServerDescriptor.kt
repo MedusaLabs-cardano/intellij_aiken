@@ -2,7 +2,6 @@ package com.medusalabs.aiken.lsp
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.SystemInfo
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.Lsp4jClient
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
@@ -10,6 +9,7 @@ import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import org.eclipse.lsp4j.PublishDiagnosticsParams
 
 class AikenLspServerDescriptor(project: Project) :
@@ -44,7 +44,7 @@ class AikenLspServerDescriptor(project: Project) :
     }
 
     override fun createCommandLine(): GeneralCommandLine {
-        val executable = if (SystemInfo.isWindows) "aiken.exe" else "aiken"
+        val executable = AikenNodeToolchain.resolvePreferredAikenExecutable(project)
         return GeneralCommandLine(executable, "lsp", "--stdio").apply {
             withEnvironment(System.getenv())
             project.basePath?.let { withWorkDirectory(it) }
