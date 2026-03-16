@@ -47,7 +47,6 @@ import com.intellij.execution.ui.ExecutionConsole
 import com.intellij.execution.filters.LazyFileHyperlinkInfo
 import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
-import com.intellij.ide.DataManager
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.PlatformCoreDataKeys
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -105,7 +104,6 @@ import com.intellij.ui.EditorTextField
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBComboBoxLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
@@ -116,19 +114,14 @@ import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
 import javax.swing.Box
 import javax.swing.BoxLayout
-import javax.swing.BorderFactory
 import javax.swing.JButton
-import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JComboBox
 import javax.swing.JPanel
-import javax.swing.JScrollPane
-import javax.swing.JTextField
 import javax.swing.Timer
 import javax.swing.JTree
 import javax.swing.UIManager
 import javax.swing.border.AbstractBorder
-import javax.swing.border.TitledBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.tree.DefaultMutableTreeNode
@@ -138,6 +131,18 @@ import java.awt.Font
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 
+private const val APPLY_EDITOR_LEFT_INSET = 10
+private const val DIAGNOSTICS_ROOT_ID = "aiken-root"
+private const val DIAGNOSTIC_TITLE_MAX_LENGTH = 120
+private const val DATA_PROVIDER_CLIENT_PROPERTY = "DataProvider"
+
+private fun isDarkUiTheme(): Boolean {
+    val background = UIUtil.getPanelBackground()
+    val luminance = (0.299 * background.red + 0.587 * background.green + 0.114 * background.blue) / 255.0
+    return luminance < 0.5
+}
+
+@Suppress("SameParameterValue")
 class AikenRunConfiguration(
     project: com.intellij.openapi.project.Project,
     factory: ConfigurationFactory,
@@ -1064,7 +1069,7 @@ class AikenRunConfiguration(
             return when (schema) {
                 is ApplySchema.Integer -> ApplyIntegerEditor(name, depth)
                 is ApplySchema.Bytes -> ApplyBytesEditor(name, depth)
-                is ApplySchema.ListOne -> ApplyListEditor(name, schemaDisplayType(schema), depth, schema.item) { childName, childDepth ->
+                is ApplySchema.ListOne -> ApplyListEditor(name, schemaDisplayType(schema), depth) { childName, childDepth ->
                     createEditor(schema.item, childName, childDepth)
                 }
                 is ApplySchema.ListMany -> ApplyTupleEditor(name, schemaDisplayType(schema), depth, schema.items) { childName, childSchema, childDepth ->
@@ -1793,7 +1798,6 @@ class AikenRunConfiguration(
             name: String,
             typeLabel: String,
             depth: Int,
-            private val itemSchema: ApplySchema,
             private val editorFactory: (String, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, typeLabel, depth) {
             private val rowsPanel = JPanel().apply {
@@ -2033,7 +2037,7 @@ class AikenRunConfiguration(
                 ?: UIManager.getColor("Component.borderColor")
                 ?: run {
                     val separator = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
-                    if (UIUtil.isUnderDarcula()) {
+                    if (isDarkUiTheme()) {
                         Color(separator.red, separator.green, separator.blue, 188)
                     } else {
                         Color(separator.red, separator.green, separator.blue, 144)
@@ -2048,7 +2052,7 @@ class AikenRunConfiguration(
                 buttonBorder
                     ?: componentBorder
                     ?: JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
-            return if (UIUtil.isUnderDarcula()) {
+            return if (isDarkUiTheme()) {
                 Color(base.red, base.green, base.blue, 232)
             } else {
                 Color(base.red, base.green, base.blue, 196)
@@ -2060,7 +2064,7 @@ class AikenRunConfiguration(
                 UIManager.getColor("ValidationTooltip.errorBorderColor")
                     ?: UIManager.getColor("Component.error.borderColor")
                     ?: UIUtil.getErrorForeground()
-            return if (UIUtil.isUnderDarcula()) {
+            return if (isDarkUiTheme()) {
                 Color(base.red, base.green, base.blue, 232)
             } else {
                 Color(base.red, base.green, base.blue, 216)
@@ -2303,7 +2307,7 @@ class AikenRunConfiguration(
                     override fun getMaximumSize(): Dimension =
                         if (depth == 0) preferredSize else Dimension(Int.MAX_VALUE, preferredSize.height)
                 }.apply {
-                border = JBUI.Borders.empty(0, editorLeftInset(), 6, 6)
+                border = JBUI.Borders.empty(0, APPLY_EDITOR_LEFT_INSET, 6, 6)
                 alignmentX = Component.LEFT_ALIGNMENT
                 putClientProperty(APPLY_EDITOR_COMPONENT_KEY, true)
                 putClientProperty(APPLY_EDITOR_DEPTH_KEY, depth)
@@ -2367,8 +2371,6 @@ class AikenRunConfiguration(
                 val titlePadding = JBUI.scale(28)
                 return titleWidth + titlePadding
             }
-
-            private fun editorLeftInset(): Int = 10
 
             private fun currentTitleText(): String = "$editorName :: $editorType"
 
@@ -2773,7 +2775,7 @@ class AikenRunConfiguration(
 
         private fun applyEditorStripeBackground(index: Int, depth: Int): Color {
             val base = UIUtil.getPanelBackground()
-            val dark = UIUtil.isUnderDarcula()
+            val dark = isDarkUiTheme()
             val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
             val fraction =
                 if (dark) {
@@ -2786,7 +2788,7 @@ class AikenRunConfiguration(
 
         private fun collectionStripeBackground(index: Int): Color {
             val base = UIUtil.getPanelBackground()
-            val dark = UIUtil.isUnderDarcula()
+            val dark = isDarkUiTheme()
             val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
             val fraction = if (dark) {
                 if (index % 2 == 0) 0.028 else 0.05
@@ -2946,6 +2948,7 @@ class AikenRunConfiguration(
 
             handler.addProcessListener(
                 object : ProcessListener {
+                    @Suppress("UNUSED_PARAMETER")
                     override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
                         runOutput.append(event.text)
                     }
@@ -5798,7 +5801,6 @@ class AikenRunConfiguration(
         workDir: String?,
         handler: ProcessHandler
     ) {
-        val rootId = "aiken-root"
         val rootLeafCount =
             report.modules.sumOf { it.tests.size } +
                 diagnostics.warnings.size +
@@ -5812,7 +5814,7 @@ class AikenRunConfiguration(
             "testSuiteStarted",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to rootId,
+                "nodeId" to DIAGNOSTICS_ROOT_ID,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
         )
@@ -5820,23 +5822,19 @@ class AikenRunConfiguration(
 
         emitDiagnosticsTreeSection(
             handler = handler,
-            rootId = rootId,
             sectionName = "warnings",
             sectionId = "diag-warnings",
             entries = diagnostics.warnings,
             workDir = workDir,
-            asError = false,
-            asTestCases = false
+            asError = false
         )
         emitDiagnosticsTreeSection(
             handler = handler,
-            rootId = rootId,
             sectionName = "errors",
             sectionId = "diag-errors",
             entries = diagnostics.errors,
             workDir = workDir,
-            asError = true,
-            asTestCases = false
+            asError = true
         )
 
         val testsLeafCount = report.modules.sumOf { it.tests.size }
@@ -5848,7 +5846,7 @@ class AikenRunConfiguration(
             linkedMapOf(
                 "name" to testsRootDisplayName,
                 "nodeId" to testsRootId,
-                "parentNodeId" to rootId
+                "parentNodeId" to DIAGNOSTICS_ROOT_ID
             )
         )
 
@@ -5933,7 +5931,7 @@ class AikenRunConfiguration(
             "testSuiteFinished",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to rootId
+                "nodeId" to DIAGNOSTICS_ROOT_ID
             )
         )
     }
@@ -5943,7 +5941,6 @@ class AikenRunConfiguration(
         workDir: String?,
         handler: ProcessHandler
     ) {
-        val rootId = "aiken-root"
         val rootLeafCount = diagnostics.warnings.size + diagnostics.errors.size
         val rootDisplayName = withLeafCount("aiken check", rootLeafCount)
         val allTests = diagnostics.errors.size
@@ -5952,7 +5949,7 @@ class AikenRunConfiguration(
             "testSuiteStarted",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to rootId,
+                "nodeId" to DIAGNOSTICS_ROOT_ID,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
         )
@@ -5960,23 +5957,19 @@ class AikenRunConfiguration(
 
         emitDiagnosticsTreeSection(
             handler = handler,
-            rootId = rootId,
             sectionName = "warnings",
             sectionId = "diag-warnings",
             entries = diagnostics.warnings,
             workDir = workDir,
-            asError = false,
-            asTestCases = false
+            asError = false
         )
         emitDiagnosticsTreeSection(
             handler = handler,
-            rootId = rootId,
             sectionName = "errors",
             sectionId = "diag-errors",
             entries = diagnostics.errors,
             workDir = workDir,
-            asError = true,
-            asTestCases = false
+            asError = true
         )
 
         emitServiceMessage(
@@ -5984,20 +5977,18 @@ class AikenRunConfiguration(
             "testSuiteFinished",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to rootId
+                "nodeId" to DIAGNOSTICS_ROOT_ID
             )
         )
     }
 
     private fun emitDiagnosticsTreeSection(
         handler: ProcessHandler,
-        rootId: String,
         sectionName: String,
         sectionId: String,
         entries: List<String>,
         workDir: String?,
-        asError: Boolean,
-        asTestCases: Boolean
+        asError: Boolean
     ) {
         if (entries.isEmpty()) return
         val sectionDisplayName = withLeafCount(sectionName, entries.size)
@@ -6008,7 +5999,7 @@ class AikenRunConfiguration(
             linkedMapOf(
                 "name" to sectionDisplayName,
                 "nodeId" to sectionId,
-                "parentNodeId" to rootId
+                "parentNodeId" to DIAGNOSTICS_ROOT_ID
             )
         )
 
@@ -6020,95 +6011,38 @@ class AikenRunConfiguration(
                 } else {
                     buildDiagnosticNodeTitle(sectionName, index, block)
                 }
-            if (asTestCases) {
-                val startedAttributes =
-                    linkedMapOf(
-                        "name" to title,
-                        "nodeId" to diagnosticId,
-                        "parentNodeId" to sectionId
-                    )
-                extractDiagnosticLocationHint(block, workDir)?.let { locationHint ->
-                    startedAttributes["locationHint"] = locationHint
-                }
-
-                emitServiceMessage(handler, "testStarted", startedAttributes)
-                if (!asError) {
-                    emitServiceMessage(
-                        handler,
-                        "testStdOut",
-                        linkedMapOf(
-                            "name" to title,
-                            "nodeId" to diagnosticId,
-                            "out" to (if (block.endsWith('\n')) block else "$block\n")
-                        )
-                    )
-                }
-
-                if (asError) {
-                    emitServiceMessage(
-                        handler,
-                        "testFailed",
-                        linkedMapOf(
-                            "name" to title,
-                            "nodeId" to diagnosticId,
-                            "message" to "Aiken error",
-                            "details" to block
-                        )
-                    )
-                } else {
-                    emitServiceMessage(
-                        handler,
-                        "testIgnored",
-                        linkedMapOf(
-                            "name" to title,
-                            "nodeId" to diagnosticId,
-                            "message" to "Aiken warning"
-                        )
-                    )
-                }
-
-                emitServiceMessage(
-                    handler,
-                    "testFinished",
-                    linkedMapOf(
-                        "name" to title,
-                        "nodeId" to diagnosticId
-                    )
+            val warningSuiteId = "$diagnosticId-suite"
+            val startedAttributes =
+                linkedMapOf(
+                    "name" to title,
+                    "nodeId" to warningSuiteId,
+                    "parentNodeId" to sectionId
                 )
-            } else {
-                val warningSuiteId = "$diagnosticId-suite"
-                val startedAttributes =
-                    linkedMapOf(
-                        "name" to title,
-                        "nodeId" to warningSuiteId,
-                        "parentNodeId" to sectionId
-                    )
-                extractDiagnosticLocationHint(block, workDir)?.let { locationHint ->
-                    startedAttributes["locationHint"] = locationHint
-                }
-                emitServiceMessage(
-                    handler,
-                    "testSuiteStarted",
-                    startedAttributes
-                )
-                emitServiceMessage(
-                    handler,
-                    "testStdOut",
-                    linkedMapOf(
-                        "name" to title,
-                        "nodeId" to warningSuiteId,
-                        "out" to (if (block.endsWith('\n')) block else "$block\n")
-                    )
-                )
-                emitServiceMessage(
-                    handler,
-                    "testSuiteFinished",
-                    linkedMapOf(
-                        "name" to title,
-                        "nodeId" to warningSuiteId
-                    )
-                )
+            extractDiagnosticLocationHint(block, workDir)?.let { locationHint ->
+                startedAttributes["locationHint"] = locationHint
             }
+            emitServiceMessage(
+                handler,
+                "testSuiteStarted",
+                startedAttributes
+            )
+            emitServiceMessage(
+                handler,
+                "testStdOut",
+                linkedMapOf(
+                    "name" to title,
+                    "nodeId" to warningSuiteId,
+                    "out" to (if (block.endsWith('\n')) block else "$block\n")
+                )
+            )
+            emitServiceMessage(
+                handler,
+                "testSuiteFinished",
+                linkedMapOf(
+                    "name" to title,
+                    "nodeId" to warningSuiteId
+                )
+            )
         }
 
         emitServiceMessage(
@@ -6156,7 +6090,7 @@ class AikenRunConfiguration(
         val firstMeaningfulLine = extractDiagnosticSummaryLine(block)
 
         val base = if (firstMeaningfulLine.isNotEmpty()) firstMeaningfulLine else sectionName
-        return "[${sectionName.dropLast(1)} ${index + 1}] ${shrinkMiddle(base, 120)}"
+        return "[${sectionName.dropLast(1)} ${index + 1}] ${shrinkMiddle(base)}"
     }
 
     private fun extractDiagnosticSummaryLine(block: String): String {
@@ -6258,7 +6192,10 @@ class AikenRunConfiguration(
     }
 
     private fun installBuildTreeNavigationDataProvider(buildConsole: BuildTreeConsoleView) {
-        DataManager.registerDataProvider(buildConsole.tree, createBuildTreeNavigationDataProvider(buildConsole.tree))
+        buildConsole.tree.putClientProperty(
+            DATA_PROVIDER_CLIENT_PROPERTY,
+            createBuildTreeNavigationDataProvider(buildConsole.tree)
+        )
     }
 
     private fun createBuildTreeNavigationDataProvider(tree: JTree): com.intellij.openapi.actionSystem.DataProvider {
@@ -6316,7 +6253,8 @@ class AikenRunConfiguration(
         )
     }
 
-    private fun shrinkMiddle(text: String, maxLength: Int): String {
+    private fun shrinkMiddle(text: String): String {
+        val maxLength = DIAGNOSTIC_TITLE_MAX_LENGTH
         if (maxLength <= 0 || text.length <= maxLength) return text
         if (maxLength <= 3) return text.take(maxLength)
 

@@ -19,7 +19,9 @@ import com.intellij.util.ProcessingContext
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenUseStatement
 import com.medusalabs.aiken.imports.AikenUseStatementParser
+import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
 import com.medusalabs.aiken.index.AikenExportIndex
+import com.medusalabs.aiken.index.decodeAikenExportIndexValue
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.project.AikenSearchScopes
@@ -545,8 +547,8 @@ private data class AikenImportCatalog(
                 val entities = LinkedHashMap<String, List<String>>(moduleNames.size)
                 for (module in moduleNames.sorted()) {
                     val names = LinkedHashSet<String>()
-                    for (value in index.getValues(AikenExportIndex.NAME, module, scope)) {
-                        names += AikenExportIndex.decode(value)
+                    for (value in index.getValues(AIKEN_EXPORT_INDEX_NAME, module, scope)) {
+                        names += decodeAikenExportIndexValue(value)
                     }
                     entities[module] = names.sorted()
                 }

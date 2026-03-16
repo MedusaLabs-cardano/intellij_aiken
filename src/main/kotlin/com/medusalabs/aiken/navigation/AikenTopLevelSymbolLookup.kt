@@ -8,8 +8,11 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiNamedElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
+import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
 import com.medusalabs.aiken.index.AikenTopLevelSymbolIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
+import com.medusalabs.aiken.index.aikenTopLevelSymbolModuleKey
+import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey
 import com.medusalabs.aiken.project.AikenSearchScopes
 
 object AikenTopLevelSymbolLookup {
@@ -30,17 +33,17 @@ object AikenTopLevelSymbolLookup {
 
         val keys =
             if (modulePaths.isEmpty()) {
-                kinds.map { kind -> AikenTopLevelSymbolIndex.nameKey(kind, name) }
+                kinds.map { kind -> aikenTopLevelSymbolNameKey(kind, name) }
             } else {
                 modulePaths.flatMap { modulePath ->
-                    kinds.map { kind -> AikenTopLevelSymbolIndex.moduleKey(kind, modulePath, name) }
+                    kinds.map { kind -> aikenTopLevelSymbolModuleKey(kind, modulePath, name) }
                 }
             }
 
         try {
             for (key in keys) {
                 index.processValues(
-                    AikenTopLevelSymbolIndex.NAME,
+                    AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
                     key,
                     null,
                     ValueProcessor<Int> { file, offset ->

@@ -11,6 +11,7 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.TextBrowseFolderListener
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -34,6 +35,31 @@ import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
+private fun aikenWizardCommentText(text: String): AdaptiveWrapText =
+    AdaptiveWrapText(text).apply {
+        foreground = UIUtil.getContextHelpForeground()
+        font = UIUtil.getLabelFont(UIUtil.FontSize.SMALL)
+    }
+
+private fun aikenWizardStatusText(): AdaptiveWrapText =
+    AdaptiveWrapText("").apply {
+        foreground = UIUtil.getContextHelpForeground()
+        font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
+    }
+
+private fun aikenWizardWarningText(): AdaptiveWrapText =
+    AdaptiveWrapText("").apply {
+        foreground = JBColor.RED
+        font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
+    }
+
+private fun Panel.aikenWizardWrappedCommentRow(text: String): Row =
+    row("") {
+        cell(aikenWizardCommentText(text))
+            .resizableColumn()
+            .align(AlignX.FILL)
+    }
+
 class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
     override val name: String = "Aiken"
 
@@ -55,9 +81,13 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
         private val aikenVersionCombo = ComboBox(aikenVersionModel)
         private val stdlibVersionModel = DefaultComboBoxModel(arrayOf("v3"))
         private val stdlibVersionCombo = ComboBox(stdlibVersionModel)
-        private val versionsStatusLabel = statusText("Aiken versions are loaded from the npm registry when local mode is enabled.")
-        private val stdlibStatusLabel = statusText("Loading bundled stdlib versions...")
-        private val npmWarningLabel = warningText("")
+        private val versionsStatusLabel = aikenWizardStatusText().apply {
+            text = "Aiken versions are loaded from the npm registry when local mode is enabled."
+        }
+        private val stdlibStatusLabel = aikenWizardStatusText().apply {
+            text = "Loading bundled stdlib versions..."
+        }
+        private val npmWarningLabel = aikenWizardWarningText()
         private lateinit var globalAikenCommentRow: Row
         private lateinit var aikenVersionCommentRow: Row
         private lateinit var globalAikenRow: Row
@@ -125,11 +155,15 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
             globalAikenField.textField.columns = 1
             (aikenVersionCombo.editor.editorComponent as? JTextField)?.columns = 1
             (stdlibVersionCombo.editor.editorComponent as? JTextField)?.columns = 1
-            globalAikenField.addBrowseFolderListener(
-                "Select Aiken Executable",
-                "Choose the global Aiken executable or script to run for this project.",
-                null,
+            val globalAikenDescriptor =
                 FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
+                    .withTitle("Select Aiken Executable")
+                    .withDescription("Choose the global Aiken executable or script to run for this project.")
+            globalAikenField.addBrowseFolderListener(
+                TextBrowseFolderListener(
+                    globalAikenDescriptor,
+                    null
+                )
             )
             refreshNpmStatus()
             updateToolchainUi()
@@ -163,29 +197,29 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
                         validateAllOrNull(field.getText())
                     }
             }
-            builder.wrappedCommentRow("Used in project identifier `vendor/name`. Allowed: lowercase letters, digits, `_`, `-`.")
+            builder.aikenWizardWrappedCommentRow("Used in project identifier `vendor/name`. Allowed: lowercase letters, digits, `_`, `-`.")
             builder.row("Project type:") {
                 cell(subtypeCombo)
                     .align(AlignX.FILL)
             }
-            builder.wrappedCommentRow("`validator` creates a standard contract project, `lib` creates a library-only project. Project name comes from the base Name field and must match [a-z0-9_-]+.")
+            builder.aikenWizardWrappedCommentRow("`validator` creates a standard contract project, `lib` creates a library-only project. Project name comes from the base Name field and must match [a-z0-9_-]+.")
             builder.row("Toolchain mode:") {
                 cell(toolchainModeCombo)
                     .align(AlignX.FILL)
             }
-            builder.wrappedCommentRow("Use a global Aiken command for offline-friendly projects, or install a project-local version from npm.")
+            builder.aikenWizardWrappedCommentRow("Use a global Aiken command for offline-friendly projects, or install a project-local version from npm.")
             globalAikenRow = builder.row("Global Aiken:") {
                 cell(globalAikenField)
                     .resizableColumn()
                     .align(AlignX.FILL)
             }
-            globalAikenCommentRow = builder.wrappedCommentRow("Command name or full path. Used when `Use global Aiken` is selected.")
+            globalAikenCommentRow = builder.aikenWizardWrappedCommentRow("Command name or full path. Used when `Use global Aiken` is selected.")
             aikenVersionRow = builder.row("Aiken version:") {
                 cell(aikenVersionCombo)
                     .resizableColumn()
                     .align(AlignX.FILL)
             }
-            aikenVersionCommentRow = builder.wrappedCommentRow("Loaded from npm package `@aiken-lang/aiken` and installed locally into the project.")
+            aikenVersionCommentRow = builder.aikenWizardWrappedCommentRow("Loaded from npm package `@aiken-lang/aiken` and installed locally into the project.")
             versionsStatusRow = builder.row("") {
                 cell(versionsStatusLabel)
                     .resizableColumn()
@@ -227,20 +261,18 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
             }
 
             AikenProjectScaffolder.createProject(
-                project = project,
                 targetDirectoryPath = targetDirectoryPath,
                 vendor = vendor,
                 projectName = projectName,
                 libraryOnly = subtype == ProjectSubtype.LIB,
                 toolchainMode = mode,
-                globalAikenCommand = globalAikenCommand,
                 aikenVersion = aikenVersion,
                 stdlibVersion = stdlibVersion,
                 plutusVersion = stdlibCatalog?.plutusVersionFor(stdlibVersion)
             )
             project.getService(AikenProjectToolchainSettings::class.java)
                 .update(mode, globalAikenCommand, aikenVersion)
-            AikenGitVcsMappingStartupActivity.ensureProjectModule(project, targetDirectoryPath)
+            ensureAikenProjectModule(project, targetDirectoryPath)
         }
 
         private fun normalizeVendor() {
@@ -312,14 +344,10 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
         }
 
         private fun loadAvailableVersions() {
-            loadAvailableVersions(force = false)
-        }
-
-        private fun loadAvailableVersions(force: Boolean) {
             if (selectedToolchainMode() != AikenToolchainMode.LOCAL) {
                 return
             }
-            if (versionsLoading || (!force && versionsLoaded)) {
+            if (versionsLoading || versionsLoaded) {
                 return
             }
             versionsLoading = true
@@ -528,34 +556,6 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
         }
 
     }
-
-    private companion object {
-        private fun commentText(text: String): AdaptiveWrapText =
-            AdaptiveWrapText(text).apply {
-                foreground = UIUtil.getContextHelpForeground()
-                font = UIUtil.getLabelFont(UIUtil.FontSize.SMALL)
-            }
-
-        private fun statusText(text: String): AdaptiveWrapText =
-            AdaptiveWrapText(text).apply {
-                foreground = UIUtil.getContextHelpForeground()
-                font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
-            }
-
-        private fun warningText(text: String): AdaptiveWrapText =
-            AdaptiveWrapText(text).apply {
-                foreground = JBColor.RED
-                font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
-            }
-
-        private fun Panel.wrappedCommentRow(text: String): Row =
-            row("") {
-                cell(commentText(text))
-                    .resizableColumn()
-                    .align(AlignX.FILL)
-            }
-    }
-
     enum class ProjectSubtype(private val label: String) {
         VALIDATOR("validator"),
         LIB("lib");

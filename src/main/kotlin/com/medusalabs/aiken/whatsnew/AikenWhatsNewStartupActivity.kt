@@ -9,7 +9,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.impl.HTMLEditorProvider
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.StartupActivity
+import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.UIUtil
@@ -17,8 +17,13 @@ import java.awt.Color
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 
-class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
-    override fun runActivity(project: Project) {
+private val AIKEN_WHATS_NEW_LOGGER: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
+private val AIKEN_PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
+private const val AIKEN_WHATS_NEW_SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
+private const val AIKEN_WHATS_NEW_TAB_TITLE = "Aiken · What's New"
+
+class AikenWhatsNewStartupActivity : ProjectActivity {
+    override suspend fun execute(project: Project) {
         if (ApplicationManager.getApplication().isUnitTestMode) return
 
         val currentVersion = currentPluginVersion()
@@ -26,13 +31,13 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
         subscribeToLafChanges(project)
 
         val props = PropertiesComponent.getInstance()
-        val shownVersion = props.getValue(SHOWN_VERSION_KEY)?.trim().orEmpty()
+        val shownVersion = props.getValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY)?.trim().orEmpty()
 //        if (shownVersion == currentVersion) return
         val html = loadHtml(currentVersion) ?: return
 
         ApplicationManager.getApplication().invokeLater {
             openOrRefreshTab(project, html)
-            props.setValue(SHOWN_VERSION_KEY, currentVersion)
+            props.setValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY, currentVersion)
         }
     }
 
@@ -53,10 +58,10 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
                 String(stream.readBytes(), StandardCharsets.UTF_8)
             }
         } catch (t: Throwable) {
-            logger.warn("Failed to read What's New resource: $path", t)
-            null
+                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                null
+            }
         }
-    }
 
     private fun subscribeToLafChanges(project: Project) {
         ApplicationManager.getApplication().messageBus.connect(project).subscribe(
@@ -66,7 +71,7 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
                 val html = loadHtml(version) ?: return@LafManagerListener
                 ApplicationManager.getApplication().invokeLater {
                     val manager = FileEditorManager.getInstance(project)
-                    if (manager.openFiles.none { it.name == TAB_TITLE }) return@invokeLater
+                    if (manager.openFiles.none { it.name == AIKEN_WHATS_NEW_TAB_TITLE }) return@invokeLater
                     openOrRefreshTab(project, html)
                 }
             }
@@ -76,13 +81,13 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
     private fun openOrRefreshTab(project: Project, html: String) {
         val manager = FileEditorManager.getInstance(project)
         manager.openFiles
-            .filter { it.name == TAB_TITLE }
+            .filter { it.name == AIKEN_WHATS_NEW_TAB_TITLE }
             .forEach { manager.closeFile(it) }
-        HTMLEditorProvider.openEditor(project, TAB_TITLE, html)
+        HTMLEditorProvider.openEditor(project, AIKEN_WHATS_NEW_TAB_TITLE, html)
     }
 
     private fun currentPluginVersion(): String = PluginManagerCore
-        .getPlugin(PLUGIN_ID)
+        .getPlugin(AIKEN_PLUGIN_ID)
         ?.version
         ?.trim()
         .orEmpty()
@@ -117,12 +122,5 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
         val normalized = alpha.coerceIn(0.0, 1.0)
         val a = String.format(Locale.US, "%.3f", normalized).trimEnd('0').trimEnd('.')
         return "rgba($red, $green, $blue, $a)"
-    }
-
-    private companion object {
-        val logger: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
-        val PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
-        const val SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
-        const val TAB_TITLE = "Aiken · What's New"
     }
 }

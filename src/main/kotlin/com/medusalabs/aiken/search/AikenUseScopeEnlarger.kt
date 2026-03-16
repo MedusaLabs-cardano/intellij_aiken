@@ -9,7 +9,9 @@ import com.intellij.psi.search.SearchScope
 import com.intellij.psi.search.UseScopeEnlarger
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
+import com.medusalabs.aiken.index.AIKEN_IMPORT_INDEX_NAME
 import com.medusalabs.aiken.index.AikenImportIndex
+import com.medusalabs.aiken.index.aikenImportLookupKeysForDeclaration
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
@@ -35,13 +37,13 @@ class AikenUseScopeEnlarger : UseScopeEnlarger() {
         if (DumbService.getInstance(project).isDumb) return emptyList()
 
         return try {
-            val keys = AikenImportIndex.lookupKeysForDeclaration(element)
+            val keys = aikenImportLookupKeysForDeclaration(element)
             if (keys.isEmpty()) return emptyList()
 
             val files = LinkedHashSet<VirtualFile>()
             val index = FileBasedIndex.getInstance()
             for (key in keys) {
-                files += index.getContainingFiles(AikenImportIndex.NAME, key, scope)
+                files += index.getContainingFiles(AIKEN_IMPORT_INDEX_NAME, key, scope)
             }
             files
         } catch (_: IndexNotReadyException) {

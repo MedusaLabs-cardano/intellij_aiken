@@ -23,6 +23,7 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.ID
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
+import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
 import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
@@ -163,28 +164,28 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.FUNCTION),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.TYPE -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.TYPE),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.FIELD -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.FIELD),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.IDENTIFIER -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.IDENTIFIER),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = UsageScope.CURRENT_FILE
                     )
                     else -> null

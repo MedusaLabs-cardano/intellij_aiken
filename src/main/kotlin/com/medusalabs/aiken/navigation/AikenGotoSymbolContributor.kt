@@ -13,8 +13,10 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.FindSymbolParameters
 import com.intellij.util.indexing.IdFilter
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
+import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
 import com.medusalabs.aiken.index.AikenTopLevelSymbolIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
+import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey
 
 class AikenGotoSymbolContributor : ChooseByNameContributorEx {
     override fun processNames(
@@ -30,10 +32,10 @@ class AikenGotoSymbolContributor : ChooseByNameContributorEx {
 
         try {
             index.processAllKeys(
-                AikenTopLevelSymbolIndex.NAME,
+                AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
                 Processor { key ->
                     if (!key.startsWith("name|")) return@Processor true
-                    if (index.getContainingFiles(AikenTopLevelSymbolIndex.NAME, key, scope).isEmpty()) {
+                    if (index.getContainingFiles(AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME, key, scope).isEmpty()) {
                         return@Processor true
                     }
                     val symbolName = key.substringAfterLast('|')
@@ -61,13 +63,13 @@ class AikenGotoSymbolContributor : ChooseByNameContributorEx {
         val psiManager = PsiManager.getInstance(project)
         val index = FileBasedIndex.getInstance()
         val seen = LinkedHashSet<Triple<VirtualFile, Int, Int>>()
-        val keys = AikenTopLevelSymbolKind.entries.map { kind -> AikenTopLevelSymbolIndex.nameKey(kind, name) }
+        val keys = AikenTopLevelSymbolKind.entries.map { kind -> aikenTopLevelSymbolNameKey(kind, name) }
 
         try {
             for (key in keys) {
                 val completed =
                     index.processValues(
-                        AikenTopLevelSymbolIndex.NAME,
+                        AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
                         key,
                         null,
                         ValueProcessor<Int> { file, offset ->

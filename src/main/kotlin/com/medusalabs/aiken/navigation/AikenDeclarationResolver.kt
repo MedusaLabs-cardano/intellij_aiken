@@ -39,7 +39,7 @@ object AikenDeclarationResolver {
         val caretOffset = element.textRange.startOffset
         val psiFile = element.containingFile ?: return null
         val qualifier = findQualifier(psiFile.text, caretOffset)
-        val localOffset = findLocalDeclarationOffset(document, document.charsSequence, name, caretOffset)
+        val localOffset = findLocalDeclarationOffset(document, name, caretOffset)
         if (localOffset != null) {
             return resolveNamedElementAt(psiFile, localOffset)
         }
@@ -129,7 +129,6 @@ object AikenDeclarationResolver {
 
     private fun findLocalDeclarationOffset(
         document: Document,
-        text: CharSequence,
         name: String,
         caretOffset: Int
     ): Int? = AikenLocalScopeAnalyzer.findDeclarationOffset(document, name, caretOffset)

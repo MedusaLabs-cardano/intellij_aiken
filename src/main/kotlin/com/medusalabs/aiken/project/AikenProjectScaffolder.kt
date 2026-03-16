@@ -1,7 +1,6 @@
 package com.medusalabs.aiken.project
 
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.project.Project
 import com.medusalabs.aiken.tooling.AikenToolchainMode
 import com.medusalabs.aiken.naming.AikenNamingRules
 import com.medusalabs.aiken.tooling.AikenNodeToolchain
@@ -11,6 +10,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
+@Suppress("SameParameterValue")
 internal object AikenProjectScaffolder {
     private const val TEMPLATE_ROOT = "project-template"
     private val COMMON_TEMPLATE_FILES =
@@ -43,13 +43,11 @@ internal object AikenProjectScaffolder {
     }
 
     fun createProject(
-        project: Project,
         targetDirectoryPath: String,
         vendor: String,
         projectName: String,
         libraryOnly: Boolean,
         toolchainMode: AikenToolchainMode,
-        globalAikenCommand: String,
         aikenVersion: String,
         stdlibVersion: String,
         plutusVersion: String?

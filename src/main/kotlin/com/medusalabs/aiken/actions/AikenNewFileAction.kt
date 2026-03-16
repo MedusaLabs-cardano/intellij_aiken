@@ -213,7 +213,7 @@ private object AikenValidatorTemplateProvider {
 
     private fun fetchFromAikenNew(project: Project): String? {
         return try {
-            runWithProgress(project, "Resolving Aiken validator template") {
+            runTemplateResolutionWithProgress(project) {
                 loadTemplateFromCli(project)
             }
         } catch (t: Throwable) {
@@ -262,7 +262,7 @@ private object AikenValidatorTemplateProvider {
         }
     }
 
-    private fun <T> runWithProgress(project: Project, title: String, action: () -> T): T? {
+    private fun <T> runTemplateResolutionWithProgress(project: Project, action: () -> T): T? {
         var result: T? = null
         var failure: Throwable? = null
         val finished = ProgressManager.getInstance().runProcessWithProgressSynchronously(
@@ -276,7 +276,7 @@ private object AikenValidatorTemplateProvider {
                     failure = t
                 }
             },
-            title,
+            "Resolving Aiken validator template",
             true,
             project
         )

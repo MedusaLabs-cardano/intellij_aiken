@@ -7,10 +7,12 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
+import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
 import com.medusalabs.aiken.index.AikenExportIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolEntry
 import com.medusalabs.aiken.index.AikenTopLevelSymbolExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
+import com.medusalabs.aiken.index.decodeAikenExportIndexValue
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.navigation.AikenTopLevelSymbolLookup
 import com.medusalabs.aiken.project.AikenSearchScopes
@@ -120,8 +122,8 @@ object AikenReferenceVariants {
             val scope = AikenSearchScopes.forElement(anchor)
             val names = LinkedHashSet<String>()
             val index = FileBasedIndex.getInstance()
-            for (value in index.getValues(AikenExportIndex.NAME, modulePath, scope)) {
-                names += AikenExportIndex.decode(value)
+            for (value in index.getValues(AIKEN_EXPORT_INDEX_NAME, modulePath, scope)) {
+                names += decodeAikenExportIndexValue(value)
             }
             names.toList()
         } catch (_: IndexNotReadyException) {

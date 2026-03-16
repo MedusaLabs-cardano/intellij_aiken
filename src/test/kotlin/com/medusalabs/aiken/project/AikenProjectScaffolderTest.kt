@@ -15,13 +15,11 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
         val projectDir = root.resolve("demo")
 
         AikenProjectScaffolder.createProject(
-            project = project,
             targetDirectoryPath = projectDir.toString(),
             vendor = "acme",
             projectName = "demo",
             libraryOnly = false,
             toolchainMode = AikenToolchainMode.LOCAL,
-            globalAikenCommand = "aiken",
             aikenVersion = "1.1.21",
             stdlibVersion = "v3.0.0",
             plutusVersion = "V3"
@@ -81,6 +79,7 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
         assertTrue(Files.readString(testFile).contains("use placeholder"))
     }
 
+    @Suppress("SameParameterValue")
     private fun updateManifestForTest(projectDirectory: String, stdlibVersion: String, plutusVersion: String?) {
         val method =
             AikenProjectScaffolder::class.java.getDeclaredMethod(

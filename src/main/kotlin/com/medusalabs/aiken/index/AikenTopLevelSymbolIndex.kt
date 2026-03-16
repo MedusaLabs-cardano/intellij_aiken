@@ -13,18 +13,16 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
+val AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME: ID<String, Int> = ID.create("aiken.topLevelSymbols")
+
+fun aikenTopLevelSymbolNameKey(kind: AikenTopLevelSymbolKind, symbolName: String): String =
+    "name|${kind.name.lowercase()}|$symbolName"
+
+fun aikenTopLevelSymbolModuleKey(kind: AikenTopLevelSymbolKind, modulePath: String, symbolName: String): String =
+    "module|${kind.name.lowercase()}|$modulePath|$symbolName"
+
 class AikenTopLevelSymbolIndex : FileBasedIndexExtension<String, Int>() {
-    companion object {
-        val NAME: ID<String, Int> = ID.create("aiken.topLevelSymbols")
-
-        fun nameKey(kind: AikenTopLevelSymbolKind, symbolName: String): String =
-            "name|${kind.name.lowercase()}|$symbolName"
-
-        fun moduleKey(kind: AikenTopLevelSymbolKind, modulePath: String, symbolName: String): String =
-            "module|${kind.name.lowercase()}|$modulePath|$symbolName"
-    }
-
-    override fun getName(): ID<String, Int> = NAME
+    override fun getName(): ID<String, Int> = AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
 
     override fun getVersion(): Int = 1
 
@@ -45,9 +43,9 @@ class AikenTopLevelSymbolIndex : FileBasedIndexExtension<String, Int>() {
             val result = LinkedHashMap<String, Int>()
 
             for (entry in AikenTopLevelSymbolExtractor.extract(inputData.contentAsText)) {
-                result[nameKey(entry.kind, entry.name)] = entry.offset
+                result[aikenTopLevelSymbolNameKey(entry.kind, entry.name)] = entry.offset
                 if (!modulePath.isNullOrBlank()) {
-                    result[moduleKey(entry.kind, modulePath, entry.name)] = entry.offset
+                    result[aikenTopLevelSymbolModuleKey(entry.kind, modulePath, entry.name)] = entry.offset
                 }
             }
 

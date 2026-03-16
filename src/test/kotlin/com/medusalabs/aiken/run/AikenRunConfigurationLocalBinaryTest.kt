@@ -3,7 +3,6 @@ package com.medusalabs.aiken.run
 import com.medusalabs.aiken.AikenPlatformTestCase
 import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
-import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.nio.file.Files
 

@@ -13,12 +13,10 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
-class AikenModuleIndex : FileBasedIndexExtension<String, Int>() {
-    companion object {
-        val NAME: ID<String, Int> = ID.create("aiken.modules")
-    }
+val AIKEN_MODULE_INDEX_NAME: ID<String, Int> = ID.create("aiken.modules")
 
-    override fun getName(): ID<String, Int> = NAME
+class AikenModuleIndex : FileBasedIndexExtension<String, Int>() {
+    override fun getName(): ID<String, Int> = AIKEN_MODULE_INDEX_NAME
 
     override fun getVersion(): Int = 1
 

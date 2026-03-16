@@ -128,6 +128,7 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
             .onPublishDiagnostics(file, diagnostics)
     }
 
+    @Suppress("SameParameterValue")
     private fun unusedImportDiagnostic(line: Int, startCharacter: Int, endCharacter: Int): Diagnostic =
         Diagnostic(
             Range(Position(line, startCharacter), Position(line, endCharacter)),

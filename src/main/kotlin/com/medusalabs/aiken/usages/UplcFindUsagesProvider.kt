@@ -9,24 +9,23 @@ import com.intellij.psi.tree.TokenSet
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
 
-class UplcFindUsagesProvider : FindUsagesProvider {
-    companion object {
-        private val IDENTIFIERS: TokenSet =
-            TokenSet.create(
-                UplcTokenTypes.IDENTIFIER,
-                UplcTokenTypes.TYPE,
-                UplcTokenTypes.FUNCTION,
-                UplcTokenTypes.FIELD
-            )
-        private val COMMENTS: TokenSet = TokenSet.create(UplcTokenTypes.COMMENT)
-        private val STRINGS: TokenSet = TokenSet.create(UplcTokenTypes.STRING)
-    }
+private val UPLC_FIND_USAGES_IDENTIFIERS: TokenSet =
+    TokenSet.create(
+        UplcTokenTypes.IDENTIFIER,
+        UplcTokenTypes.TYPE,
+        UplcTokenTypes.FUNCTION,
+        UplcTokenTypes.FIELD
+    )
+private val UPLC_FIND_USAGES_COMMENTS: TokenSet = TokenSet.create(UplcTokenTypes.COMMENT)
+private val UPLC_FIND_USAGES_STRINGS: TokenSet = TokenSet.create(UplcTokenTypes.STRING)
 
-    override fun getWordsScanner(): WordsScanner = DefaultWordsScanner(UplcLexing.createLexer(), IDENTIFIERS, COMMENTS, STRINGS)
+class UplcFindUsagesProvider : FindUsagesProvider {
+    override fun getWordsScanner(): WordsScanner =
+        DefaultWordsScanner(UplcLexing.createLexer(), UPLC_FIND_USAGES_IDENTIFIERS, UPLC_FIND_USAGES_COMMENTS, UPLC_FIND_USAGES_STRINGS)
 
     override fun canFindUsagesFor(psiElement: PsiElement): Boolean {
         val elementType = psiElement.elementTypeOrNull() ?: return false
-        return IDENTIFIERS.contains(elementType)
+        return UPLC_FIND_USAGES_IDENTIFIERS.contains(elementType)
     }
 
     override fun getHelpId(psiElement: PsiElement): String? = null
@@ -45,4 +44,3 @@ class UplcFindUsagesProvider : FindUsagesProvider {
 
     private fun PsiElement.elementTypeOrNull(): IElementType? = node?.elementType
 }
-

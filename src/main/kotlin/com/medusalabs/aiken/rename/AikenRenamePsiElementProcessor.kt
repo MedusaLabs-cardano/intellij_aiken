@@ -26,6 +26,7 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
+import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
 import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
@@ -338,28 +339,28 @@ class AikenRenamePsiElementProcessor : RenamePsiElementProcessor() {
                         lexerFactory = { UplcLexing.createLexer() },
                         renameTokenTypes = setOf(UplcTokenTypes.FUNCTION),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = RenameScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.TYPE -> RenameConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         renameTokenTypes = setOf(UplcTokenTypes.TYPE),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = RenameScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.FIELD -> RenameConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         renameTokenTypes = setOf(UplcTokenTypes.FIELD),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = RenameScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.IDENTIFIER -> RenameConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         renameTokenTypes = setOf(UplcTokenTypes.IDENTIFIER),
                         fileType = UplcFileType,
-                        indexId = UplcIdentifierIndex.NAME,
+                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
                         scope = RenameScope.CURRENT_FILE
                     )
                     else -> null

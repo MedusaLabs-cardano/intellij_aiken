@@ -7,6 +7,7 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.TextBrowseFolderListener
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.dsl.builder.AlignX
@@ -16,6 +17,25 @@ import com.intellij.util.ui.UIUtil
 import com.medusalabs.aiken.ui.AdaptiveWrapText
 import javax.swing.DefaultComboBoxModel
 
+private fun aikenToolchainWrappedCommentText(text: String): AdaptiveWrapText =
+    AdaptiveWrapText(text).apply {
+        foreground = UIUtil.getContextHelpForeground()
+        font = UIUtil.getLabelFont(UIUtil.FontSize.SMALL)
+    }
+
+private fun aikenToolchainWrappedStatusText(): AdaptiveWrapText =
+    AdaptiveWrapText("").apply {
+        foreground = UIUtil.getContextHelpForeground()
+        font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
+    }
+
+private fun com.intellij.ui.dsl.builder.Panel.aikenToolchainWrappedCommentRow(text: String): Row =
+    row("") {
+        cell(aikenToolchainWrappedCommentText(text))
+            .resizableColumn()
+            .align(AlignX.FILL)
+    }
+
 class AikenToolchainConfigurable(private val project: Project) :
     BoundSearchableConfigurable("Aiken Toolchain", "aiken.toolchain.settings", "Aiken Toolchain") {
 
@@ -23,7 +43,7 @@ class AikenToolchainConfigurable(private val project: Project) :
     private val modeCombo = ComboBox(DefaultComboBoxModel(AikenToolchainMode.entries.toTypedArray()))
     private val globalCommandField = TextFieldWithBrowseButton()
     private val localVersionField = ComboBox(DefaultComboBoxModel(arrayOf(AikenNodeToolchain.DEFAULT_AIKEN_VERSION)))
-    private val hintLabel = wrappedStatusText("")
+    private val hintLabel = aikenToolchainWrappedStatusText()
     private lateinit var globalCommandRow: Row
     private lateinit var globalCommandCommentRow: Row
     private lateinit var localVersionRow: Row
@@ -36,30 +56,31 @@ class AikenToolchainConfigurable(private val project: Project) :
             cell(modeCombo)
                 .align(AlignX.FILL)
         }
-        wrappedCommentRow("Choose whether this project uses the globally installed Aiken or a version installed locally via npm.")
+        aikenToolchainWrappedCommentRow("Choose whether this project uses the globally installed Aiken or a version installed locally via npm.")
         globalCommandRow = row("Global Aiken command:") {
             cell(globalCommandField)
                 .resizableColumn()
                 .align(AlignX.FILL)
         }
-        globalCommandCommentRow = wrappedCommentRow("Command name or full path. Used when the project is in `Use global Aiken` mode.")
+        globalCommandCommentRow = aikenToolchainWrappedCommentRow("Command name or full path. Used when the project is in `Use global Aiken` mode.")
         localVersionRow = row("Local Aiken version:") {
             cell(localVersionField)
                 .resizableColumn()
                 .align(AlignX.FILL)
         }
-        localVersionCommentRow = wrappedCommentRow("Stored for locally managed toolchains. You can type a version manually if npm metadata is unavailable.")
+        localVersionCommentRow = aikenToolchainWrappedCommentRow("Stored for locally managed toolchains. You can type a version manually if npm metadata is unavailable.")
         row {
             cell(hintLabel)
                 .resizableColumn()
                 .align(AlignX.FILL)
         }
     }.also {
-        globalCommandField.addBrowseFolderListener(
-            "Select Aiken Executable",
-            "Choose the global Aiken executable or script to run for this project.",
-            project,
+        val globalCommandDescriptor =
             FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
+                .withTitle("Select Aiken Executable")
+                .withDescription("Choose the global Aiken executable or script to run for this project.")
+        globalCommandField.addBrowseFolderListener(
+            TextBrowseFolderListener(globalCommandDescriptor, project)
         )
         globalCommandField.textField.columns = 1
         localVersionField.isEditable = true
@@ -133,26 +154,5 @@ class AikenToolchainConfigurable(private val project: Project) :
     private fun selectedLocalVersion(): String {
         val value = (localVersionField.editor.item ?: localVersionField.selectedItem)?.toString().orEmpty()
         return AikenNodeToolchain.normalizeRequestedVersion(value)
-    }
-
-    private companion object {
-        private fun wrappedCommentText(text: String): AdaptiveWrapText =
-            AdaptiveWrapText(text).apply {
-                foreground = UIUtil.getContextHelpForeground()
-                font = UIUtil.getLabelFont(UIUtil.FontSize.SMALL)
-            }
-
-        private fun wrappedStatusText(text: String): AdaptiveWrapText =
-            AdaptiveWrapText(text).apply {
-                foreground = UIUtil.getContextHelpForeground()
-                font = UIUtil.getLabelFont(UIUtil.FontSize.NORMAL)
-            }
-
-        private fun com.intellij.ui.dsl.builder.Panel.wrappedCommentRow(text: String): Row =
-            row("") {
-                cell(wrappedCommentText(text))
-                    .resizableColumn()
-                    .align(AlignX.FILL)
-            }
     }
 }

@@ -14,21 +14,20 @@ import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 import java.io.DataInput
 import java.io.DataOutput
 
+val AIKEN_FUNCTION_SIGNATURE_INDEX_NAME: ID<String, String> = ID.create("aiken.functionSignatures")
+
+fun aikenFunctionSignatureNameKey(functionName: String): String = "name|$functionName"
+
+fun aikenFunctionSignatureModuleKey(modulePath: String, functionName: String): String =
+    "module|$modulePath|$functionName"
+
 /**
  * Indexes function signatures across all `.ak` files in a project.
  *
  * This enables Ctrl+P parameter info without LSP support.
  */
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
-    companion object {
-        val NAME: ID<String, String> = ID.create("aiken.functionSignatures")
-
-        fun nameKey(functionName: String): String = "name|$functionName"
-
-        fun moduleKey(modulePath: String, functionName: String): String = "module|$modulePath|$functionName"
-    }
-
-    override fun getName(): ID<String, String> = NAME
+    override fun getName(): ID<String, String> = AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 
     override fun getVersion(): Int = 3
 
@@ -50,9 +49,9 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
             val result = LinkedHashMap<String, String>()
 
             for (entry in AikenFunctionSignatureExtractor.extractEntries(text)) {
-                result[nameKey(entry.name)] = entry.signature
+                result[aikenFunctionSignatureNameKey(entry.name)] = entry.signature
                 if (!modulePath.isNullOrBlank()) {
-                    result[moduleKey(modulePath, entry.name)] = entry.signature
+                    result[aikenFunctionSignatureModuleKey(modulePath, entry.name)] = entry.signature
                 }
             }
 
