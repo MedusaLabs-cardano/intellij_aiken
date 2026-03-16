@@ -9,7 +9,6 @@ import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.psi.PsiFile
@@ -20,7 +19,6 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenUseStatement
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
-import com.medusalabs.aiken.index.AikenExportIndex
 import com.medusalabs.aiken.index.decodeAikenExportIndexValue
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenModulePath

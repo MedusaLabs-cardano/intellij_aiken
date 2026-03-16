@@ -10,7 +10,6 @@ import com.intellij.psi.search.UseScopeEnlarger
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.index.AIKEN_IMPORT_INDEX_NAME
-import com.medusalabs.aiken.index.AikenImportIndex
 import com.medusalabs.aiken.index.aikenImportLookupKeysForDeclaration
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenSearchScopes

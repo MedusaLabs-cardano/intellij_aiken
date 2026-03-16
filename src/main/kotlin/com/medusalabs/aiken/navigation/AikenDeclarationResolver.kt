@@ -1,7 +1,6 @@
 package com.medusalabs.aiken.navigation
 
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.project.DumbService
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes

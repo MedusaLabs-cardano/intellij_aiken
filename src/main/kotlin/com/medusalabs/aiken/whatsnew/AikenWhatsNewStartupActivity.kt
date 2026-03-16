@@ -3,6 +3,9 @@ package com.medusalabs.aiken.whatsnew
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
@@ -31,8 +34,6 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
         subscribeToLafChanges(project)
 
         val props = PropertiesComponent.getInstance()
-        val shownVersion = props.getValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY)?.trim().orEmpty()
-//        if (shownVersion == currentVersion) return
         val html = loadHtml(currentVersion) ?: return
 
         ApplicationManager.getApplication().invokeLater {
@@ -61,10 +62,11 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
                 null
             }
-        }
+    }
 
     private fun subscribeToLafChanges(project: Project) {
-        ApplicationManager.getApplication().messageBus.connect(project).subscribe(
+        val connection = ApplicationManager.getApplication().messageBus.connect(project.service<AikenWhatsNewListenerDisposable>())
+        connection.subscribe(
             LafManagerListener.TOPIC,
             LafManagerListener {
                 val version = currentPluginVersion().takeIf { it.isNotBlank() } ?: return@LafManagerListener
@@ -123,4 +125,9 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
         val a = String.format(Locale.US, "%.3f", normalized).trimEnd('0').trimEnd('.')
         return "rgba($red, $green, $blue, $a)"
     }
+}
+
+@Service(Service.Level.PROJECT)
+private class AikenWhatsNewListenerDisposable : Disposable {
+    override fun dispose() = Unit
 }

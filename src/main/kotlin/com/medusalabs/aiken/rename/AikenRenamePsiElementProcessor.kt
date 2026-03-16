@@ -27,7 +27,6 @@ import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
 import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
-import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
 import com.medusalabs.aiken.navigation.AikenDeclarationResolver

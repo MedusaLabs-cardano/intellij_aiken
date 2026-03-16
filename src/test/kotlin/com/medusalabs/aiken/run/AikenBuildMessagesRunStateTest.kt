@@ -1,20 +1,13 @@
 package com.medusalabs.aiken.run
 
 import com.intellij.build.BuildTextConsoleView
-import com.intellij.build.ExecutionNode
 import com.intellij.build.FilePosition
-import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.DataProvider
-import com.intellij.openapi.actionSystem.PlatformCoreDataKeys
-import com.intellij.pom.Navigatable
+import com.intellij.build.events.BuildEvent
+import com.intellij.build.events.FileMessageEvent
 import com.intellij.openapi.util.Disposer
 import com.medusalabs.aiken.AikenPlatformTestCase
-import org.junit.Assert.assertArrayEquals
 import org.junit.Test
 import java.io.File
-import javax.swing.JTree
-import javax.swing.tree.DefaultMutableTreeNode
-import javax.swing.tree.TreePath
 
 class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     @Test
@@ -88,39 +81,48 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         val result = filter.applyFilter(line, line.length)
 
         requireNotNull(result)
-        assertEquals(0, result.highlightStartOffset)
-        assertEquals(source.virtualFile.path.length + ":10:3:".length, result.highlightEndOffset)
-        assertNotNull(result.hyperlinkInfo)
+        val resultItem = result.resultItems.single()
+        assertEquals(0, resultItem.highlightStartOffset)
+        assertEquals(source.virtualFile.path.length + ":10:3:".length, resultItem.highlightEndOffset)
+        assertNotNull(resultItem.hyperlinkInfo)
     }
 
     @Test
-    fun buildTreeNavigationProviderExposesSelectedNodeNavigatable() {
+    fun buildDiagnosticMessageEventCreatesFileNavigatableForLocatedMessage() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val source =
+            myFixture.addFileToProject(
+                "validators/placeholder.ak",
+                """
+                validator placeholder(
+                  n: Int,
+                ) {
+                  n
+                }
+                """.trimIndent()
+            )
+
         val configuration = buildConfiguration()
-        val tree = JTree()
-        val rootExecutionNode = ExecutionNode(project, null, false) { true }
-        val warningExecutionNode = ExecutionNode(project, rootExecutionNode, false) { true }
-        val navigatable =
-            object : Navigatable {
-                override fun navigate(requestFocus: Boolean) = Unit
+        val workDir = source.virtualFile.parent.parent.path
+        configuration.projectDirectory = workDir
+        val event =
+            configuration.createBuildMessageEventForTest(
+                buildRootId = "aiken-build",
+                sectionName = "warnings",
+                index = 0,
+                block =
+                    """
+                    ⚠ I came across an unused variable: n
+                      ╭─[validators/placeholder.ak:10:3]
+                      help: No big deal.
+                    """.trimIndent(),
+                kind = com.intellij.build.events.MessageEvent.Kind.WARNING
+            )
 
-                override fun canNavigate(): Boolean = true
-
-                override fun canNavigateToSource(): Boolean = true
-            }
-
-        warningExecutionNode.setNavigatable(navigatable)
-        val root = DefaultMutableTreeNode(rootExecutionNode)
-        val child = DefaultMutableTreeNode(warningExecutionNode)
-        root.add(child)
-        tree.model = javax.swing.tree.DefaultTreeModel(root)
-        tree.selectionPath = TreePath(child.path)
-
-        val provider = configuration.createBuildTreeNavigationDataProviderForTest(tree)
-
-        assertSame(navigatable, CommonDataKeys.NAVIGATABLE.getData(provider))
-        assertArrayEquals(arrayOf(navigatable), CommonDataKeys.NAVIGATABLE_ARRAY.getData(provider))
-        assertSame(project, CommonDataKeys.PROJECT.getData(provider))
-        assertEquals("reference.build.tool.window", PlatformCoreDataKeys.HELP_ID.getData(provider))
+        val fileEvent = event as? FileMessageEvent
+        requireNotNull(fileEvent)
+        assertNotNull(fileEvent.getNavigatable(project))
+        assertEquals("aiken-build", event.parentId)
     }
 
     private fun buildConfiguration(): AikenRunConfiguration {
@@ -159,13 +161,23 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return method.invoke(this, workDir) as com.intellij.execution.filters.Filter
     }
 
-    private fun AikenRunConfiguration.createBuildTreeNavigationDataProviderForTest(tree: JTree): DataProvider {
+    private fun AikenRunConfiguration.createBuildMessageEventForTest(
+        buildRootId: Any,
+        sectionName: String,
+        index: Int,
+        block: String,
+        kind: com.intellij.build.events.MessageEvent.Kind
+    ): BuildEvent {
         val method =
             AikenRunConfiguration::class.java.getDeclaredMethod(
-                "createBuildTreeNavigationDataProvider",
-                JTree::class.java
+                "createBuildMessageEvent",
+                Any::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                String::class.java,
+                com.intellij.build.events.MessageEvent.Kind::class.java
             )
         method.isAccessible = true
-        return method.invoke(this, tree) as DataProvider
+        return method.invoke(this, buildRootId, sectionName, index, block, kind) as BuildEvent
     }
 }

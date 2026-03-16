@@ -2,6 +2,7 @@ package com.medusalabs.aiken.actions
 
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.LangDataKeys
 import com.intellij.openapi.application.ApplicationManager
@@ -31,7 +32,15 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import kotlin.io.path.deleteIfExists
 
-class AikenNewFileAction : AnAction("Aiken File", "Create a new Aiken file", AikenIcons.AIKEN), DumbAware {
+class AikenNewFileAction : AnAction(), DumbAware {
+    init {
+        templatePresentation.text = "Aiken File"
+        templatePresentation.description = "Create a new Aiken file"
+        templatePresentation.icon = AikenIcons.AIKEN
+    }
+
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
     override fun update(e: AnActionEvent) {
         val project = e.project
         val hasTarget = e.getData(LangDataKeys.IDE_VIEW)?.directories?.isNotEmpty() == true
@@ -84,14 +93,16 @@ class AikenNewFileAction : AnAction("Aiken File", "Create a new Aiken file", Aik
         }
 
         try {
-            WriteCommandAction.runWriteCommandAction(project, "Create Aiken File", null, Runnable {
-                val psiFile = directory.createFile(fileName)
-                psiFile.virtualFile.setBinaryContent(content.toByteArray(StandardCharsets.UTF_8))
-                val opened = FileEditorManager.getInstance(project).openFile(psiFile.virtualFile, true, true)
-                if (editor != null && opened.isNotEmpty()) {
-                    opened[0].preferredFocusedComponent?.requestFocusInWindow()
+            WriteCommandAction.writeCommandAction(project)
+                .withName("Create Aiken File")
+                .run<Throwable> {
+                    val psiFile = directory.createFile(fileName)
+                    psiFile.virtualFile.setBinaryContent(content.toByteArray(StandardCharsets.UTF_8))
+                    val opened = FileEditorManager.getInstance(project).openFile(psiFile.virtualFile, true, true)
+                    if (editor != null && opened.isNotEmpty()) {
+                        opened[0].preferredFocusedComponent?.requestFocusInWindow()
+                    }
                 }
-            })
         } catch (t: Throwable) {
             Messages.showErrorDialog(
                 project,
@@ -276,7 +287,7 @@ private object AikenValidatorTemplateProvider {
                     failure = t
                 }
             },
-            "Resolving Aiken validator template",
+            "Resolving Aiken Validator Template",
             true,
             project
         )

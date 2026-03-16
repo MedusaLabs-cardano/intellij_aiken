@@ -1,10 +1,9 @@
 package com.medusalabs.aiken.run
 
 import com.medusalabs.aiken.AikenPlatformTestCase
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import com.intellij.execution.testframework.sm.runner.SMTestProxy
 import org.junit.Test
+import javax.swing.tree.DefaultMutableTreeNode
 
 class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
     @Test
@@ -157,6 +156,29 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
         assertEquals(true, testClass.getMethod("getPassed").invoke(tests.first()))
         assertEquals(200L, testClass.getMethod("getMemUnits").invoke(tests.first()))
         assertEquals(16100L, testClass.getMethod("getCpuUnits").invoke(tests.first()))
+    }
+
+    @Test
+    fun diagnosticTreeSeverityBubblesWarningsToParentNodes() {
+        val configuration = buildConfiguration(AikenRunCommand.CHECK)
+        val warningLeaf = SMTestProxy("[warning 1] I found a todo left in the code.", false, null)
+        val warningsSuite = SMTestProxy("warnings (1)", true, null)
+        warningsSuite.addChild(warningLeaf)
+        val rootSuite = SMTestProxy("aiken check (1)", true, null)
+        rootSuite.addChild(warningsSuite)
+
+        val treeRoot = DefaultMutableTreeNode("Test Results")
+        treeRoot.add(DefaultMutableTreeNode(rootSuite))
+
+        val method =
+            AikenRunConfiguration::class.java.getDeclaredMethod(
+                "diagnosticTreeSeverityForTreeValue",
+                Any::class.java
+            )
+        method.isAccessible = true
+
+        val severity = method.invoke(configuration, treeRoot)
+        assertEquals("WARNING", severity.toString())
     }
 
     @Test

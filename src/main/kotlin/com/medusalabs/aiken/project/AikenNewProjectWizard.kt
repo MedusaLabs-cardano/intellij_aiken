@@ -247,7 +247,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
             val vendor = vendorField.text.trim()
             val validationError = validateAllOrNull(vendor)
             if (validationError != null) {
-                throw IOException(validationError.message.orEmpty())
+                throw IOException(validationError.message)
             }
             val projectName = baseData.name.trim()
             val projectPath = baseData.path.trim()
@@ -256,7 +256,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
             val aikenVersion = selectedCompilerVersionForTemplate()
             val stdlibVersion = selectedStdlibVersion()
             val globalAikenCommand = selectedGlobalAikenCommand()
-            val targetDirectoryPath = project.basePath?.trim().orEmpty().ifBlank {
+            val targetDirectoryPath = project.basePath.orEmpty().trim().ifBlank {
                 AikenProjectScaffolder.resolveTargetDirectoryPath(projectPath, projectName)
             }
 

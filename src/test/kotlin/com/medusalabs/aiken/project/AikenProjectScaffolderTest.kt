@@ -2,8 +2,6 @@ package com.medusalabs.aiken.project
 
 import com.medusalabs.aiken.AikenPlatformTestCase
 import com.medusalabs.aiken.tooling.AikenToolchainMode
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files

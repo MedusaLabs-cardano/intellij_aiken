@@ -9,7 +9,6 @@ import com.intellij.psi.PsiNamedElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
 import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
-import com.medusalabs.aiken.index.AikenTopLevelSymbolIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.aikenTopLevelSymbolModuleKey
 import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey

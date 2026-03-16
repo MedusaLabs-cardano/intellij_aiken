@@ -1,13 +1,17 @@
 package com.medusalabs.aiken.run
 
-import com.intellij.build.BuildTreeConsoleView
+import com.intellij.build.BuildView
+import com.intellij.build.BuildViewManager
 import com.intellij.build.DefaultBuildDescriptor
-import com.intellij.build.ExecutionNode
 import com.intellij.build.FilePosition
 import com.intellij.build.events.MessageEvent
-import com.intellij.build.progress.BuildRootProgressImpl
-import com.intellij.build.progress.BuildProgress
-import com.intellij.build.progress.BuildProgressDescriptor
+import com.intellij.build.events.impl.FileMessageEventImpl
+import com.intellij.build.events.impl.FailureResultImpl
+import com.intellij.build.events.impl.FinishBuildEventImpl
+import com.intellij.build.events.impl.MessageEventImpl
+import com.intellij.build.events.impl.OutputBuildEventImpl
+import com.intellij.build.events.impl.StartBuildEventImpl
+import com.intellij.build.events.impl.SuccessResultImpl
 import com.intellij.execution.Executor
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.DefaultExecutionResult
@@ -36,8 +40,8 @@ import com.intellij.execution.testframework.sm.runner.SMTRunnerConsoleProperties
 import com.intellij.execution.testframework.sm.runner.SMTestProxy
 import com.intellij.execution.testframework.sm.runner.SMTestLocator
 import com.intellij.execution.testframework.sm.runner.events.TreeNodeEvent
+import com.intellij.execution.testframework.sm.runner.ui.SMTRunnerConsoleView
 import com.intellij.execution.testframework.sm.runner.ui.SMTRunnerTestTreeView
-import com.intellij.execution.testframework.sm.runner.ui.SMTRunnerTestTreeViewProvider
 import com.intellij.execution.testframework.sm.runner.ui.TestTreeRenderer
 import com.intellij.execution.testframework.AbstractTestProxy
 import com.intellij.execution.testframework.actions.AbstractRerunFailedTestsAction
@@ -47,15 +51,15 @@ import com.intellij.execution.ui.ExecutionConsole
 import com.intellij.execution.filters.LazyFileHyperlinkInfo
 import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.PlatformCoreDataKeys
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.ComponentContainer
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFileManager
@@ -102,6 +106,7 @@ import com.intellij.util.messages.MessageBusConnection
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.ColorUtil
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextArea
@@ -116,7 +121,6 @@ import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.Timer
 import javax.swing.JTree
@@ -125,7 +129,7 @@ import javax.swing.border.AbstractBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.tree.DefaultMutableTreeNode
-import javax.swing.tree.TreeCellRenderer
+import javax.swing.tree.TreeNode
 import java.awt.FlowLayout
 import java.awt.Font
 import java.io.ByteArrayOutputStream
@@ -134,7 +138,6 @@ import java.math.BigInteger
 private const val APPLY_EDITOR_LEFT_INSET = 10
 private const val DIAGNOSTICS_ROOT_ID = "aiken-root"
 private const val DIAGNOSTIC_TITLE_MAX_LENGTH = 120
-private const val DATA_PROVIDER_CLIENT_PROPERTY = "DataProvider"
 
 private fun isDarkUiTheme(): Boolean {
     val background = UIUtil.getPanelBackground()
@@ -144,7 +147,7 @@ private fun isDarkUiTheme(): Boolean {
 
 @Suppress("SameParameterValue")
 class AikenRunConfiguration(
-    project: com.intellij.openapi.project.Project,
+    project: Project,
     factory: ConfigurationFactory,
     name: String,
     initialCommand: AikenRunCommand = AikenRunCommand.CHECK
@@ -330,15 +333,15 @@ class AikenRunConfiguration(
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
         if (command == AikenRunCommand.ADDRESS || command == AikenRunCommand.CONVERT) {
-            return AikenArtifactsRunState(environment)
+            return AikenArtifactsRunState()
         }
 
         if (command == AikenRunCommand.CLEAN) {
-            return AikenCleanRunState(environment)
+            return AikenCleanRunState()
         }
 
         if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.IDE_INTEGRATED) {
-            return AikenApplyGuiRunState(this, environment)
+            return AikenApplyGuiRunState(this)
         }
 
         if (
@@ -466,11 +469,8 @@ class AikenRunConfiguration(
 
     private class AikenApplyGuiRunState(
         private val configuration: AikenRunConfiguration,
-        private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         private val applyStarted = AtomicBoolean(false)
-        private val project: Project
-            get() = configuration.project
 
         private fun resolveAikenExecutable(): String = configuration.resolveAikenExecutable()
 
@@ -481,9 +481,6 @@ class AikenRunConfiguration(
 
         private fun parseValidatorTargetFromTitle(title: String): Pair<String, String>? =
             configuration.parseValidatorTargetFromTitle(title)
-
-        private fun configuredApplyCborParameters(): List<String> =
-            configuration.configuredApplyCborParameters()
 
         private fun alignedConfiguredApplyCborParameters(
             executable: String,
@@ -499,11 +496,6 @@ class AikenRunConfiguration(
                 moduleName,
                 validatorName
             )
-
-        private fun buildApplyCommandParameters(
-            singleCborParameter: String?,
-            includeExtraArgs: Boolean = true
-        ): List<String> = configuration.buildApplyCommandParameters(singleCborParameter, includeExtraArgs)
 
         private fun buildApplyCommandParametersForPaths(
             blueprintInput: String,
@@ -1218,7 +1210,7 @@ class AikenRunConfiguration(
                 }
             private val sectionsPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                border = JBUI.Borders.empty(4, 8, 4, 8)
+                border = JBUI.Borders.empty(4, 8)
                 isOpaque = false
             }
             private val applyButton = JButton("Apply")
@@ -1628,7 +1620,7 @@ class AikenRunConfiguration(
         private inner class ApplySingleConstructorEditor(
             name: String,
             depth: Int,
-            private val typeName: String?,
+            typeName: String?,
             private val constructor: ApplyConstructor,
             editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
         ) : BaseApplyEditor(name, (typeName ?: constructor.title).ifBlank { "DataType" }, depth) {
@@ -1670,14 +1662,14 @@ class AikenRunConfiguration(
             }
         }
 
-        private inner class ApplyAnyOfEditor(
-            name: String,
-            depth: Int,
-            typeLabel: String,
-            private val constructors: List<ApplyConstructor>,
-            private val editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
-        ) : BaseApplyEditor(name, typeLabel, depth) {
-            private val constructorCombo = JComboBox(constructors.map { it.title }.toTypedArray())
+    private inner class ApplyAnyOfEditor(
+        name: String,
+        depth: Int,
+        typeLabel: String,
+        private val constructors: List<ApplyConstructor>,
+        private val editorFactory: (String, ApplySchema, Int) -> ApplyValueEditor
+    ) : BaseApplyEditor(name, typeLabel, depth) {
+            private val constructorCombo: ComboBox<String> = ComboBox(constructors.map { it.title }.toTypedArray())
             private val fieldsPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 isOpaque = false
@@ -1860,15 +1852,15 @@ class AikenRunConfiguration(
                 val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
                 val separator = JPanel().apply {
                     alignmentX = Component.LEFT_ALIGNMENT
-                    border = JBUI.Borders.empty(4, 0, 0, 0)
-                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    border = JBUI.Borders.emptyTop(4)
+                    background = ColorUtil.toAlpha(separatorColor, 36)
                     preferredSize = Dimension(1, JBUI.scale(1))
                     maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
                 }
                 entryPanel = createStripePaintPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     alignmentX = Component.LEFT_ALIGNMENT
-                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.insets(0))
+                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.emptyInsets())
                     putClientProperty(APPLY_STRIPE_ARC_KEY, JBUI.scale(12))
                     putClientProperty(APPLY_LIST_EDITOR_KEY, editor)
                     add(rowPanel)
@@ -1907,18 +1899,18 @@ class AikenRunConfiguration(
                 }
         }
 
-        private fun <T> makeComboCompact(combo: JComboBox<T>) {
+        private fun <T> makeComboCompact(combo: ComboBox<T>) {
             combo.maximumSize = combo.preferredSize
             combo.alignmentX = Component.LEFT_ALIGNMENT
             combo.isOpaque = false
-            combo.background = Color(0, 0, 0, 0)
+            combo.background = UIUtil.TRANSPARENT_COLOR
             combo.border = JBUI.Borders.empty()
         }
 
         private fun makeHeaderActionButtonCompact(button: JButton) {
             styleApplyButton(button, compact = true)
             button.font = button.font.deriveFont((button.font.size2D * 1.35f).coerceAtLeast(14f))
-            button.margin = JBUI.insets(0)
+            button.margin = JBUI.emptyInsets()
             button.preferredSize = JBUI.size(26, 24)
             button.maximumSize = button.preferredSize
             button.alignmentY = Component.CENTER_ALIGNMENT
@@ -1928,7 +1920,7 @@ class AikenRunConfiguration(
             button.isFocusable = false
             button.isOpaque = filled
             button.isContentAreaFilled = filled
-            button.background = if (filled) applyButtonBackgroundColor() else Color(0, 0, 0, 0)
+            button.background = if (filled) applyButtonBackgroundColor() else UIUtil.TRANSPARENT_COLOR
             button.foreground = applyButtonForegroundColor()
             button.margin = if (compact) JBUI.insets(0, 6) else JBUI.insets(3, 8)
             button.border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
@@ -1951,7 +1943,7 @@ class AikenRunConfiguration(
                 border = applyControlBorder(arc = JBUI.scale(10), insets = JBUI.insets(1))
                 button.isOpaque = false
                 button.isContentAreaFilled = false
-                button.background = Color(0, 0, 0, 0)
+                button.background = UIUtil.TRANSPARENT_COLOR
                 button.foreground = applyButtonForegroundColor()
                 button.border = JBUI.Borders.empty()
                 add(button, BorderLayout.CENTER)
@@ -1963,10 +1955,11 @@ class AikenRunConfiguration(
             field.maximumSize = field.preferredSize
             field.alignmentX = Component.LEFT_ALIGNMENT
             field.isOpaque = false
-            field.background = Color(0, 0, 0, 0)
+            field.background = UIUtil.TRANSPARENT_COLOR
             field.border = JBUI.Borders.empty()
         }
 
+        @Suppress("unused") // Kept as a lightweight wrapper variant without delayed validation.
         private fun wrapApplyInputField(field: JBTextField): JComponent =
             JPanel(BorderLayout()).apply {
                 isOpaque = false
@@ -2023,7 +2016,7 @@ class AikenRunConfiguration(
             return wrapper
         }
 
-        private fun <T> wrapApplyComboBox(combo: JComboBox<T>): JComponent =
+        private fun <T> wrapApplyComboBox(combo: ComboBox<T>): JComponent =
             JPanel(BorderLayout()).apply {
                 isOpaque = false
                 alignmentX = Component.LEFT_ALIGNMENT
@@ -2036,13 +2029,13 @@ class AikenRunConfiguration(
             return UIManager.getColor("Button.borderColor")
                 ?: UIManager.getColor("Component.borderColor")
                 ?: run {
-                    val separator = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
-                    if (isDarkUiTheme()) {
-                        Color(separator.red, separator.green, separator.blue, 188)
-                    } else {
-                        Color(separator.red, separator.green, separator.blue, 144)
+                        val separator = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+                        if (isDarkUiTheme()) {
+                            ColorUtil.toAlpha(separator, 188)
+                        } else {
+                            ColorUtil.toAlpha(separator, 144)
+                        }
                     }
-                }
         }
 
         private fun applyInputBorderColor(): Color {
@@ -2053,9 +2046,9 @@ class AikenRunConfiguration(
                     ?: componentBorder
                     ?: JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
             return if (isDarkUiTheme()) {
-                Color(base.red, base.green, base.blue, 232)
+                ColorUtil.toAlpha(base, 232)
             } else {
-                Color(base.red, base.green, base.blue, 196)
+                ColorUtil.toAlpha(base, 196)
             }
         }
 
@@ -2065,9 +2058,9 @@ class AikenRunConfiguration(
                     ?: UIManager.getColor("Component.error.borderColor")
                     ?: UIUtil.getErrorForeground()
             return if (isDarkUiTheme()) {
-                Color(base.red, base.green, base.blue, 232)
+                ColorUtil.toAlpha(base, 232)
             } else {
-                Color(base.red, base.green, base.blue, 216)
+                ColorUtil.toAlpha(base, 216)
             }
         }
 
@@ -2082,7 +2075,7 @@ class AikenRunConfiguration(
 
         private fun applyControlBorder(arc: Int, insets: Insets, colorProvider: () -> Color = ::applyControlBorderColor): AbstractBorder =
             object : AbstractBorder() {
-                override fun getBorderInsets(c: Component?): Insets = Insets(insets.top, insets.left, insets.bottom, insets.right)
+                override fun getBorderInsets(c: Component?): Insets = JBUI.insets(insets.top, insets.left, insets.bottom, insets.right)
 
                 override fun getBorderInsets(c: Component?, borderInsets: Insets): Insets {
                     borderInsets.top = insets.top
@@ -2193,15 +2186,15 @@ class AikenRunConfiguration(
                 val separatorColor = JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
                 val separator = JPanel().apply {
                     alignmentX = Component.LEFT_ALIGNMENT
-                    border = JBUI.Borders.empty(4, 0, 0, 0)
-                    background = java.awt.Color(separatorColor.red, separatorColor.green, separatorColor.blue, 36)
+                    border = JBUI.Borders.emptyTop(4)
+                    background = ColorUtil.toAlpha(separatorColor, 36)
                     preferredSize = Dimension(1, JBUI.scale(1))
                     maximumSize = Dimension(Int.MAX_VALUE, JBUI.scale(1))
                 }
                 entryPanel = createStripePaintPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     alignmentX = Component.LEFT_ALIGNMENT
-                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.insets(0))
+                    border = applyControlBorder(arc = JBUI.scale(12), insets = JBUI.emptyInsets())
                     putClientProperty(APPLY_STRIPE_ARC_KEY, JBUI.scale(12))
                     putClientProperty(APPLY_MAP_KEY_EDITOR_KEY, keyEditor)
                     putClientProperty(APPLY_MAP_VALUE_EDITOR_KEY, valueEditor)
@@ -2774,28 +2767,43 @@ class AikenRunConfiguration(
         }
 
         private fun applyEditorStripeBackground(index: Int, depth: Int): Color {
-            val base = UIUtil.getPanelBackground()
             val dark = isDarkUiTheme()
-            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
-            val fraction =
+            val alpha =
                 if (dark) {
-                    (if (index % 2 == 0) 0.035 else 0.065) + depth * 0.01
+                    (if (index % 2 == 0) 40 else 64) + depth * 18
                 } else {
-                    (if (index % 2 == 0) 0.012 else 0.022) + depth * 0.004
-                }.coerceAtMost(if (dark) 0.12 else 0.045)
-            return ColorUtil.mix(base, mixTarget, fraction.toDouble())
+                    (if (index % 2 == 0) 18 else 30) + depth * 10
+                }.coerceAtMost(if (dark) 132 else 72)
+            return ColorUtil.toAlpha(applyEditorStripeOverlayColor(), alpha)
         }
 
         private fun collectionStripeBackground(index: Int): Color {
-            val base = UIUtil.getPanelBackground()
             val dark = isDarkUiTheme()
-            val mixTarget = if (dark) Color.WHITE else UIUtil.getLabelForeground()
-            val fraction = if (dark) {
-                if (index % 2 == 0) 0.028 else 0.05
+            val alpha = if (dark) {
+                if (index % 2 == 0) 34 else 52
             } else {
-                if (index % 2 == 0) 0.008 else 0.016
+                if (index % 2 == 0) 14 else 24
             }
-            return ColorUtil.mix(base, mixTarget, fraction)
+            return ColorUtil.toAlpha(applyEditorStripeOverlayColor(), alpha)
+        }
+
+        private fun applyEditorStripeOverlayColor(): Color {
+            val dark = isDarkUiTheme()
+            val fallback =
+                if (dark) {
+                    JBColor.namedColor("EditorPane.inactiveBackground", Color(0xF5, 0xF5, 0xF5))
+                } else {
+                    JBColor.namedColor("EditorPane.inactiveBackground", Color(0x2B, 0x2D, 0x30))
+                }
+            return if (dark) {
+                UIManager.getColor("Table.alternateRowColor")
+                    ?: JBColor.namedColor("Table.alternateRowColor", fallback)
+                    ?: JBColor.WHITE
+            } else {
+                UIManager.getColor("Table.alternateRowColor")
+                    ?: JBColor.namedColor("Table.alternateRowColor", fallback)
+                    ?: UIUtil.getLabelForeground()
+            }
         }
 
         private fun BigInteger.toIntExactOrNull(): Int? =
@@ -3046,45 +3054,19 @@ class AikenRunConfiguration(
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
             val consoleProperties =
-                object : SMTRunnerConsoleProperties(this@AikenRunConfiguration, "Aiken", executor),
-                    SMTRunnerTestTreeViewProvider {
+                object : SMTRunnerConsoleProperties(this@AikenRunConfiguration, "Aiken", executor) {
                     override fun getTestLocator(): SMTestLocator = AikenTestLocator
 
                     override fun createRerunFailedTestsAction(consoleView: ConsoleView): AbstractRerunFailedTestsAction? {
                         val container = consoleView as? ComponentContainer ?: return null
                         return AikenRerunSelectedTestAction(container, this@AikenRunConfiguration)
                     }
-
-                    override fun createSMTRunnerTestTreeView(): SMTRunnerTestTreeView {
-                        return object : SMTRunnerTestTreeView() {
-                            override fun getRenderer(properties: TestConsoleProperties): TreeCellRenderer {
-                                return object : TestTreeRenderer(properties) {
-                                    override fun customizeCellRenderer(
-                                        tree: JTree,
-                                        value: Any?,
-                                        selected: Boolean,
-                                        expanded: Boolean,
-                                        leaf: Boolean,
-                                        row: Int,
-                                        hasFocus: Boolean
-                                    ) {
-                                        super.customizeCellRenderer(tree, value, selected, expanded, leaf, row, hasFocus)
-                                        val proxy = SMTRunnerTestTreeView.getTestProxyFor(value) ?: return
-                                        if (proxy.isErrorDiagnosticNode()) {
-                                            icon = AllIcons.General.Error
-                                        } else if (proxy.isWarningDiagnosticNode()) {
-                                            icon = AllIcons.General.Warning
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             consoleProperties.setIdBasedTestTree(true)
             TestConsoleProperties.HIDE_PASSED_TESTS.primSet(consoleProperties, false)
 
             val console = SMTestRunnerConnectionUtil.createAndAttachConsole("Aiken", processHandler, consoleProperties)
+            customizeAikenTestTree(console, consoleProperties)
             AppExecutorUtil.getAppExecutorService().execute {
                 runCheckWithJsonParsing(processHandler, executionEnvironment)
             }
@@ -3305,41 +3287,6 @@ class AikenRunConfiguration(
             )
         }
 
-        private fun runCommandCollectingOutput(
-            invocation: List<String>,
-            workDir: String?,
-            handler: AikenAsyncProcessHandler,
-            usePty: Boolean
-        ): CommandRunResult {
-            val process =
-                if (usePty) {
-                    PtyProcessBuilder(invocation.toTypedArray())
-                        .setDirectory(workDir ?: project.basePath)
-                        .setEnvironment(HashMap(System.getenv()))
-                        .setRedirectErrorStream(true)
-                        .setWindowsAnsiColorEnabled(true)
-                        .start()
-                } else {
-                    val processBuilder = ProcessBuilder(invocation)
-                    if (!workDir.isNullOrBlank()) {
-                        processBuilder.directory(File(workDir))
-                    }
-                    processBuilder.redirectErrorStream(true)
-                    processBuilder.start()
-                }
-
-            handler.attachProcess(process)
-            val output =
-                process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                    reader.readText()
-                }
-            val exitCode = process.waitFor()
-            return CommandRunResult(output = output, exitCode = exitCode)
-        }
-
-        private fun ensureTrailingNewline(text: String): String {
-            return if (text.endsWith('\n')) text else "$text\n"
-        }
     }
 
     private inner class AikenBuildMessagesRunState(
@@ -3353,13 +3300,11 @@ class AikenRunConfiguration(
             val baseConsoleBuilder = TextConsoleBuilderFactory.getInstance().createBuilder(project)
             baseConsoleBuilder.addFilter(diagnosticFilter)
             val baseConsole = baseConsoleBuilder.console
-            val buildConsole = BuildTreeConsoleView(project, buildDescriptor, baseConsole)
-            installBuildTreeNavigationDataProvider(buildConsole)
+            val buildConsole = BuildView(project, baseConsole, buildDescriptor, "Aiken", BuildViewManager(project))
             buildConsole.addMessageFilter(diagnosticFilter)
             buildConsole.attachToProcess(processHandler)
-            val buildProgress = createBuildProgress(buildConsole, buildDescriptor)
             AppExecutorUtil.getAppExecutorService().execute {
-                runBuildWithIdeIntegration(processHandler, executionEnvironment, buildProgress)
+                runBuildWithIdeIntegration(processHandler, executionEnvironment, buildDescriptor, buildConsole)
             }
             return DefaultExecutionResult(buildConsole, processHandler)
         }
@@ -3369,31 +3314,17 @@ class AikenRunConfiguration(
             val buildId = "aiken-build-${System.currentTimeMillis()}"
             return DefaultBuildDescriptor(
                 buildId,
-                "Aiken build",
+                "Aiken Build",
                 workDir,
                 System.currentTimeMillis()
             ).withExecutionEnvironment(environment)
         }
 
-        private fun createBuildProgress(
-            buildConsole: BuildTreeConsoleView,
-            descriptor: DefaultBuildDescriptor
-        ): BuildProgress<BuildProgressDescriptor> {
-            val buildProgress: BuildProgress<BuildProgressDescriptor> = BuildRootProgressImpl(buildConsole)
-            val progressDescriptor =
-                object : BuildProgressDescriptor {
-                    override fun getTitle(): String = descriptor.title
-
-                    override fun getBuildDescriptor(): DefaultBuildDescriptor = descriptor
-                }
-            buildProgress.start(progressDescriptor)
-            return buildProgress
-        }
-
         private fun runBuildWithIdeIntegration(
             handler: AikenAsyncProcessHandler,
             environment: ExecutionEnvironment,
-            buildProgress: BuildProgress<BuildProgressDescriptor>
+            buildDescriptor: DefaultBuildDescriptor,
+            buildView: BuildView
         ) {
             handler.startNotify()
             val executable = resolveAikenExecutable()
@@ -3406,11 +3337,12 @@ class AikenRunConfiguration(
                     installIdeIntegratedWatch(environment, workDir, handler, restartRequested, restartMessage = "build")
                 } else {
                     null
-                }
+            }
             var lastExitCode = 0
+            val buildRootId = buildDescriptor.id
 
             try {
-                buildProgress.progress("Running aiken build")
+                buildView.onEvent(buildRootId, StartBuildEventImpl(buildDescriptor, "Running aiken build"))
                 val args = buildCommandParameters(support = commandSupport)
                 val run =
                     runManagedCommandCollectingOutput(
@@ -3423,7 +3355,15 @@ class AikenRunConfiguration(
                     )
                 lastExitCode = run.exitCode
                 if (run.output.isNotBlank()) {
-                    buildProgress.output(ensureTrailingNewline(run.output), true)
+                    buildView.onEvent(
+                        buildRootId,
+                        OutputBuildEventImpl(
+                            "$buildRootId-output-${System.nanoTime()}",
+                            buildRootId,
+                            ensureTrailingNewline(run.output),
+                            true
+                        )
+                    )
                 }
 
                 val diagnostics =
@@ -3432,20 +3372,42 @@ class AikenRunConfiguration(
                     } else {
                         diagnosticsForFailedRun(run.output, treatWarningsAsErrors = denyWarnings)
                     }
-                emitBuildMessages(buildProgress, diagnostics)
+                emitBuildMessages(buildView, buildRootId, diagnostics)
 
                 val buildSucceeded = run.exitCode == 0 && diagnostics.errors.isEmpty()
                 if (buildSucceeded) {
                     bumpApplyBuildRevision()
-                    buildProgress.message(
-                        "build succeeded",
-                        "Aiken build finished successfully.",
-                        MessageEvent.Kind.INFO,
-                        null
+                    val successEvent =
+                        MessageEventImpl(
+                            "$buildRootId-success",
+                            MessageEvent.Kind.INFO,
+                            "Build",
+                            "Build Succeeded",
+                            "Aiken build finished successfully."
+                        )
+                    successEvent.setParentId(buildRootId)
+                    buildView.onEvent(buildRootId, successEvent)
+                    buildView.onEvent(
+                        buildRootId,
+                        FinishBuildEventImpl(
+                            buildRootId,
+                            null,
+                            System.currentTimeMillis(),
+                            "Build finished",
+                            SuccessResultImpl()
+                        )
                     )
-                    buildProgress.finish(System.currentTimeMillis(), false, "Build finished")
                 } else {
-                    buildProgress.fail(System.currentTimeMillis(), "Build failed")
+                    buildView.onEvent(
+                        buildRootId,
+                        FinishBuildEventImpl(
+                            buildRootId,
+                            null,
+                            System.currentTimeMillis(),
+                            "Build failed",
+                            FailureResultImpl("Build failed")
+                        )
+                    )
                 }
                 finishOrWatch(handler, ideWatchEnabled, restartRequested, run.exitCode, idleMessage = "build")
             } catch (e: Exception) {
@@ -3453,7 +3415,16 @@ class AikenRunConfiguration(
                     "Aiken build integration failed: ${e.message}\n",
                     ProcessOutputTypes.STDERR
                 )
-                buildProgress.fail(System.currentTimeMillis(), "Build integration failed: ${e.message}")
+                buildView.onEvent(
+                    buildRootId,
+                    FinishBuildEventImpl(
+                        buildRootId,
+                        null,
+                        System.currentTimeMillis(),
+                        "Build integration failed: ${e.message}",
+                        FailureResultImpl(e.message ?: "Build integration failed")
+                    )
+                )
                 finishOrWatch(handler, ideWatchEnabled, restartRequested, if (lastExitCode != 0) lastExitCode else -1, idleMessage = "build")
             } finally {
                 watchConnection?.disconnect()
@@ -3461,37 +3432,34 @@ class AikenRunConfiguration(
         }
 
         private fun emitBuildMessages(
-            buildProgress: BuildProgress<BuildProgressDescriptor>,
+            buildView: BuildView,
+            buildRootId: Any,
             diagnostics: DiagnosticsSections
         ) {
             diagnostics.warnings.forEachIndexed { index, block ->
-                emitBuildMessage(buildProgress, "warnings", index, block, MessageEvent.Kind.WARNING)
+                emitBuildMessage(buildView, buildRootId, "warnings", index, block, MessageEvent.Kind.WARNING)
             }
             diagnostics.errors.forEachIndexed { index, block ->
-                emitBuildMessage(buildProgress, "errors", index, block, MessageEvent.Kind.ERROR)
+                emitBuildMessage(buildView, buildRootId, "errors", index, block, MessageEvent.Kind.ERROR)
             }
         }
 
         private fun emitBuildMessage(
-            buildProgress: BuildProgress<BuildProgressDescriptor>,
+            buildView: BuildView,
+            buildRootId: Any,
             sectionName: String,
             index: Int,
             block: String,
             kind: MessageEvent.Kind
         ) {
-            val title = buildDiagnosticNodeTitle(sectionName, index, block)
-            val filePosition = extractDiagnosticFilePosition(block, resolveProjectDirectory())
-            if (filePosition != null) {
-                buildProgress.fileMessage(title, block, kind, filePosition)
-                return
-            }
-
-            buildProgress.message(title, block, kind, null)
+            buildView.onEvent(
+                buildRootId,
+                createBuildMessageEvent(buildRootId, sectionName, index, block, kind)
+            )
         }
     }
 
     private inner class AikenCleanRunState(
-        private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
@@ -3599,7 +3567,7 @@ class AikenRunConfiguration(
                 return false
             }
 
-            if (targetCanonical == projectRoot) {
+            if (FileUtil.filesEqual(targetCanonical, projectRoot)) {
                 return false
             }
 
@@ -3683,7 +3651,6 @@ class AikenRunConfiguration(
     )
 
     private inner class AikenArtifactsRunState(
-        private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
@@ -3817,7 +3784,7 @@ class AikenRunConfiguration(
                 }
 
                 val persistSummary = persistArtifacts(entries, workDir)
-                val persistedEntries = persistSummary?.entriesByStem ?: emptyMap()
+                val persistedEntries = persistSummary.entriesByStem
                 val finalizedEntries =
                     entries.map { entry ->
                         val stem = buildArtifactStem(entry)
@@ -4112,8 +4079,8 @@ class AikenRunConfiguration(
             return null
         }
 
-        private fun persistArtifacts(entries: List<ArtifactsEntry>, workDir: String?): ArtifactsPersistSummary? {
-            val directory = resolveArtifactsDirectory(workDir) ?: return null
+        private fun persistArtifacts(entries: List<ArtifactsEntry>, workDir: String?): ArtifactsPersistSummary {
+            val directory = resolveArtifactsDirectory(workDir)
             val entriesByStem = LinkedHashMap<String, List<File>>()
             var totalSaved = 0
 
@@ -4219,7 +4186,7 @@ class AikenRunConfiguration(
             return body.joinToString("\n")
         }
 
-        private fun resolveArtifactsDirectory(workDir: String?): File? {
+        private fun resolveArtifactsDirectory(workDir: String?): File {
             val raw = addressArtifactsBasePath.trim().ifEmpty { "artifacts" }
             val file = File(raw)
             if (file.isAbsolute) return file
@@ -4271,7 +4238,7 @@ class AikenRunConfiguration(
         }
     }
 
-    private inner class AikenArtifactsExecutionConsole : ExecutionConsole {
+    private class AikenArtifactsExecutionConsole : ExecutionConsole {
         private val rootPanel = JPanel(BorderLayout())
         private val statusLabel =
             JBTextArea("Preparing artifacts generation...").apply {
@@ -4650,12 +4617,36 @@ class AikenRunConfiguration(
         return if (text.endsWith('\n')) text else "$text\n"
     }
 
+    private fun customizeAikenTestTree(console: ConsoleView, properties: TestConsoleProperties) {
+        val smConsole = console as? SMTRunnerConsoleView ?: return
+        val treeView = smConsole.resultsViewer.treeView as? JTree ?: return
+        treeView.cellRenderer =
+            object : TestTreeRenderer(properties) {
+                override fun customizeCellRenderer(
+                    tree: JTree,
+                    value: Any?,
+                    selected: Boolean,
+                    expanded: Boolean,
+                    leaf: Boolean,
+                    row: Int,
+                    hasFocus: Boolean
+                ) {
+                    super.customizeCellRenderer(tree, value, selected, expanded, leaf, row, hasFocus)
+                    when (diagnosticTreeSeverityForTreeValue(value)) {
+                        DiagnosticTreeSeverity.ERROR -> icon = AllIcons.General.Error
+                        DiagnosticTreeSeverity.WARNING -> icon = AllIcons.General.Warning
+                        DiagnosticTreeSeverity.NONE -> Unit
+                    }
+                }
+            }
+    }
+
     private inner class AikenRerunSelectedTestAction(
         container: ComponentContainer,
         private val configuration: AikenRunConfiguration
     ) : AbstractRerunFailedTestsAction(container) {
         init {
-            templatePresentation.text = "Rerun selected Aiken test"
+            templatePresentation.text = "Rerun Selected Aiken Test"
             templatePresentation.description = "Rerun the selected Aiken test with `aiken check -m`."
         }
 
@@ -5875,7 +5866,7 @@ class AikenRunConfiguration(
                 }
                 emitServiceMessage(handler, "testStarted", startedAttributes)
                 val stdOut = buildTestLeafStdOut(test)
-                if (!stdOut.isNullOrBlank()) {
+                if (stdOut.isNotBlank()) {
                     emitServiceMessage(
                         handler,
                         "testStdOut",
@@ -6079,6 +6070,63 @@ class AikenRunConfiguration(
         return false
     }
 
+    private enum class DiagnosticTreeSeverity {
+        NONE,
+        WARNING,
+        ERROR
+    }
+
+    private fun diagnosticTreeSeverityForTreeValue(value: Any?): DiagnosticTreeSeverity {
+        val proxy = extractTestProxy(value)
+        if (proxy != null) {
+            return diagnosticTreeSeverityForProxy(proxy)
+        }
+
+        val treeNode = value as? TreeNode ?: return DiagnosticTreeSeverity.NONE
+        var severity = DiagnosticTreeSeverity.NONE
+        for (index in 0 until treeNode.childCount) {
+            severity = maxDiagnosticTreeSeverity(severity, diagnosticTreeSeverityForTreeValue(treeNode.getChildAt(index)))
+            if (severity == DiagnosticTreeSeverity.ERROR) {
+                return severity
+            }
+        }
+        return severity
+    }
+
+    private fun diagnosticTreeSeverityForProxy(proxy: SMTestProxy): DiagnosticTreeSeverity {
+        var severity =
+            when {
+                proxy.isErrorDiagnosticNode() -> DiagnosticTreeSeverity.ERROR
+                proxy.isWarningDiagnosticNode() -> DiagnosticTreeSeverity.WARNING
+                else -> DiagnosticTreeSeverity.NONE
+            }
+        if (severity == DiagnosticTreeSeverity.ERROR) {
+            return severity
+        }
+
+        for (child in proxy.children) {
+            severity = maxDiagnosticTreeSeverity(severity, diagnosticTreeSeverityForProxy(child))
+            if (severity == DiagnosticTreeSeverity.ERROR) {
+                return severity
+            }
+        }
+
+        return severity
+    }
+
+    private fun maxDiagnosticTreeSeverity(
+        left: DiagnosticTreeSeverity,
+        right: DiagnosticTreeSeverity
+    ): DiagnosticTreeSeverity =
+        if (left.ordinal >= right.ordinal) left else right
+
+    private fun extractTestProxy(value: Any?): SMTestProxy? =
+        when (value) {
+            is SMTestProxy -> value
+            is DefaultMutableTreeNode -> (value.userObject as? SMTestProxy) ?: SMTRunnerTestTreeView.getTestProxyFor(value)
+            else -> SMTRunnerTestTreeView.getTestProxyFor(value)
+        }
+
     private fun withLeafCount(name: String, leafCount: Int): String = "$name ($leafCount)"
 
     private fun moduleDisplayName(moduleName: String): String {
@@ -6191,40 +6239,24 @@ class AikenRunConfiguration(
         }
     }
 
-    private fun installBuildTreeNavigationDataProvider(buildConsole: BuildTreeConsoleView) {
-        buildConsole.tree.putClientProperty(
-            DATA_PROVIDER_CLIENT_PROPERTY,
-            createBuildTreeNavigationDataProvider(buildConsole.tree)
-        )
-    }
-
-    private fun createBuildTreeNavigationDataProvider(tree: JTree): com.intellij.openapi.actionSystem.DataProvider {
-        return object : com.intellij.openapi.actionSystem.DataProvider {
-            override fun getData(dataId: String): Any? {
-                return when {
-                    CommonDataKeys.NAVIGATABLE.`is`(dataId) -> extractSelectedBuildTreeNavigatable(tree)
-                    CommonDataKeys.NAVIGATABLE_ARRAY.`is`(dataId) -> extractSelectedBuildTreeNavigatables(tree)
-                    CommonDataKeys.PROJECT.`is`(dataId) -> project
-                    PlatformCoreDataKeys.HELP_ID.`is`(dataId) -> "reference.build.tool.window"
-                    else -> null
-                }
+    private fun createBuildMessageEvent(
+        buildRootId: Any,
+        sectionName: String,
+        index: Int,
+        block: String,
+        kind: MessageEvent.Kind
+    ): com.intellij.build.events.BuildEvent {
+        val title = buildDiagnosticNodeTitle(sectionName, index, block)
+        val filePosition = extractDiagnosticFilePosition(block, resolveProjectDirectory())
+        val eventId = "$buildRootId-$sectionName-$index"
+        val event =
+            if (filePosition != null) {
+                FileMessageEventImpl(eventId, kind, sectionName, title, block, filePosition)
+            } else {
+                MessageEventImpl(eventId, kind, sectionName, title, block)
             }
-        }
-    }
-
-    private fun extractSelectedBuildTreeNavigatable(tree: JTree): com.intellij.pom.Navigatable? {
-        val navigatables = extractSelectedBuildTreeNavigatables(tree)
-        return if (navigatables.size == 1) navigatables.first() else null
-    }
-
-    private fun extractSelectedBuildTreeNavigatables(tree: JTree): Array<com.intellij.pom.Navigatable> {
-        return tree.selectionPaths
-            .orEmpty()
-            .mapNotNull { path -> (path.lastPathComponent as? DefaultMutableTreeNode)?.userObject as? ExecutionNode }
-            .flatMap { node -> node.navigatables }
-            .filter { it.canNavigate() || it.canNavigateToSource() }
-            .distinct()
-            .toTypedArray()
+        event.setParentId(buildRootId)
+        return event
     }
 
     private fun extractBuildMessageLocationMatch(text: String): BuildMessageLocationMatch? {
@@ -6255,8 +6287,7 @@ class AikenRunConfiguration(
 
     private fun shrinkMiddle(text: String): String {
         val maxLength = DIAGNOSTIC_TITLE_MAX_LENGTH
-        if (maxLength <= 0 || text.length <= maxLength) return text
-        if (maxLength <= 3) return text.take(maxLength)
+        if (text.length <= maxLength) return text
 
         val keep = maxLength - 1
         val left = keep / 2
@@ -6584,6 +6615,7 @@ class AikenRunConfiguration(
         return STRAY_CSI_REGEX.replace(withoutBrokenAnsi, "")
     }
 
+    @Suppress("unused") // Kept as a diagnostic dump helper for possible raw-console fallbacks.
     private fun emitDiagnosticsSections(sections: DiagnosticsSections, handler: ProcessHandler) {
         if (sections.warnings.isNotEmpty()) {
             val payload = buildString {
@@ -6699,7 +6731,7 @@ class AikenRunConfiguration(
         return value.asLong
     }
 
-    private fun buildTestLeafStdOut(test: ParsedTest): String? {
+    private fun buildTestLeafStdOut(test: ParsedTest): String {
         val sections = ArrayList<String>(4)
 
         val status = if (test.passed) ansiGreen("PASS") else ansiRed("FAIL")
@@ -6907,7 +6939,8 @@ class AikenRunConfiguration(
         return pendingParameters
     }
 
-    private fun resolveConvertOutputDirectory(workDir: String?): File? {
+    @Suppress("unused") // Kept for future terminal convert-output flow refinements.
+    private fun resolveConvertOutputDirectory(workDir: String?): File {
         val trimmed = convertTerminalOutputFile.trim().ifEmpty { "artifacts" }
         val output = File(trimmed)
         if (output.isAbsolute) return output
@@ -6916,6 +6949,7 @@ class AikenRunConfiguration(
         return File(base, trimmed)
     }
 
+    @Suppress("unused") // Kept for future terminal convert artifact naming support.
     private fun resolveConvertArtifactStem(workDir: String?): String {
         val configuredModule = convertModule.trim()
         val configuredValidator = convertValidator.trim()
@@ -7202,7 +7236,7 @@ class AikenRunConfiguration(
         private fun discoverAkFiles(root: File): List<File> {
             val skipDirs = setOf(".git", ".idea", ".gradle", ".intellijPlatform", "build")
             return root.walkTopDown()
-                .onEnter { dir -> dir == root || dir.name !in skipDirs }
+                .onEnter { dir -> FileUtil.filesEqual(dir, root) || dir.name !in skipDirs }
                 .filter { it.isFile && it.extension == "ak" }
                 .toList()
         }
@@ -7297,6 +7331,7 @@ class AikenRunConfiguration(
         }
     }
 
+    @Suppress("unused") // Kept as a shared validator for future file-path based run options.
     private fun validateFilePath(path: String, label: String) {
         val trimmed = path.trim()
         if (trimmed.isEmpty()) return
@@ -7387,8 +7422,8 @@ class AikenRunConfiguration(
         const val AIKEN_TEST_LOCATION_PROTOCOL = "aiken-test"
         val TEST_DECLARATION_REGEX = Regex("""^\s*(pub\s+)?test\s+([A-Za-z_][A-Za-z0-9_]*)\b""")
         val DIAGNOSTIC_BLOCK_SEPARATOR_REGEX = Regex("""\n{2,}""")
-        val WARNING_HEADER_REGEX = Regex("""^(warning(\[[^\]]+])?:|.+:\s*warning(\[[^\]]+])?:|⚠\s+.*)$""", RegexOption.IGNORE_CASE)
-        val ERROR_HEADER_REGEX = Regex("""^(error(\[[^\]]+])?:|.+:\s*error(\[[^\]]+])?:|×\s+.*)$""", RegexOption.IGNORE_CASE)
+        val WARNING_HEADER_REGEX = Regex("""^(warning(\[[^]]+])?:|.+:\s*warning(\[[^]]+])?:|⚠\s+.*)$""", RegexOption.IGNORE_CASE)
+        val ERROR_HEADER_REGEX = Regex("""^(error(\[[^]]+])?:|.+:\s*error(\[[^]]+])?:|×\s+.*)$""", RegexOption.IGNORE_CASE)
         val SUMMARY_ERRORS_WARNINGS_REGEX = Regex("""\bsummary\b.*\berrors?\b.*\bwarnings?\b""")
         val WARNING_COUNTER_ONLY_REGEX = Regex("""\b\d+\s+warnings?\b""")
         val ERROR_COUNTER_ONLY_REGEX = Regex("""\b\d+\s+errors?\b""")
@@ -7401,7 +7436,7 @@ class AikenRunConfiguration(
         val DIAGNOSTIC_LOCATION_BRACKET_LINE_REGEX = Regex("""^\[.+:\d+(?::\d+)?]$""")
         val DIAGNOSTIC_ERROR_TYPE_LINE_REGEX = Regex("""^error\s+[A-Za-z0-9_:.\\/-]+$""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_GENERIC_WHILE_LINE_REGEX = Regex("""^while\s+.+\.\.\.$""", RegexOption.IGNORE_CASE)
-        val DIAGNOSTIC_PREFIX_REGEX = Regex("""^(warning|error)(\[[^\]]+])?:\s*""", RegexOption.IGNORE_CASE)
+        val DIAGNOSTIC_PREFIX_REGEX = Regex("""^(warning|error)(\[[^]]+])?:\s*""", RegexOption.IGNORE_CASE)
         val DIAGNOSTIC_LEADING_SYMBOLS_REGEX = Regex("""^[^A-Za-z0-9]+""")
         val LEGACY_TEST_MODULE_HEADER_REGEX = Regex("""^┍━\s+(.*?)\s+━*$""")
         val LEGACY_TEST_RESULT_LINE_REGEX = Regex("""^(PASS|FAIL)\s+(?:\[(.+?)])?\s*(.+)$""")

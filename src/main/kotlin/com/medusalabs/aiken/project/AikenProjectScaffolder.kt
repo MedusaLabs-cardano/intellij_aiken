@@ -82,6 +82,7 @@ internal object AikenProjectScaffolder {
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(targetDir)?.refresh(false, true)
     }
 
+    @Suppress("unused") // Kept as a project-path convenience validator for UI callers outside the current wizard flow.
     fun validateTargetDirectory(projectPath: String, projectName: String): String? {
         val targetDirPath = resolveTargetDirectoryPath(projectPath, projectName)
         return validateTargetDirectoryPath(targetDirPath, projectName)

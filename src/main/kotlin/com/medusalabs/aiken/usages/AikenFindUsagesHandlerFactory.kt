@@ -24,7 +24,6 @@ import com.intellij.util.indexing.ID
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
 import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
-import com.medusalabs.aiken.index.UplcIdentifierIndex
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
 import com.medusalabs.aiken.navigation.AikenDeclarationResolver
@@ -37,7 +36,7 @@ class AikenFindUsagesHandlerFactory : FindUsagesHandlerFactory() {
         return !(fileType != AikenFileType && fileType != UplcFileType)
     }
 
-    override fun createFindUsagesHandler(element: PsiElement, forHighlightUsages: Boolean): FindUsagesHandler? =
+    override fun createFindUsagesHandler(element: PsiElement, forHighlightUsages: Boolean): FindUsagesHandler =
         AikenFindUsagesHandler(
             element as? PsiNamedElement ?: (element.parent as? PsiNamedElement ?: element)
         )

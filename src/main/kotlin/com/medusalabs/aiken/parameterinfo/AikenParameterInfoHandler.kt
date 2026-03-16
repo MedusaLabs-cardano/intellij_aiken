@@ -13,7 +13,6 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
-import com.medusalabs.aiken.index.AikenFunctionSignatureIndex
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureNameKey
 import com.medusalabs.aiken.project.AikenModulePath
@@ -27,7 +26,7 @@ private val AIKEN_DIRECT_SYMBOL_PATTERN =
 private val AIKEN_CALLABLE_BINDING_TARGET_PATTERN =
     Regex("""(?:=|->)\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?""")
 private val AIKEN_CALLABLE_BRANCH_TARGET_PATTERN =
-    Regex("""\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?(?=\s*(?:\(|\}))""")
+    Regex("""\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?(?=\s*[(}])""")
 private val AIKEN_CALLABLE_BINDING_IGNORED_KEYWORDS =
     setOf("when", "if", "fn", "expect", "let", "todo", "fail", "trace")
 
@@ -653,7 +652,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
 
         extractLambdaSignature(current, 0)?.let { return setOf(it) }
 
-        splitTopLevelPipe(current)?.let { (left, right) ->
+        splitTopLevelPipe(current)?.let { (_, right) ->
             return resolvePipeExpressionSignatures(index, scope, anchorFile, sameFileSignatures, fileText, right)
         }
 

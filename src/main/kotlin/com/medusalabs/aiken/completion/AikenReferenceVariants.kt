@@ -8,7 +8,6 @@ import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
-import com.medusalabs.aiken.index.AikenExportIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolEntry
 import com.medusalabs.aiken.index.AikenTopLevelSymbolExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind

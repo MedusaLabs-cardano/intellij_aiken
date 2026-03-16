@@ -14,7 +14,6 @@ import com.intellij.util.indexing.FindSymbolParameters
 import com.intellij.util.indexing.IdFilter
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
 import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
-import com.medusalabs.aiken.index.AikenTopLevelSymbolIndex
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey
 
