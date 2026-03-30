@@ -78,9 +78,7 @@ object AikenUnusedImportsQuickFixSupport {
         val actions = requestCodeActions(server, request) ?: return null
 
         val codeAction = actions.asSequence().mapNotNull(::asCodeAction).firstOrNull() ?: return null
-        return object : LspIntentionAction(server, codeAction) {
-            override fun getText(): String = REMOVE_ALL_UNUSED_IMPORTS
-        }
+        return AikenPreparedLspIntentionAction(server, codeAction, REMOVE_ALL_UNUSED_IMPORTS)
     }
 
     fun applyResolvedAction(
@@ -90,6 +88,9 @@ object AikenUnusedImportsQuickFixSupport {
         file: PsiFile
     ): Boolean {
         if (!action.isAvailable(project, editor, file)) return false
+        if (action !is AikenPreparedLspIntentionAction) {
+            AikenLspQuickFixPreparation.prepare(project, editor, file)
+        }
         action.invoke(project, editor, file)
         return true
     }

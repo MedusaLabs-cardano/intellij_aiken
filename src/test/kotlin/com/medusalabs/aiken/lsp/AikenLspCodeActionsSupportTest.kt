@@ -38,6 +38,7 @@ class AikenLspCodeActionsSupportTest {
         val quickFix = support.createQuickFix(server, action)
 
         assertEquals(AikenUnusedImportsQuickFixSupport.REMOVE_ONE_UNUSED_IMPORT, quickFix.text)
+        assertTrue(quickFix is AikenPreparedLspIntentionAction)
     }
 
     @Test
@@ -51,6 +52,7 @@ class AikenLspCodeActionsSupportTest {
         val quickFix = support.createQuickFix(server, action)
 
         assertEquals("Remove redundant imports", quickFix.text)
+        assertTrue(quickFix is AikenPreparedLspIntentionAction)
     }
 
     @Test

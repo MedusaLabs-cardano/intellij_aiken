@@ -46,6 +46,7 @@
 
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
+        <typedHandler implementation="com.medusalabs.aiken.completion.AikenCompletionAutoPopupTypedHandler"/>
 
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
@@ -74,6 +75,8 @@
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenModuleIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenExportIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenFunctionSignatureIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenConstTypeIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenConstructibleIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenTopLevelSymbolIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 

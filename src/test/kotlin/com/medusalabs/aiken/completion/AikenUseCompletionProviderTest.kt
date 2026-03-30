@@ -1,5 +1,6 @@
 package com.medusalabs.aiken.completion
 
+import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.medusalabs.aiken.AikenPlatformTestCase
 import org.junit.Test
 
@@ -64,8 +65,72 @@ class AikenUseCompletionProviderTest : AikenPlatformTestCase() {
         assertFalse(suggestions.contains("hidden"))
     }
 
+    @Test
+    fun suggestsModulesByExportedSymbolName() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/types.ak",
+            """
+            pub type Qwe {
+              Qwe
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/types_extra.ak",
+            """
+            pub type QweBox {
+              QweBox
+            }
+            """.trimIndent()
+        )
+
+        val file = myFixture.addFileToProject("lib/main.ak", "use Qwe<caret>")
+        myFixture.configureFromExistingVirtualFile(file.virtualFile)
+
+        val suggestions = completionVariants()
+        val presentationByLookup = completionPresentations().associate { (lookup, typeText) -> lookup to typeText }
+
+        assertTrue("Expected reverse export suggestions, got: $suggestions", suggestions.contains("types.{Qwe}"))
+        assertTrue("Expected reverse export suggestions, got: $suggestions", suggestions.contains("types_extra.{QweBox}"))
+        assertEquals("type Qwe", presentationByLookup["types.{Qwe}"])
+        assertEquals("type QweBox", presentationByLookup["types_extra.{QweBox}"])
+    }
+
+    @Test
+    fun insertsFullImportForReverseExportSuggestion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/placeholder.ak",
+            """
+            pub type Qwe {
+              Qwe
+            }
+            """.trimIndent()
+        )
+
+        val file = myFixture.addFileToProject("lib/main.ak", "use Qw<caret>")
+        myFixture.configureFromExistingVirtualFile(file.virtualFile)
+
+        val elements = myFixture.completeBasic() ?: error("Expected completion items")
+        val target = elements.firstOrNull { it.lookupString == "placeholder.{Qwe}" } ?: error("Expected reverse import suggestion")
+        myFixture.lookup.currentItem = target
+        myFixture.finishLookup('\n')
+
+        myFixture.checkResult("use placeholder.{Qwe}")
+    }
+
     private fun completionVariants(): List<String> =
         myFixture.completeBasic()
             ?.map { it.lookupString }
+            .orEmpty()
+
+    private fun completionPresentations(): List<Pair<String, String?>> =
+        myFixture.lookupElements
+            ?.map { element ->
+                val presentation = LookupElementPresentation()
+                element.renderElement(presentation)
+                element.lookupString to presentation.typeText
+            }
             .orEmpty()
 }

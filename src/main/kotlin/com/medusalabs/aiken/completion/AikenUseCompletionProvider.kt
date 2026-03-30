@@ -19,6 +19,9 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenUseStatement
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
+import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
+import com.medusalabs.aiken.index.aikenTopLevelSymbolModuleKey
 import com.medusalabs.aiken.index.decodeAikenExportIndexValue
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenModulePath
@@ -64,6 +67,16 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                         .filter { it.startsWith(prefix) }
                         .take(MAX_SUGGESTIONS)
                         .toList()
+                val reverseExportSuggestions =
+                    if (normalizedPrefix.isBlank()) {
+                        emptyList()
+                    } else {
+                        catalog.modulesExporting(normalizedPrefix)
+                            .asSequence()
+                            .filter { it.module !in moduleSuggestions }
+                            .take(MAX_SUGGESTIONS)
+                            .toList()
+                    }
 
                 val exactSingleModuleMatch =
                     moduleSuggestions.size == 1 && moduleSuggestions.first() == normalizedPrefix
@@ -121,6 +134,8 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                 }
 
                 if (!preferPub) {
+                    val reverseResult = result.withPrefixMatcher("")
+
                     for (module in moduleSuggestions) {
                         result.addElement(
                             LookupElementBuilder.create(module)
@@ -133,6 +148,28 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                                     insertionContext.commitDocument()
                                 }
                         )
+                        added++
+                    }
+
+                    for (match in reverseExportSuggestions) {
+                        val fullImportSuggestion = "${match.module}.{${match.matchedExport}}"
+                        val builder =
+                            LookupElementBuilder.create(fullImportSuggestion)
+                                .withIcon(AllIcons.Nodes.Package)
+                                .withTypeText("${match.kind.label} ${match.matchedExport}", true)
+                                .withInsertHandler { insertionContext, _ ->
+                                    val insertedStart = insertionContext.startOffset
+                                    val insertedEnd = insertionContext.tailOffset
+                                    if (insertedEnd > insertedStart) {
+                                        insertionContext.document.deleteString(insertedStart, insertedEnd)
+                                    }
+                                    val docText = insertionContext.document.text
+                                    val range = UseEditUtils.moduleSegmentRange(docText, useContext) ?: useContext.replaceRange
+                                    insertionContext.document.replaceString(range.startOffset, range.endOffset, fullImportSuggestion)
+                                    insertionContext.commitDocument()
+                                }
+                        val priority = if (match.matchedExport == normalizedPrefix) 2000.0 else 1500.0
+                        reverseResult.addElement(PrioritizedLookupElement.withPriority(builder, priority))
                         added++
                     }
                 }
@@ -511,11 +548,52 @@ private object UseEditUtils {
 
 private data class AikenImportCatalog(
     val moduleNames: List<String>,
-    private val entitiesByModule: Map<String, List<String>>
+    private val entitiesByModule: Map<String, List<String>>,
+    private val moduleScope: com.intellij.psi.search.GlobalSearchScope? = null
 ) {
+    enum class ExportKind(val label: String) {
+        TYPE("type"),
+        FUNCTION("fn"),
+        CONST("const")
+    }
+
+    data class ReverseExportMatch(
+        val module: String,
+        val matchedExport: String,
+        val kind: ExportKind
+    )
+
     fun publicEntities(module: String): List<String> = entitiesByModule[module].orEmpty()
 
     fun containsModule(module: String): Boolean = entitiesByModule.containsKey(module)
+
+    fun modulesExporting(symbolPrefix: String): List<ReverseExportMatch> =
+        entitiesByModule
+            .asSequence()
+            .mapNotNull { (module, exports) ->
+                val match = exports.firstOrNull { it.startsWith(symbolPrefix) } ?: return@mapNotNull null
+                val kind = exportKind(module, match) ?: return@mapNotNull null
+                ReverseExportMatch(module = module, matchedExport = match, kind = kind)
+            }
+            .sortedWith(compareByDescending<ReverseExportMatch> { it.matchedExport == symbolPrefix }.thenBy { it.module })
+            .toList()
+
+    private fun exportKind(module: String, symbolName: String): ExportKind? {
+        val lookupKinds =
+            listOf(
+                AikenTopLevelSymbolKind.TYPE to ExportKind.TYPE,
+                AikenTopLevelSymbolKind.FUNCTION to ExportKind.FUNCTION,
+                AikenTopLevelSymbolKind.CONST to ExportKind.CONST
+            )
+        val index = FileBasedIndex.getInstance()
+        val scope = moduleScope ?: return null
+
+        for ((symbolKind, exportKind) in lookupKinds) {
+            val values = index.getValues(AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME, aikenTopLevelSymbolModuleKey(symbolKind, module, symbolName), scope)
+            if (values.isNotEmpty()) return exportKind
+        }
+        return null
+    }
 
     companion object {
         fun get(anchorFile: PsiFile): AikenImportCatalog {
@@ -553,10 +631,11 @@ private data class AikenImportCatalog(
 
                 AikenImportCatalog(
                     moduleNames = entities.keys.toList(),
-                    entitiesByModule = entities
+                    entitiesByModule = entities,
+                    moduleScope = scope
                 )
             } catch (_: IndexNotReadyException) {
-                AikenImportCatalog(emptyList(), emptyMap())
+                AikenImportCatalog(emptyList(), emptyMap(), null)
             }
         }
     }

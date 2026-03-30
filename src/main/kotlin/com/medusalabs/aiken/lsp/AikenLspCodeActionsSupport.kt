@@ -1,10 +1,13 @@
 package com.medusalabs.aiken.lsp
 
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.Project
 import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.customization.LspCodeActionsCustomizer
 import com.intellij.platform.lsp.api.customization.LspCodeActionsSupport
 import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.intellij.platform.lsp.api.customization.LspIntentionAction
+import com.intellij.psi.PsiFile
 import org.eclipse.lsp4j.CodeAction
 
 class AikenLspCustomization : LspCustomization() {
@@ -24,12 +27,26 @@ class AikenLspCodeActionsSupport : LspCodeActionsSupport() {
     ): LspIntentionAction = createAction(lspServer, codeAction)
 
     private fun createAction(lspServer: LspServer, codeAction: CodeAction): LspIntentionAction {
-        if (!AikenUnusedImportsQuickFixSupport.isAtomicUnusedImportCodeAction(codeAction)) {
-            return super.createQuickFix(lspServer, codeAction) ?: LspIntentionAction(lspServer, codeAction)
-        }
+        val textOverride =
+            if (AikenUnusedImportsQuickFixSupport.isAtomicUnusedImportCodeAction(codeAction)) {
+                AikenUnusedImportsQuickFixSupport.REMOVE_ONE_UNUSED_IMPORT
+            } else {
+                null
+            }
 
-        return object : LspIntentionAction(lspServer, codeAction) {
-            override fun getText(): String = AikenUnusedImportsQuickFixSupport.REMOVE_ONE_UNUSED_IMPORT
-        }
+        return AikenPreparedLspIntentionAction(lspServer, codeAction, textOverride)
+    }
+}
+
+internal class AikenPreparedLspIntentionAction(
+    lspServer: LspServer,
+    codeAction: CodeAction,
+    private val textOverride: String? = null
+) : LspIntentionAction(lspServer, codeAction) {
+    override fun getText(): String = textOverride ?: super.getText()
+
+    override fun invoke(project: Project, editor: Editor, psiFile: PsiFile) {
+        AikenLspQuickFixPreparation.prepare(project, editor, psiFile)
+        super.invoke(project, editor, psiFile)
     }
 }

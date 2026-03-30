@@ -19,12 +19,19 @@ object CompletionItemFactory {
         text: String,
         kind: CompletionSymbolKind,
         priority: Double
+    ): LookupElement = create(text, kind, priority, typeTextFor(kind))
+
+    fun create(
+        text: String,
+        kind: CompletionSymbolKind,
+        priority: Double,
+        typeText: String
     ): LookupElement {
         val builder =
             LookupElementBuilder
                 .create(text)
                 .withIcon(iconFor(kind))
-                .withTypeText(typeTextFor(kind), true)
+                .withTypeText(typeText, true)
                 .withBoldness(kind == CompletionSymbolKind.KEYWORD)
 
         return PrioritizedLookupElement.withPriority(builder, priority)

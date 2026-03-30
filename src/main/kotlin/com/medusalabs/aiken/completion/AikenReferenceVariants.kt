@@ -1,23 +1,30 @@
 package com.medusalabs.aiken.completion
 
+import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
+import com.medusalabs.aiken.index.AikenPublicExportExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolEntry
 import com.medusalabs.aiken.index.AikenTopLevelSymbolExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.decodeAikenExportIndexValue
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.navigation.AikenTopLevelSymbolLookup
+import com.medusalabs.aiken.project.AikenModulePath
+import com.medusalabs.aiken.project.AikenProjectRoots
 import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
 
 object AikenReferenceVariants {
+    private const val UNIMPORTED_EXPORTED_SYMBOL_PRIORITY = 4100.0
     private val lookupKinds =
         setOf(
             AikenTopLevelSymbolKind.FUNCTION,
@@ -71,7 +78,50 @@ object AikenReferenceVariants {
             addVariant(variants, seen, entry.name, mapTopLevelKind(entry), 2400.0)
         }
 
+        if (qualifier == null) {
+            val prefix = currentIdentifierPrefix(element)
+            if (prefix.isNotEmpty()) {
+                for (lookup in unimportedExportsForPrefix(element, prefix, excludedNames = seen)) {
+                    if (seen.add(lookup.lookupString)) {
+                        variants += lookup
+                    }
+                }
+            }
+        }
+
         return variants.toTypedArray()
+    }
+
+    fun unimportedExportsForPrefix(
+        element: PsiElement,
+        prefix: String,
+        excludedNames: Set<String> = emptySet()
+    ): List<LookupElement> {
+        if (prefix.isEmpty()) return emptyList()
+        val file = element.containingFile ?: return emptyList()
+        if (file.fileType != AikenFileType) return emptyList()
+
+        val useModel = AikenUseStatementParser.parseModel(file.text)
+        val currentModulePath = AikenModulePath.fromFile(file.virtualFile)
+        val importedNames = useModel.importedNames().mapTo(LinkedHashSet()) { it.exposedName }
+        val seen = LinkedHashSet<String>()
+        val result = ArrayList<LookupElement>()
+        val root = AikenProjectRoots.findRootForFile(file.virtualFile) ?: return emptyList()
+
+        for (moduleFile in collectModuleFiles(root)) {
+            val modulePath = AikenModulePath.fromFile(moduleFile) ?: continue
+            if (modulePath.isBlank() || modulePath == currentModulePath) continue
+            val text = moduleFile.contentsToByteArray().toString(Charsets.UTF_8)
+            val exportedNames = AikenPublicExportExtractor.extract(text).toSet()
+            for (entry in AikenTopLevelSymbolExtractor.extract(text)) {
+                if (entry.name !in exportedNames) continue
+                if (!entry.name.startsWith(prefix, ignoreCase = true)) continue
+                if (entry.name in excludedNames || entry.name in importedNames || !seen.add(entry.name)) continue
+                result += createAutoImportedExportLookup(modulePath, entry.name, mapTopLevelKind(entry))
+            }
+        }
+
+        return result
     }
 
     private fun addVariant(
@@ -144,5 +194,98 @@ object AikenReferenceVariants {
         val start = index + 1
 
         return if (start < end) text.subSequence(start, end).toString() else null
+    }
+
+    private fun currentIdentifierPrefix(element: PsiElement): String =
+        element.text.takeWhile { it.isLetterOrDigit() || it == '_' }
+
+    private fun collectModuleFiles(root: VirtualFile): List<VirtualFile> {
+        val result = ArrayList<VirtualFile>()
+
+        fun walk(directory: VirtualFile?) {
+            if (directory == null || !directory.isValid || !directory.isDirectory) return
+            for (child in directory.children) {
+                when {
+                    child.isDirectory -> walk(child)
+                    child.fileType == AikenFileType -> result += child
+                }
+            }
+        }
+
+        walk(root.findChild("lib"))
+        walk(root.findChild("validators"))
+        root.findFileByRelativePath("build/packages")
+            ?.children
+            ?.filter { it.isDirectory }
+            ?.forEach { packageDir ->
+                walk(packageDir.findChild("lib"))
+                walk(packageDir.findChild("validators"))
+            }
+
+        return result
+    }
+
+    private fun createAutoImportedExportLookup(
+        modulePath: String,
+        symbolName: String,
+        kind: CompletionSymbolKind
+    ): LookupElement {
+        val builder =
+            com.intellij.codeInsight.lookup.LookupElementBuilder
+                .create(symbolName)
+                .withIcon(
+                    when (kind) {
+                        CompletionSymbolKind.TYPE -> com.intellij.icons.AllIcons.Nodes.Class
+                        CompletionSymbolKind.FUNCTION -> com.intellij.icons.AllIcons.Nodes.Method
+                        CompletionSymbolKind.FIELD -> com.intellij.icons.AllIcons.Nodes.Field
+                        CompletionSymbolKind.IDENTIFIER -> com.intellij.icons.AllIcons.Nodes.Variable
+                        CompletionSymbolKind.KEYWORD -> com.intellij.icons.AllIcons.Nodes.Static
+                    }
+                )
+                .withTypeText(
+                    when (kind) {
+                        CompletionSymbolKind.TYPE -> "type"
+                        CompletionSymbolKind.FUNCTION -> "fn"
+                        CompletionSymbolKind.FIELD -> "field"
+                        CompletionSymbolKind.IDENTIFIER -> "var"
+                        CompletionSymbolKind.KEYWORD -> "keyword"
+                    },
+                    true
+                )
+                .withTailText(" from $modulePath", true)
+                .withInsertHandler { insertionContext, _ ->
+                    replaceCurrentIdentifierPrefix(insertionContext, symbolName)
+                    insertionContext.commitDocument()
+                    val previousLaterRunnable = insertionContext.laterRunnable
+                    insertionContext.setLaterRunnable {
+                        previousLaterRunnable?.run()
+                        WriteCommandAction.runWriteCommandAction(insertionContext.project) {
+                            insertStandaloneUseImport(insertionContext.document, modulePath, symbolName)
+                            insertionContext.commitDocument()
+                        }
+                    }
+                }
+        return com.intellij.codeInsight.completion.PrioritizedLookupElement.withPriority(builder, UNIMPORTED_EXPORTED_SYMBOL_PRIORITY)
+    }
+
+    private fun replaceCurrentIdentifierPrefix(
+        insertionContext: com.intellij.codeInsight.completion.InsertionContext,
+        replacementText: String
+    ) {
+        val document = insertionContext.document
+        val chars = document.charsSequence
+        var replaceStart = insertionContext.startOffset.coerceIn(0, chars.length)
+        while (replaceStart > 0 && (chars[replaceStart - 1].isLetterOrDigit() || chars[replaceStart - 1] == '_')) {
+            replaceStart--
+        }
+        document.replaceString(replaceStart, insertionContext.tailOffset, replacementText)
+    }
+
+    private fun insertStandaloneUseImport(
+        document: com.intellij.openapi.editor.Document,
+        modulePath: String,
+        symbolName: String
+    ) {
+        document.insertString(0, "use $modulePath.{$symbolName}\n")
     }
 }

@@ -22,9 +22,72 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         val offset = parameters.offset.coerceIn(0, file.textLength)
         if (insideUseStatement(file, offset)) return
 
-        val anchor = findAnchorElement(file, offset) ?: return
-        val semanticResult = result.withPrefixMatcher(completionPrefix(file.text, offset))
-        for (lookupElement in variantsForAnchor(anchor)) {
+        val anchor = findAnchorElement(file, offset)
+        val prefix = completionPrefix(file.text, offset)
+        val insideRecordFieldValue = AikenRecordCompletionSupport.isRecordFieldValueContext(file.text, offset)
+        val recordSuggestions = AikenRecordCompletionSupport.recordSpecificVariants(anchor, offset)
+        val argumentSuggestions =
+            if (recordSuggestions == null) {
+                AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
+            } else {
+                emptyList()
+            }
+
+        recordSuggestions?.let { suggestions ->
+            val specialResult =
+                if (suggestions.mode == RecordCompletionMode.FIELD_VALUE) {
+                    result.withPrefixMatcher("")
+                } else {
+                    result.withPrefixMatcher(prefix)
+                }
+
+            for (lookupElement in suggestions.lookups) {
+                specialResult.addElement(lookupElement)
+            }
+        }
+
+        if (argumentSuggestions.isNotEmpty()) {
+            val specialResult = result.withPrefixMatcher("")
+            for (lookupElement in argumentSuggestions) {
+                specialResult.addElement(lookupElement)
+            }
+        }
+
+        if (insideRecordFieldValue) {
+            result.stopHere()
+            return
+        }
+        if (argumentSuggestions.isNotEmpty()) {
+            result.stopHere()
+            return
+        }
+
+        val semanticVariants =
+            anchor
+                ?.let(::variantsForAnchor)
+                .orEmpty()
+                .filterNot { lookup ->
+                    recordSuggestions?.lookups?.any { it.lookupString == lookup.lookupString } == true ||
+                        argumentSuggestions.any { it.lookupString == lookup.lookupString }
+                }
+        val unimportedSemanticVariants =
+            anchor
+                ?.let { currentAnchor ->
+                    AikenReferenceVariants.unimportedExportsForPrefix(
+                        currentAnchor,
+                        prefix,
+                        excludedNames = semanticVariants.mapTo(LinkedHashSet()) { it.lookupString }
+                    )
+                }
+                .orEmpty()
+
+        if (semanticVariants.isEmpty() && unimportedSemanticVariants.isEmpty()) return
+
+        val semanticResult = result.withPrefixMatcher(prefix)
+        for (lookupElement in semanticVariants) {
+            semanticResult.addElement(lookupElement)
+        }
+        for (lookupElement in unimportedSemanticVariants) {
             semanticResult.addElement(lookupElement)
         }
     }

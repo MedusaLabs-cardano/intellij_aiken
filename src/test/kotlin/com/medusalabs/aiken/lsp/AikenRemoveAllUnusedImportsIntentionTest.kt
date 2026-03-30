@@ -101,20 +101,25 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
                   <caret>1
                 }
                 """.trimIndent()
-            )
+        )
         myFixture.configureFromExistingVirtualFile(source.virtualFile)
 
         val fakeAction = SequencedIntentionAction()
+        AikenLspQuickFixPreparation.beforeApplyOverride = { _, _, _ -> fakeAction.events += "prepared" }
 
-        assertTrue(
-            AikenUnusedImportsQuickFixSupport.applyResolvedAction(
-                fakeAction,
-                project,
-                myFixture.editor,
-                myFixture.file
+        try {
+            assertTrue(
+                AikenUnusedImportsQuickFixSupport.applyResolvedAction(
+                    fakeAction,
+                    project,
+                    myFixture.editor,
+                    myFixture.file
+                )
             )
-        )
-        assertEquals(listOf("available", "invoke"), fakeAction.events)
+            assertEquals(listOf("available", "prepared", "invoke"), fakeAction.events)
+        } finally {
+            AikenLspQuickFixPreparation.beforeApplyOverride = null
+        }
     }
 
     private fun publishDiagnostics(
