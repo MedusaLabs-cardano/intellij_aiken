@@ -58,6 +58,7 @@ import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.ui.ComponentContainer
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.JDOMExternalizerUtil
@@ -84,12 +85,15 @@ import java.io.File
 import java.io.IOException
 import java.awt.BorderLayout
 import java.awt.Color
+import java.awt.Cursor
 import java.awt.Component
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.Point
 import java.awt.Insets
+import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
@@ -107,10 +111,19 @@ import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
+import com.intellij.ui.render.RenderingUtil
+import com.intellij.ui.treeStructure.Tree
+import com.intellij.ui.tree.ui.DefaultTreeUI
+import com.intellij.ui.dualView.TreeTableView
+import com.intellij.ui.treeStructure.treetable.ListTreeTableModelOnColumns
+import com.intellij.ui.treeStructure.treetable.TreeColumnInfo
+import com.intellij.ui.treeStructure.treetable.TreeTableCellRenderer
+import com.intellij.ui.treeStructure.treetable.TreeTableModel
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.util.ui.ColumnInfo
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
@@ -121,23 +134,59 @@ import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JTable
 import javax.swing.JPanel
+import javax.swing.AbstractCellEditor
+import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.JTree
 import javax.swing.UIManager
 import javax.swing.border.AbstractBorder
 import javax.swing.event.DocumentEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import javax.swing.event.DocumentListener
+import javax.swing.ListSelectionModel
+import javax.swing.table.TableCellEditor
+import javax.swing.table.TableCellRenderer
 import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeCellRenderer
+import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreeCellRenderer
+import javax.swing.tree.TreePath
+import javax.swing.tree.TreeSelectionModel
 import javax.swing.tree.TreeNode
 import java.awt.FlowLayout
 import java.awt.Font
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
+import java.util.function.Supplier
 
 private const val APPLY_EDITOR_LEFT_INSET = 10
 private const val DIAGNOSTICS_ROOT_ID = "aiken-root"
 private const val DIAGNOSTIC_TITLE_MAX_LENGTH = 120
+
+private class TransparentTreeTableSelectionUI : DefaultTreeUI() {
+    override fun paint(graphics: Graphics, component: JComponent) {
+        val treeTableTree = component as? com.intellij.ui.treeStructure.treetable.TreeTableTree
+        if (treeTableTree == null) {
+            super.paint(graphics, component)
+            return
+        }
+
+        val table = treeTableTree.treeTable
+        @Suppress("UNCHECKED_CAST")
+        val oldSupplier =
+            table.getClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND) as? Supplier<Color>
+        table.putClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND, Supplier { UIUtil.TRANSPARENT_COLOR })
+        try {
+            super.paint(graphics, component)
+        } finally {
+            table.putClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND, oldSupplier)
+        }
+    }
+}
 
 private fun isDarkUiTheme(): Boolean {
     val background = UIUtil.getPanelBackground()
@@ -579,7 +628,7 @@ class AikenRunConfiguration(
                         val label = parameter.title.ifBlank { "Parameter ${index + 1}" }
                         ApplyParameterSection(
                             title = label,
-                            editor = createEditor(parameter.schema, label, depth = 0)
+                            rootNode = createApplyNode(parameter.schema, label)
                         )
                     }.toMutableList()
 
@@ -771,21 +820,28 @@ class AikenRunConfiguration(
             var currentInput = context.blueprintFile
 
             try {
-                while (!handler.isProcessTerminated && !handler.isProcessTerminating) {
-                    val section = console.peekFirstSection() ?: break
-
-                    usedManualValues = true
-                    val encoded = encodeDataAsHex(readApplyEditorDataOnEdt(section.editor, section.title))
+                val sections = console.snapshotSections()
+                val encodedSections = ArrayList<Pair<ApplyParameterSection, String>>(sections.size)
+                sections.forEach { section ->
+                    val encoded = encodeDataAsHex(readApplyNodeDataOnEdt(section.rootNode, section.title))
                     val cborHex = normalizeCborHex(encoded)
-
                     if (cborHex == null) {
                         console.showError("Invalid CBOR value for '${section.title}'.")
                         applyStarted.set(false)
                         console.enableApplyRetry()
                         return
                     }
+                    encodedSections += section to cborHex
+                }
 
-                    console.showStatus("Applying parameter '${section.title}'...")
+                usedManualValues = encodedSections.isNotEmpty()
+                for ((index, pair) in encodedSections.withIndex()) {
+                    if (handler.isProcessTerminated || handler.isProcessTerminating) break
+                    val (section, cborHex) = pair
+
+                    console.showStatus(
+                        "Applying parameter ${index + 1}/${encodedSections.size}: '${section.title}'..."
+                    )
                     val args =
                         buildApplyCommandParametersForPaths(
                             blueprintInput = currentInput.absolutePath,
@@ -825,10 +881,6 @@ class AikenRunConfiguration(
                     appliedCount += 1
                     currentInput = targetOutput
                     console.removeFirstSection()
-
-                    if (!configuration.applyAutoUntilNoParameters) {
-                        break
-                    }
                 }
 
                 val remaining = console.sectionCount()
@@ -857,16 +909,16 @@ class AikenRunConfiguration(
         }
 
         @Throws(ExecutionException::class)
-        private fun readApplyEditorDataOnEdt(editor: ApplyValueEditor, fieldPath: String): ApplyData {
+        private fun readApplyNodeDataOnEdt(node: ApplyUiNode, fieldPath: String): ApplyData {
             if (ApplicationManager.getApplication().isDispatchThread) {
-                return editor.encodeData(fieldPath)
+                return node.encode(fieldPath)
             }
 
             val resultRef = AtomicReference<ApplyData?>()
             val errorRef = AtomicReference<ExecutionException?>()
             ApplicationManager.getApplication().invokeAndWait {
                 try {
-                    resultRef.set(editor.encodeData(fieldPath))
+                    resultRef.set(node.encode(fieldPath))
                 } catch (e: ExecutionException) {
                     errorRef.set(e)
                 }
@@ -874,6 +926,87 @@ class AikenRunConfiguration(
             errorRef.get()?.let { throw it }
             return resultRef.get()
                 ?: throw ExecutionException("Unable to read parameter value for '$fieldPath'.")
+        }
+
+        private fun createApplyNode(
+            schema: ApplySchema,
+            name: String
+        ): ApplyUiNode {
+            return when (schema) {
+                is ApplySchema.Integer -> ApplyIntegerNode(name)
+                is ApplySchema.Bytes -> ApplyBytesNode(name, ::parseHexBytes)
+                is ApplySchema.ListOne -> ApplyListNode(
+                    title = name,
+                    typeLabel = schemaDisplayType(schema),
+                    itemFactory = { childName -> createApplyNode(schema.item, childName) }
+                )
+                is ApplySchema.ListMany -> ApplyTupleNode(
+                    title = name,
+                    typeLabel = schemaDisplayType(schema),
+                    fields = schema.items.mapIndexed { index, item ->
+                        val childName = item.title ?: "item${index + 1}"
+                        childName to createApplyNode(item.schema, childName)
+                    }
+                )
+                is ApplySchema.Map -> ApplyMapNode(
+                    title = name,
+                    typeLabel = schemaDisplayType(schema),
+                    keyFactory = { childName -> createApplyNode(schema.key, childName) },
+                    valueFactory = { childName -> createApplyNode(schema.value, childName) }
+                )
+                is ApplySchema.AnyOf -> createApplyAnyOfNode(
+                    name = name,
+                    typeLabel = schemaDisplayType(schema),
+                    typeName = schema.typeName,
+                    constructors = schema.constructors
+                )
+                is ApplySchema.Opaque -> ApplyOpaqueNode(name, schema.reason, ::normalizeCborHex, ::parseHexBytes)
+            }
+        }
+
+        private fun createApplyAnyOfNode(
+            name: String,
+            typeLabel: String,
+            typeName: String?,
+            constructors: List<ApplyConstructor>
+        ): ApplyUiNode {
+            if (constructors.isEmpty()) {
+                return ApplyOpaqueNode(name, "empty constructor set", ::normalizeCborHex, ::parseHexBytes)
+            }
+
+            if (constructors.size == 1) {
+                return ApplySingleConstructorNode(
+                    title = name,
+                    typeLabel = (typeName ?: typeLabel).ifBlank { "DataType" },
+                    constructor = constructors.first(),
+                    fields = constructors.first().fields.mapIndexed { index, field ->
+                        val childName = field.title ?: "field${index + 1}"
+                        childName to createApplyNode(field.schema, childName)
+                    }
+                )
+            }
+
+            if (looksLikeBoolConstructors(constructors)) {
+                return ApplyBoolNode(name, constructors)
+            }
+
+            val option = detectOptionConstructors(constructors)
+            if (option != null) {
+                val someField = option.some.fields.first()
+                return ApplyOptionNode(
+                    title = name,
+                    typeLabel = typeLabel,
+                    optionConstructors = option,
+                    someNode = createApplyNode(someField.schema, someField.title ?: "Some")
+                )
+            }
+
+            return ApplyAnyOfNode(
+                title = name,
+                typeLabel = typeLabel,
+                constructors = constructors,
+                nodeFactory = { childName, childSchema -> createApplyNode(childSchema, childName) }
+            )
         }
 
         private fun normalizeCborHex(raw: String?): String? {
@@ -1170,18 +1303,27 @@ class AikenRunConfiguration(
             return OptionConstructors(none = none, some = some)
         }
 
+        private enum class ApplyTreeAction {
+            ADD,
+            REMOVE
+        }
+
+        private data class ResolvedTableAction(
+            val row: Int,
+            val node: ApplyUiNode,
+            val action: ApplyTreeAction
+        )
+
         private inner class AikenApplyExecutionConsole : ExecutionConsole {
-            private val rootPanel =
-                ScrollPaneFactory.createScrollPane(JPanel().apply {
-                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                    isOpaque = false
-                }, true).apply {
-                    border = JBUI.Borders.empty()
-                    viewport.isOpaque = false
-                    isOpaque = false
-                }
-            private val contentPanel: JPanel
-                get() = rootPanel.viewport.view as JPanel
+            private val rootPanel = JPanel(BorderLayout()).apply {
+                border = JBUI.Borders.empty()
+                isOpaque = false
+            }
+            private val topPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                border = JBUI.Borders.empty(8)
+                isOpaque = false
+            }
             private val statusArea =
                 JBTextArea("Preparing Apply form...").apply {
                     isEditable = false
@@ -1208,53 +1350,724 @@ class AikenRunConfiguration(
                     foreground = UIUtil.getErrorForeground()
                     isVisible = false
                 }
-            private val sectionsPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                border = JBUI.Borders.empty(4, 8)
+            private val parameterColumns = arrayOf<ColumnInfo<Any, *>>(
+                ApplyActionsColumn(),
+                object : TreeColumnInfo("Parameter") {},
+                ApplyValueColumn()
+            )
+            private var parameterTreeModel = buildTreeTableModel(DefaultMutableTreeNode("No parameters"))
+            private val parameterTreeTable = object : TreeTableView(parameterTreeModel) {
+                override fun createTableRenderer(model: TreeTableModel): TreeTableCellRenderer {
+                    return object : TreeTableCellRenderer(this, tree) {
+                        override fun getTableCellRendererComponent(
+                            table: javax.swing.JTable,
+                            value: Any?,
+                            isSelected: Boolean,
+                            hasFocus: Boolean,
+                            row: Int,
+                            column: Int
+                        ): Component {
+                            val rowSelected = table.isRowSelected(row)
+                            val component =
+                                super.getTableCellRendererComponent(table, value, rowSelected, hasFocus, row, column)
+                            (component as? JComponent)?.isOpaque = false
+                            return component
+                        }
+                    }
+                }
+            }.apply {
+                setRootVisible(true)
+                tree.showsRootHandles = true
+                tree.selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+                setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+                rowHeight = JBUI.scale(32)
+                tree.rowHeight = rowHeight
+                intercellSpacing = JBUI.size(0, 2)
+                showVerticalLines = false
+                showHorizontalLines = false
                 isOpaque = false
+                background = UIUtil.TRANSPARENT_COLOR
+                border = JBUI.Borders.empty(6)
+                putClientProperty("terminateEditOnFocusLost", true)
+            }
+            private val treeScroll = ScrollPaneFactory.createScrollPane(parameterTreeTable, true).apply {
+                border = JBUI.Borders.customLine(applyControlBorderColor(), 1)
+                viewport.isOpaque = false
+                isOpaque = false
+                minimumSize = JBUI.size(0, 220)
             }
             private val applyButton = JButton("Apply")
+            private val controlsPanel =
+                JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                    border = JBUI.Borders.empty(8)
+                    isOpaque = false
+                }
             private val disposed = AtomicBoolean(false)
             private val sections = ArrayList<ApplyParameterSection>()
             private var onApply: (() -> Unit)? = null
+            private var initialSectionCount = 0
+            private var currentModule = ""
+            private var currentValidator = ""
+            private var currentBlueprintPath = ""
+            private var baseTreeCellRenderer: TreeCellRenderer? = null
+
+            private fun treeActionIcon(action: ApplyTreeAction) = when (action) {
+                ApplyTreeAction.ADD -> AllIcons.General.Add
+                ApplyTreeAction.REMOVE -> AikenIcons.DELETE
+            }
+
+            private fun buildTreeTableModel(root: DefaultMutableTreeNode): ListTreeTableModelOnColumns =
+                ListTreeTableModelOnColumns(root, parameterColumns)
+
+            private fun configureTreeTableColumns() {
+                val columnModel = parameterTreeTable.columnModel
+                if (columnModel.columnCount < 3) return
+                columnModel.getColumn(0).minWidth = JBUI.scale(52)
+                columnModel.getColumn(0).maxWidth = JBUI.scale(64)
+                columnModel.getColumn(0).preferredWidth = JBUI.scale(56)
+                columnModel.getColumn(1).preferredWidth = JBUI.scale(460)
+                columnModel.getColumn(2).preferredWidth = JBUI.scale(220)
+            }
+
+            private fun configureTreeTableView() {
+                currentTree().setUI(TransparentTreeTableSelectionUI())
+                currentTree().showsRootHandles = true
+                currentTree().selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+                currentTree().isOpaque = false
+                currentTree().background = UIUtil.TRANSPARENT_COLOR
+                if (baseTreeCellRenderer == null) {
+                    baseTreeCellRenderer = currentTree().originalCellRenderer
+                }
+                currentTree().cellRenderer = createTreeColumnRenderer()
+                parameterTreeTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+                parameterTreeTable.autoResizeMode = JTable.AUTO_RESIZE_OFF
+                parameterTreeTable.rowHeight = JBUI.scale(32)
+                currentTree().rowHeight = parameterTreeTable.rowHeight
+                parameterTreeTable.intercellSpacing = JBUI.size(0, 2)
+                parameterTreeTable.showVerticalLines = false
+                parameterTreeTable.showHorizontalLines = false
+                parameterTreeTable.isOpaque = false
+                parameterTreeTable.background = UIUtil.TRANSPARENT_COLOR
+                parameterTreeTable.border = JBUI.Borders.empty(6)
+                parameterTreeTable.putClientProperty("terminateEditOnFocusLost", true)
+            }
+
+            private fun currentTree() = parameterTreeTable.tree
+
+            private fun normalizeTreeRendererComponent(component: Component, selected: Boolean) {
+                if (component is JComponent) {
+                    component.isOpaque = false
+                    component.border = JBUI.Borders.empty()
+                    component.foreground = if (selected) {
+                        parameterTreeTable.selectionForeground
+                    } else {
+                        parameterTreeTable.foreground
+                    }
+                    component.components.forEach { child ->
+                        normalizeTreeRendererComponent(child, selected)
+                    }
+                }
+            }
+
+            private fun createTreeColumnRenderer(): TreeCellRenderer {
+                val delegate = baseTreeCellRenderer ?: DefaultTreeCellRenderer()
+                return TreeCellRenderer { tree, value, selected, expanded, leaf, row, hasFocus ->
+                    val delegateComponent =
+                        delegate.getTreeCellRendererComponent(tree, value, false, expanded, leaf, row, false)
+                    normalizeTreeRendererComponent(delegateComponent, selected)
+                    object : JPanel(BorderLayout()) {
+                        override fun getPreferredSize(): Dimension {
+                            val preferred = super.getPreferredSize()
+                            return Dimension(preferred.width, parameterTreeTable.rowHeight)
+                        }
+                    }.apply {
+                        isOpaque = false
+                        border = JBUI.Borders.empty()
+                        add(delegateComponent, BorderLayout.CENTER)
+                    }
+                }
+            }
+
+            private fun applyNodeFromItem(item: Any?): ApplyUiNode? =
+                (item as? DefaultMutableTreeNode)?.userObject as? ApplyUiNode
+
+            private fun isPlaceholderValue(text: String, node: ApplyUiNode?): Boolean =
+                text.isBlank() && (
+                    node is ApplyIntegerNode ||
+                        node is ApplyBytesNode ||
+                        node is ApplyOpaqueNode
+                    )
+
+            private fun currentValueText(node: ApplyUiNode): String =
+                when (node) {
+                    is ApplyIntegerNode -> node.rawValue
+                    is ApplyBytesNode -> node.rawValue
+                    is ApplyOpaqueNode -> node.rawValue
+                    is ApplyBoolNode -> if (node.value) "True" else "False"
+                    is ApplyOptionNode -> if (node.isNone) "None" else "Some"
+                    is ApplyAnyOfNode -> node.constructorTitles().getOrElse(node.selectedIndex) { "" }
+                    is ApplySingleConstructorNode -> "${node.fields.size} field(s)"
+                    is ApplyTupleNode -> "${node.fields.size} item(s)"
+                    is ApplyListNode -> "${node.items.size} item(s)"
+                    is ApplyMapNode -> "${node.entries.size} entr${if (node.entries.size == 1) "y" else "ies"}"
+                    is ApplyMapEntryNode -> "key / value"
+                }
+
+            private fun treeActionsForNode(node: ApplyUiNode): List<ApplyTreeAction> {
+                val actions = ArrayList<ApplyTreeAction>(2)
+                if (node is ApplyListNode || node is ApplyMapNode) {
+                    actions += ApplyTreeAction.ADD
+                }
+                if (node.parent is ApplyListNode || (node is ApplyMapEntryNode && node.parent is ApplyMapNode)) {
+                    actions += ApplyTreeAction.REMOVE
+                }
+                return actions
+            }
+
+            private inner class ApplyValueColumn : ColumnInfo<Any, Any?>("Value") {
+                override fun valueOf(item: Any): Any? = applyNodeFromItem(item)?.let(::currentValueText)
+
+                override fun isCellEditable(item: Any): Boolean {
+                    val node = applyNodeFromItem(item) ?: return false
+                    return when (node) {
+                        is ApplyIntegerNode,
+                        is ApplyBytesNode,
+                        is ApplyOpaqueNode,
+                        is ApplyBoolNode,
+                        is ApplyOptionNode,
+                        is ApplyAnyOfNode -> true
+                        else -> false
+                    }
+                }
+
+                override fun setValue(item: Any, value: Any?) {
+                    val node = applyNodeFromItem(item) ?: return
+                    when (node) {
+                        is ApplyIntegerNode -> node.rawValue = value as? String ?: ""
+                        is ApplyBytesNode -> node.rawValue = value as? String ?: ""
+                        is ApplyOpaqueNode -> node.rawValue = value as? String ?: ""
+                        is ApplyBoolNode -> node.value = value as? Boolean ?: false
+                        is ApplyOptionNode -> {
+                            val newIsNone = value as? Boolean ?: true
+                            if (node.isNone != newIsNone) {
+                                node.isNone = newIsNone
+                                SwingUtilities.invokeLater {
+                                    refreshTree(if (newIsNone) node else node.someNode)
+                                }
+                            }
+                        }
+                        is ApplyAnyOfNode -> {
+                            val newIndex = when (value) {
+                                is Int -> value
+                                is String -> node.constructorTitles().indexOf(value)
+                                else -> node.selectedIndex
+                            }.coerceAtLeast(0)
+                            if (newIndex != node.selectedIndex && newIndex < node.constructorTitles().size) {
+                                node.selectedIndex = newIndex
+                                SwingUtilities.invokeLater {
+                                    refreshTree(node)
+                                }
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+
+                override fun getRenderer(item: Any): TableCellRenderer {
+                    val node = applyNodeFromItem(item)
+                    return when (node) {
+                        is ApplyBoolNode -> createBooleanRenderer(if (node.value) "True" else "False", node.value)
+                        is ApplyOptionNode -> createBooleanRenderer("None", node.isNone)
+                        is ApplyAnyOfNode -> createComboRenderer(node.constructorTitles(), node.selectedIndex)
+                        else -> createTextRenderer(node?.let(::currentValueText).orEmpty(), node)
+                    }
+                }
+
+                override fun getEditor(item: Any): TableCellEditor? {
+                    val node = applyNodeFromItem(item) ?: return null
+                    return when (node) {
+                        is ApplyIntegerNode -> createTextEditor(node, node.rawValue, "e.g. 42")
+                        is ApplyBytesNode -> createTextEditor(node, node.rawValue, "hex bytes (without 0x)")
+                        is ApplyOpaqueNode -> createTextEditor(node, node.rawValue, "raw CBOR hex")
+                        is ApplyBoolNode -> createBooleanEditor(node, node.value, "True", "False")
+                        is ApplyOptionNode -> createBooleanEditor(node, node.isNone, "None")
+                        is ApplyAnyOfNode -> createComboEditor(node)
+                        else -> null
+                    }
+                }
+            }
+
+            private inner class ApplyActionsColumn : ColumnInfo<Any, Any?>("") {
+                override fun valueOf(item: Any): Any? = null
+
+                override fun isCellEditable(item: Any): Boolean = false
+
+                override fun getRenderer(item: Any): TableCellRenderer =
+                    createActionsRenderer(applyNodeFromItem(item))
+            }
+
+            private fun createTextRenderer(text: String, node: ApplyUiNode?): TableCellRenderer =
+                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                    val isPlaceholder = isPlaceholderValue(text, node)
+                    val label = JBLabel(
+                        when {
+                            text.isNotBlank() -> text
+                            node is ApplyIntegerNode -> "e.g. 42"
+                            node is ApplyBytesNode -> "hex bytes (without 0x)"
+                            node is ApplyOpaqueNode -> "raw CBOR hex"
+                            else -> ""
+                        }
+                    ).apply {
+                        border = JBUI.Borders.empty(0, 6)
+                        isOpaque = false
+                        foreground = when {
+                            node?.validationError != null -> UIUtil.getErrorForeground()
+                            isPlaceholder -> {
+                                JBColor.namedColor("CheckBox.disabledText", UIUtil.getLabelDisabledForeground())
+                            }
+                            isSelected -> table.selectionForeground
+                            else -> table.foreground
+                        }
+                        font = if (isPlaceholder) table.font.deriveFont(Font.ITALIC) else table.font
+                    }
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = true
+                        border = JBUI.Borders.empty()
+                        background = if (isSelected) table.selectionBackground else table.background
+                        add(label, BorderLayout.CENTER)
+                    }
+                }
+
+            private fun createBooleanRenderer(label: String, selected: Boolean): TableCellRenderer =
+                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                    JBCheckBox(label, selected).apply {
+                        isOpaque = true
+                        isEnabled = true
+                        isFocusable = false
+                        setRequestFocusEnabled(false)
+                        isFocusPainted = false
+                        isBorderPainted = false
+                        isContentAreaFilled = false
+                        isRolloverEnabled = false
+                        border = JBUI.Borders.empty(0, 4)
+                        background = if (isSelected) table.selectionBackground else table.background
+                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                    }
+                }
+
+            private fun createComboRenderer(options: List<String>, selectedIndex: Int): TableCellRenderer =
+                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                    val selectedText = options.getOrElse(selectedIndex.coerceIn(0, (options.size - 1).coerceAtLeast(0))) { "" }
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = true
+                        background = if (isSelected) table.selectionBackground else table.background
+                        border = JBUI.Borders.empty(0, 2)
+                        add(
+                            JPanel(BorderLayout(JBUI.scale(6), 0)).apply {
+                                isOpaque = false
+                                border = JBUI.Borders.empty(0, 6)
+                                add(
+                                    JBLabel(selectedText).apply {
+                                        isOpaque = false
+                                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                                    },
+                                    BorderLayout.CENTER
+                                )
+                                add(
+                                    JBLabel(AllIcons.General.ArrowDown).apply {
+                                        isOpaque = false
+                                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                                        disabledIcon = AllIcons.General.ArrowDown
+                                    },
+                                    BorderLayout.EAST
+                                )
+                            },
+                            BorderLayout.CENTER
+                        )
+                    }
+                }
+
+            private fun createActionsRenderer(node: ApplyUiNode?): TableCellRenderer =
+                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                    val actionsStrip = JPanel().apply {
+                        layout = FlowLayout(FlowLayout.CENTER, JBUI.scale(4), 0)
+                        isOpaque = false
+                        border = JBUI.Borders.empty()
+                    }
+                    node?.let(::treeActionsForNode)?.forEach { action ->
+                        actionsStrip.add(
+                            JBLabel(treeActionIcon(action)).apply {
+                                isOpaque = false
+                                toolTipText = when (action) {
+                                    ApplyTreeAction.ADD -> "Add"
+                                    ApplyTreeAction.REMOVE -> "Remove"
+                                }
+                            }
+                        )
+                    }
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = true
+                        background = if (isSelected) table.selectionBackground else table.background
+                        border = JBUI.Borders.empty(0, 2)
+                        add(
+                            object : JPanel(java.awt.GridBagLayout()) {
+                                init {
+                                    isOpaque = false
+                                    add(actionsStrip)
+                                }
+                            },
+                            BorderLayout.CENTER
+                        )
+                    }
+                }
+
+            private fun collectActionComponents(component: Component): List<Component> {
+                val result = ArrayList<Component>()
+                fun visit(current: Component) {
+                    when (current) {
+                        is JBLabel -> if (current.icon != null) result += current
+                        is JPanel -> current.components.forEach(::visit)
+                    }
+                }
+                visit(component)
+                return result
+            }
+
+            private fun layoutRecursively(component: Component) {
+                if (component is JComponent) {
+                    component.doLayout()
+                    component.components.forEach(::layoutRecursively)
+                }
+            }
+
+            private fun resolveTableActionAt(point: Point): ResolvedTableAction? {
+                val row = parameterTreeTable.rowAtPoint(point)
+                val column = parameterTreeTable.columnAtPoint(point)
+                if (row < 0 || column < 0) return null
+                if (parameterTreeTable.convertColumnIndexToModel(column) != 0) return null
+
+                val treeNode = currentTree().getPathForRow(row)?.lastPathComponent as? DefaultMutableTreeNode ?: return null
+                val node = treeNode.userObject as? ApplyUiNode ?: return null
+                val actions = treeActionsForNode(node)
+                if (actions.isEmpty()) return null
+
+                val renderer = createActionsRenderer(node)
+                val cellRect = parameterTreeTable.getCellRect(row, column, false)
+                val rendererComponent =
+                    renderer.getTableCellRendererComponent(
+                        parameterTreeTable,
+                        null,
+                        parameterTreeTable.isCellSelected(row, column),
+                        false,
+                        row,
+                        column
+                    ) as? JComponent ?: return null
+                rendererComponent.setBounds(0, 0, cellRect.width, cellRect.height)
+                layoutRecursively(rendererComponent)
+                collectActionComponents(rendererComponent).forEachIndexed { index, child ->
+                    val rect = SwingUtilities.convertRectangle(child.parent, child.bounds, rendererComponent)
+                    val tableRect = Rectangle(cellRect.x + rect.x, cellRect.y + rect.y, rect.width, rect.height)
+                    if (tableRect.contains(point)) {
+                        return ResolvedTableAction(row, node, actions.getOrNull(index) ?: return null)
+                    }
+                }
+                return null
+            }
+
+            private fun installTableActionListeners() {
+                parameterTreeTable.addMouseListener(
+                    object : MouseAdapter() {
+                        override fun mousePressed(e: MouseEvent) {
+                            val resolved = resolveTableActionAt(e.point) ?: return
+                            parameterTreeTable.setRowSelectionInterval(resolved.row, resolved.row)
+                            currentTree().setSelectionRow(resolved.row)
+                            performTreeAction(resolved.node, resolved.action)
+                            e.consume()
+                        }
+
+                        override fun mouseExited(e: MouseEvent) {
+                            parameterTreeTable.cursor = Cursor.getDefaultCursor()
+                        }
+                    }
+                )
+                parameterTreeTable.addMouseMotionListener(
+                    object : MouseMotionAdapter() {
+                        override fun mouseMoved(e: MouseEvent) {
+                            parameterTreeTable.cursor =
+                                if (resolveTableActionAt(e.point) != null) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                                else Cursor.getDefaultCursor()
+                        }
+                    }
+                )
+            }
+
+            private fun validateTextNodeInput(node: ApplyUiNode, raw: String): String? =
+                when (node) {
+                    is ApplyIntegerNode -> when {
+                        raw.isBlank() -> null
+                        raw.toBigIntegerOrNull() != null -> null
+                        else -> "Expected integer"
+                    }
+                    is ApplyBytesNode -> when {
+                        raw.isBlank() -> null
+                        normalizeCborHex(raw) != null -> null
+                        else -> "Expected hex: use only 0-9 and a-f and provide an even number of characters"
+                    }
+                    is ApplyOpaqueNode -> when {
+                        raw.isBlank() -> null
+                        normalizeCborHex(raw) == null ->
+                            "Expected valid CBOR hex: use only 0-9 and a-f and provide an even number of characters"
+                        decodeApplyDataFromHex(raw) == null -> "Expected decodable CBOR"
+                        else -> null
+                    }
+                    else -> null
+                }
+
+            private fun updateTextNodeValue(node: ApplyUiNode, raw: String) {
+                when (node) {
+                    is ApplyIntegerNode -> node.rawValue = raw
+                    is ApplyBytesNode -> node.rawValue = raw
+                    is ApplyOpaqueNode -> node.rawValue = raw
+                    else -> Unit
+                }
+            }
+
+            private fun createTextEditor(node: ApplyUiNode, initialValue: String, placeholder: String): TableCellEditor =
+                object : AbstractCellEditor(), TableCellEditor {
+                    private val invalidState = AtomicReference(false)
+                    private var normalForeground: Color = JBColor.namedColor("TextField.foreground", UIUtil.getLabelForeground())
+                    private val wrapper =
+                        JPanel(BorderLayout()).apply {
+                            isOpaque = false
+                            border =
+                                applyControlBorder(
+                                    arc = JBUI.scale(10),
+                                    insets = JBUI.insets(1, 6),
+                                    colorProvider = {
+                                        if (invalidState.get()) applyInputErrorBorderColor() else applyInputBorderColor()
+                                    }
+                                )
+                        }
+                    private val field = JBTextField().apply {
+                        configureCompactInputField(this)
+                        emptyText.text = placeholder
+                        addActionListener { stopCellEditing() }
+                    }
+                    private val validationTimer =
+                        Timer(2000) {
+                            val validationError = validateTextNodeInput(node, field.text)
+                            val invalid = validationError != null
+                            node.validationError = validationError
+                            field.foreground = if (invalid) UIUtil.getErrorForeground() else normalForeground
+                            if (invalidState.getAndSet(invalid) != invalid || wrapper.toolTipText != validationError) {
+                                wrapper.toolTipText = validationError
+                                wrapper.revalidate()
+                                wrapper.repaint()
+                                parameterTreeTable.repaint()
+                            }
+                        }.apply {
+                            isRepeats = false
+                        }
+
+                    init {
+                        val scheduleValidation = {
+                            updateTextNodeValue(node, field.text)
+                            validationTimer.restart()
+                        }
+                        field.document.addDocumentListener(
+                            object : DocumentListener {
+                                override fun insertUpdate(e: DocumentEvent?) = scheduleValidation()
+
+                                override fun removeUpdate(e: DocumentEvent?) = scheduleValidation()
+
+                                override fun changedUpdate(e: DocumentEvent?) = scheduleValidation()
+                            }
+                        )
+                    }
+
+                    override fun getTableCellEditorComponent(
+                        table: javax.swing.JTable,
+                        value: Any?,
+                        isSelected: Boolean,
+                        row: Int,
+                        column: Int
+                    ): Component {
+                        field.text = initialValue
+                        updateTextNodeValue(node, initialValue)
+                        normalForeground = JBColor.namedColor("TextField.foreground", table.foreground)
+                        val invalid = node.validationError != null
+                        invalidState.set(invalid)
+                        wrapper.toolTipText = node.validationError
+                        field.foreground = if (invalid) UIUtil.getErrorForeground() else normalForeground
+                        validationTimer.restart()
+                        wrapper.removeAll()
+                        wrapper.add(field, BorderLayout.CENTER)
+                        return wrapper
+                    }
+
+                    override fun getCellEditorValue(): Any = field.text
+                }
+
+            private fun createBooleanEditor(
+                node: ApplyUiNode,
+                initialValue: Boolean,
+                trueLabel: String,
+                falseLabel: String? = null
+            ): TableCellEditor =
+                object : AbstractCellEditor(), TableCellEditor {
+                    private val panel = JPanel(BorderLayout()).apply {
+                        isOpaque = false
+                        border = JBUI.Borders.empty()
+                    }
+                    private val checkBox = JBCheckBox().apply {
+                        isOpaque = false
+                        isFocusable = false
+                        setRequestFocusEnabled(false)
+                        isFocusPainted = false
+                        isBorderPainted = false
+                        isContentAreaFilled = false
+                        isRolloverEnabled = false
+                        border = JBUI.Borders.empty(0, 4)
+                        addActionListener {
+                            when (node) {
+                                is ApplyBoolNode -> node.value = isSelected
+                                is ApplyOptionNode -> {
+                                    if (node.isNone != isSelected) {
+                                        node.isNone = isSelected
+                                        SwingUtilities.invokeLater {
+                                            refreshTree(if (node.isNone) node else node.someNode)
+                                        }
+                                    }
+                                }
+                                else -> Unit
+                            }
+                            updateLabel()
+                            stopCellEditing()
+                        }
+                    }
+
+                    private fun updateLabel() {
+                        checkBox.text = if (checkBox.isSelected) trueLabel else (falseLabel ?: trueLabel)
+                    }
+
+                    override fun getTableCellEditorComponent(
+                        table: javax.swing.JTable,
+                        value: Any?,
+                        isSelected: Boolean,
+                        row: Int,
+                        column: Int
+                    ): Component {
+                        checkBox.isSelected = initialValue
+                        checkBox.foreground = if (isSelected) table.selectionForeground else table.foreground
+                        updateLabel()
+                        panel.removeAll()
+                        panel.add(checkBox, BorderLayout.CENTER)
+                        return panel
+                    }
+
+                    override fun getCellEditorValue(): Any = checkBox.isSelected
+                }
+
+            private fun createComboEditor(node: ApplyAnyOfNode): TableCellEditor =
+                object : AbstractCellEditor(), TableCellEditor {
+                    private var suppressEvents = false
+                    private val combo: ComboBox<String> = ComboBox(node.constructorTitles().toTypedArray()).apply {
+                        makeComboCompact(this)
+                        addActionListener {
+                            if (!suppressEvents) {
+                                val newIndex = this.selectedIndex.coerceIn(0, maxOf(0, itemCount - 1))
+                                if (node.selectedIndex != newIndex) {
+                                    node.selectedIndex = newIndex
+                                    SwingUtilities.invokeLater {
+                                        refreshTree(node)
+                                    }
+                                }
+                                stopCellEditing()
+                            }
+                        }
+                    }
+
+                    override fun getTableCellEditorComponent(
+                        table: javax.swing.JTable,
+                        value: Any?,
+                        isSelected: Boolean,
+                        row: Int,
+                        column: Int
+                    ): Component {
+                        suppressEvents = true
+                        val titles = node.constructorTitles()
+                        combo.model = javax.swing.DefaultComboBoxModel(titles.toTypedArray())
+                        combo.selectedIndex = node.selectedIndex.coerceIn(0, maxOf(0, titles.lastIndex))
+                        suppressEvents = false
+                        return combo
+                    }
+
+                    override fun getCellEditorValue(): Any = combo.selectedIndex
+                }
+
+            private fun finishPendingTreeEditing() {
+                if (parameterTreeTable.isEditing) {
+                    parameterTreeTable.cellEditor?.stopCellEditing()
+                }
+                val tree = currentTree()
+                if (tree.isEditing) {
+                    tree.cellEditor?.stopCellEditing()
+                }
+            }
+
+            private fun performTreeAction(node: ApplyUiNode, action: ApplyTreeAction) {
+                finishPendingTreeEditing()
+                when (action) {
+                    ApplyTreeAction.ADD -> when (node) {
+                        is ApplyListNode -> refreshTree(node.addItem())
+                        is ApplyMapNode -> refreshTree(node.addEntry())
+                        else -> Unit
+                    }
+                    ApplyTreeAction.REMOVE -> {
+                        when {
+                            node.parent is ApplyListNode -> {
+                                val parent = node.parent as ApplyListNode
+                                parent.removeItem(node)
+                                refreshTree(parent)
+                            }
+                            node is ApplyMapEntryNode && node.parent is ApplyMapNode -> {
+                                val parent = node.parent as ApplyMapNode
+                                parent.removeEntry(node)
+                                refreshTree(parent)
+                            }
+                        }
+                    }
+                }
+            }
 
             init {
-                val top = JPanel().apply {
-                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                    border = JBUI.Borders.empty(8)
-                    isOpaque = false
-                    alignmentX = Component.LEFT_ALIGNMENT
-                    add(statusArea)
-                    add(errorArea)
-                    add(messagesArea)
-                }
-                top.maximumSize = Dimension(Int.MAX_VALUE, top.preferredSize.height)
+                topPanel.add(statusArea)
+                topPanel.add(errorArea)
+                topPanel.add(messagesArea)
+                topPanel.maximumSize = Dimension(Int.MAX_VALUE, topPanel.preferredSize.height)
 
                 applyButton.isEnabled = false
                 applyButton.isVisible = false
                 styleApplyButton(applyButton, compact = false)
                 applyButton.addActionListener {
+                    finishPendingTreeEditing()
                     onApply?.invoke()
                 }
-                val controls = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-                    border = JBUI.Borders.empty(8)
-                    isOpaque = false
-                    alignmentX = Component.LEFT_ALIGNMENT
-                    add(wrapRoundedButton(applyButton))
-                }
-                controls.maximumSize = Dimension(Int.MAX_VALUE, controls.preferredSize.height)
+                controlsPanel.add(wrapRoundedButton(applyButton))
+                controlsPanel.maximumSize = Dimension(Int.MAX_VALUE, controlsPanel.preferredSize.height)
 
-                sectionsPanel.alignmentX = Component.LEFT_ALIGNMENT
+                configureTreeTableView()
+                configureTreeTableColumns()
+                installTableActionListeners()
 
-                contentPanel.add(top)
-                contentPanel.add(sectionsPanel)
-                contentPanel.add(controls)
-                contentPanel.add(Box.createVerticalGlue())
+                rootPanel.add(topPanel, BorderLayout.NORTH)
+                rootPanel.add(treeScroll, BorderLayout.CENTER)
+                rootPanel.add(controlsPanel, BorderLayout.SOUTH)
             }
 
             override fun getComponent(): JComponent = rootPanel
 
-            override fun getPreferredFocusableComponent(): JComponent = contentPanel
+            override fun getPreferredFocusableComponent(): JComponent = currentTree()
 
             override fun dispose() {
                 disposed.set(true)
@@ -1291,68 +2104,56 @@ class AikenRunConfiguration(
                 sections: MutableList<ApplyParameterSection>
             ) {
                 updateUi {
-                    statusArea.text = "Ready to apply parameters for $module.$validator"
                     clearError()
+                    messagesArea.text = ""
                     appendMessage("Blueprint: $blueprintPath")
-                    sectionsPanel.removeAll()
+                    currentModule = module
+                    currentValidator = validator
+                    currentBlueprintPath = blueprintPath
                     synchronized(this.sections) {
                         this.sections.clear()
                         this.sections += sections
+                        initialSectionCount = this.sections.size
                     }
-                    for ((index, section) in sections.withIndex()) {
-                        sectionsPanel.add(section.editor.component)
-                        if (index < sections.lastIndex) {
-                            sectionsPanel.add(Box.createVerticalStrut(JBUI.scale(6)))
-                        }
-                    }
-                    sectionsPanel.maximumSize = Dimension(Int.MAX_VALUE, sectionsPanel.preferredSize.height)
-                    refreshApplyEditorStripes(sectionsPanel)
+                    showCurrentSection(preferredSelection = null)
                     val hasSections = synchronized(this.sections) { this.sections.isNotEmpty() }
                     updateApplyButtonState(hasSections, hasSections)
-                    sectionsPanel.revalidate()
-                    sectionsPanel.repaint()
                 }
             }
 
             fun setApplyAction(action: () -> Unit) {
                 updateUi {
                     onApply = action
-                    val hasSections = sections.isNotEmpty()
+                    val hasSections = synchronized(sections) { sections.isNotEmpty() }
                     updateApplyButtonState(hasSections, hasSections)
                 }
             }
 
             fun sectionCount(): Int = synchronized(sections) { sections.size }
 
+            fun snapshotSections(): List<ApplyParameterSection> = synchronized(sections) { sections.toList() }
+
             fun peekFirstSection(): ApplyParameterSection? = synchronized(sections) { sections.firstOrNull() }
 
             fun removeFirstSection() {
                 val removed = synchronized(sections) {
-                    if (sections.isEmpty()) false
-                    else {
+                    if (sections.isEmpty()) false else {
                         sections.removeAt(0)
                         true
                     }
                 }
                 if (!removed) return
                 updateUi {
-                    if (sectionsPanel.componentCount > 0) {
-                        sectionsPanel.remove(0)
-                    }
-                    if (sectionsPanel.componentCount > 0 && sectionsPanel.getComponent(0) is Box.Filler) {
-                        sectionsPanel.remove(0)
-                    }
-                    refreshApplyEditorStripes(sectionsPanel)
+                    showCurrentSection(preferredSelection = null)
                     val hasSections = synchronized(sections) { sections.isNotEmpty() }
                     updateApplyButtonState(hasSections, hasSections)
-                    sectionsPanel.revalidate()
-                    sectionsPanel.repaint()
                 }
             }
 
             fun showNoApplyActions() {
                 updateUi {
                     updateApplyButtonState(visible = false, enabled = false)
+                    showCurrentSection(preferredSelection = null)
                 }
             }
 
@@ -1361,6 +2162,94 @@ class AikenRunConfiguration(
                     val hasSections = synchronized(sections) { sections.isNotEmpty() }
                     updateApplyButtonState(visible = hasSections, enabled = hasSections)
                 }
+            }
+
+            private fun showCurrentSection(preferredSelection: ApplyUiNode?) {
+                finishPendingTreeEditing()
+                val currentSections = synchronized(sections) { sections.toList() }
+                val current = currentSections.firstOrNull()
+                val remaining = currentSections.size
+                if (current == null) {
+                    treeScroll.isVisible = false
+                    controlsPanel.isVisible = false
+                    parameterTreeModel = buildTreeTableModel(DefaultMutableTreeNode("No parameters"))
+                    parameterTreeTable.setModel(parameterTreeModel)
+                    configureTreeTableView()
+                    parameterTreeTable.setRootVisible(false)
+                    configureTreeTableColumns()
+                    statusArea.text = if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
+                        "Blueprint has no parameters left to apply for $currentModule.$currentValidator"
+                    } else {
+                        "Blueprint has no parameters left to apply"
+                    }
+                    rootPanel.revalidate()
+                    rootPanel.repaint()
+                    return
+                }
+
+                treeScroll.isVisible = true
+                controlsPanel.isVisible = true
+                parameterTreeTable.setRootVisible(true)
+                val rootLabel = if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
+                    "$currentModule.$currentValidator parameters"
+                } else {
+                    "Remaining parameters"
+                }
+                val swingRoot = DefaultMutableTreeNode(rootLabel)
+                currentSections.forEach { section ->
+                    swingRoot.add(buildTreeNode(section.rootNode))
+                }
+                parameterTreeModel = buildTreeTableModel(swingRoot)
+                parameterTreeTable.setModel(parameterTreeModel)
+                configureTreeTableView()
+                configureTreeTableColumns()
+                expandAllRows()
+                val selectionNode = preferredSelection?.let { findTreeNode(swingRoot, it) }
+                    ?: (swingRoot.firstChild as? DefaultMutableTreeNode)
+                    ?: swingRoot
+                currentTree().selectionPath = TreePath(selectionNode.path)
+                currentTree().scrollPathToVisible(currentTree().selectionPath)
+                rootPanel.revalidate()
+                rootPanel.repaint()
+
+                statusArea.text = buildString {
+                    append("Ready to apply ")
+                    append(remaining)
+                    append(if (remaining == 1) " parameter" else " parameters")
+                    if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
+                        append(" for '$currentModule.$currentValidator'")
+                    }
+                }
+            }
+
+            private fun buildTreeNode(node: ApplyUiNode): DefaultMutableTreeNode {
+                val treeNode = DefaultMutableTreeNode(node)
+                node.children().forEach { child ->
+                    treeNode.add(buildTreeNode(child))
+                }
+                return treeNode
+            }
+
+            private fun findTreeNode(root: DefaultMutableTreeNode, target: ApplyUiNode): DefaultMutableTreeNode? {
+                if (root.userObject === target) return root
+                for (index in 0 until root.childCount) {
+                    val child = root.getChildAt(index) as? DefaultMutableTreeNode ?: continue
+                    val match = findTreeNode(child, target)
+                    if (match != null) return match
+                }
+                return null
+            }
+
+            private fun expandAllRows() {
+                var row = 0
+                while (row < currentTree().rowCount) {
+                    currentTree().expandRow(row)
+                    row += 1
+                }
+            }
+
+            private fun refreshTree(preferredSelection: ApplyUiNode?) {
+                showCurrentSection(preferredSelection)
             }
 
             private fun appendMessage(text: String) {
@@ -1388,6 +2277,15 @@ class AikenRunConfiguration(
                 applyButton.isEnabled = visible && enabled
             }
         }
+
+        private fun simpleDocumentListener(onChange: () -> Unit): DocumentListener =
+            object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = onChange()
+
+                override fun removeUpdate(e: DocumentEvent?) = onChange()
+
+                override fun changedUpdate(e: DocumentEvent?) = onChange()
+            }
 
         private interface ApplyValueEditor {
             val component: JComponent
@@ -2404,7 +3302,9 @@ class AikenRunConfiguration(
 
         private fun parseHexBytes(raw: String, fieldPath: String): ByteArray {
             val normalized = normalizeCborHex(raw)
-                ?: throw ExecutionException("$fieldPath must be valid hex.")
+                ?: throw ExecutionException(
+                    "$fieldPath must be valid hex: use only 0-9 and a-f and provide an even number of characters."
+                )
             val out = ByteArray(normalized.length / 2)
             var i = 0
             while (i < normalized.length) {
@@ -2845,7 +3745,7 @@ class AikenRunConfiguration(
 
         private data class ApplyParameterSection(
             val title: String,
-            val editor: ApplyValueEditor
+            val rootNode: ApplyUiNode
         )
 
         private data class ApplyNamedSchema(
@@ -2881,6 +3781,272 @@ class AikenRunConfiguration(
             data class List(val items: kotlin.collections.List<ApplyData>) : ApplyData()
             data class Map(val items: kotlin.collections.List<Pair<ApplyData, ApplyData>>) : ApplyData()
             data class Constr(val index: Long, val fields: kotlin.collections.List<ApplyData>) : ApplyData()
+        }
+
+
+        private sealed class ApplyUiNode(
+            open var title: String,
+            open val typeLabel: String
+        ) {
+            var parent: ApplyUiNode? = null
+            var validationError: String? = null
+
+            open fun displayText(): String = "$title :: $typeLabel"
+
+            override fun toString(): String = displayText()
+
+            open fun children(): List<ApplyUiNode> = emptyList()
+
+            @Throws(ExecutionException::class)
+            abstract fun encode(fieldPath: String): ApplyData
+
+            protected fun attach(child: ApplyUiNode): ApplyUiNode {
+                child.parent = this
+                return child
+            }
+
+            protected fun attachAll(children: Iterable<ApplyUiNode>) {
+                children.forEach { it.parent = this }
+            }
+        }
+
+        private class ApplyIntegerNode(
+            override var title: String
+        ) : ApplyUiNode(title, "Int") {
+            var rawValue: String = ""
+
+            override fun encode(fieldPath: String): ApplyData {
+                val raw = rawValue.trim()
+                if (raw.isEmpty()) throw ExecutionException("$fieldPath must be an integer.")
+                val value = raw.toBigIntegerOrNull()
+                    ?: throw ExecutionException("$fieldPath must be an integer.")
+                return ApplyData.Integer(value)
+            }
+        }
+
+        private class ApplyBytesNode(
+            override var title: String,
+            val bytesParser: (String, String) -> ByteArray
+        ) : ApplyUiNode(title, "ByteArray") {
+            var rawValue: String = ""
+
+            override fun encode(fieldPath: String): ApplyData =
+                ApplyData.Bytes(bytesParser(rawValue.trim(), fieldPath))
+        }
+
+        private class ApplyOpaqueNode(
+            override var title: String,
+            val reason: String,
+            val normalizer: (String?) -> String?,
+            val bytesParser: (String, String) -> ByteArray
+        ) : ApplyUiNode(title, "Data") {
+            var rawValue: String = ""
+
+            override fun encode(fieldPath: String): ApplyData {
+                val normalized = normalizer(rawValue)
+                    ?: throw ExecutionException("$fieldPath must be valid CBOR hex.")
+                return ApplyData.RawCbor(bytesParser(normalized, fieldPath))
+            }
+        }
+
+        private class ApplyBoolNode(
+            override var title: String,
+            constructors: List<ApplyConstructor>
+        ) : ApplyUiNode(title, "Bool") {
+            private val falseCtor = constructors.first { it.title.equals("False", ignoreCase = true) }
+            private val trueCtor = constructors.first { it.title.equals("True", ignoreCase = true) }
+            var value: Boolean = false
+
+            override fun encode(fieldPath: String): ApplyData {
+                val selected = if (value) trueCtor else falseCtor
+                return ApplyData.Constr(selected.index, emptyList())
+            }
+        }
+
+        private class ApplyOptionNode(
+            override var title: String,
+            override val typeLabel: String,
+            val optionConstructors: OptionConstructors,
+            val someNode: ApplyUiNode
+        ) : ApplyUiNode(title, typeLabel) {
+            var isNone: Boolean = true
+
+            init {
+                attach(someNode)
+            }
+
+            override fun children(): List<ApplyUiNode> = if (isNone) emptyList() else listOf(someNode)
+
+            override fun encode(fieldPath: String): ApplyData {
+                return if (isNone) {
+                    ApplyData.Constr(optionConstructors.none.index, emptyList())
+                } else {
+                    ApplyData.Constr(optionConstructors.some.index, listOf(someNode.encode("$fieldPath.Some")))
+                }
+            }
+        }
+
+        private class ApplySingleConstructorNode(
+            override var title: String,
+            override val typeLabel: String,
+            val constructor: ApplyConstructor,
+            val fields: List<Pair<String, ApplyUiNode>>
+        ) : ApplyUiNode(title, typeLabel) {
+            init {
+                attachAll(fields.map { it.second })
+            }
+
+            override fun children(): List<ApplyUiNode> = fields.map { it.second }
+
+            override fun encode(fieldPath: String): ApplyData {
+                val encodedFields = ArrayList<ApplyData>(fields.size)
+                for ((childName, childNode) in fields) {
+                    encodedFields += childNode.encode("$fieldPath.$childName")
+                }
+                return ApplyData.Constr(constructor.index, encodedFields)
+            }
+        }
+
+        private class ApplyAnyOfNode(
+            override var title: String,
+            override val typeLabel: String,
+            val constructors: List<ApplyConstructor>,
+            val nodeFactory: (String, ApplySchema) -> ApplyUiNode
+        ) : ApplyUiNode(title, typeLabel) {
+            var selectedIndex: Int = 0
+            private val cachedFields = LinkedHashMap<Int, List<Pair<String, ApplyUiNode>>>()
+
+            fun constructorTitles(): List<String> = constructors.map { it.title }
+
+            override fun children(): List<ApplyUiNode> = selectedFields().map { it.second }
+
+            override fun encode(fieldPath: String): ApplyData {
+                val ctor = constructors[selectedIndex]
+                val values = ArrayList<ApplyData>()
+                for ((childName, childNode) in selectedFields()) {
+                    values += childNode.encode("$fieldPath.$childName")
+                }
+                return ApplyData.Constr(ctor.index, values)
+            }
+
+            private fun selectedFields(): List<Pair<String, ApplyUiNode>> =
+                cachedFields.getOrPut(selectedIndex) {
+                    constructors[selectedIndex].fields.mapIndexed { index, field ->
+                        val childName = field.title ?: "field${index + 1}"
+                        childName to attach(nodeFactory(childName, field.schema))
+                    }
+                }
+        }
+
+        private class ApplyTupleNode(
+            override var title: String,
+            override val typeLabel: String,
+            val fields: List<Pair<String, ApplyUiNode>>
+        ) : ApplyUiNode(title, typeLabel) {
+            init {
+                attachAll(fields.map { it.second })
+            }
+
+            override fun children(): List<ApplyUiNode> = fields.map { it.second }
+
+            override fun encode(fieldPath: String): ApplyData {
+                val values = ArrayList<ApplyData>(fields.size)
+                for ((childName, childNode) in fields) {
+                    values += childNode.encode("$fieldPath.$childName")
+                }
+                return ApplyData.List(values)
+            }
+        }
+
+        private class ApplyListNode(
+            override var title: String,
+            override val typeLabel: String,
+            val itemFactory: (String) -> ApplyUiNode
+        ) : ApplyUiNode(title, typeLabel) {
+            val items = mutableListOf<ApplyUiNode>()
+
+            override fun children(): List<ApplyUiNode> = items
+
+            override fun encode(fieldPath: String): ApplyData {
+                val values = ArrayList<ApplyData>(items.size)
+                for ((index, itemNode) in items.withIndex()) {
+                    values += itemNode.encode("$fieldPath[$index]")
+                }
+                return ApplyData.List(values)
+            }
+
+            fun addItem(): ApplyUiNode {
+                val item = attach(itemFactory("[${items.size}]"))
+                items += item
+                return item
+            }
+
+            fun removeItem(item: ApplyUiNode) {
+                items.remove(item)
+                item.parent = null
+                renumber()
+            }
+
+            private fun renumber() {
+                items.forEachIndexed { index, item -> item.title = "[$index]" }
+            }
+        }
+
+        private class ApplyMapEntryNode(
+            override var title: String,
+            val keyNode: ApplyUiNode,
+            val valueNode: ApplyUiNode
+        ) : ApplyUiNode(title, "Entry") {
+            init {
+                attach(keyNode)
+                attach(valueNode)
+            }
+
+            override fun children(): List<ApplyUiNode> = listOf(keyNode, valueNode)
+
+            override fun encode(fieldPath: String): ApplyData =
+                ApplyData.List(listOf(keyNode.encode("$fieldPath.key"), valueNode.encode("$fieldPath.value")))
+        }
+
+        private class ApplyMapNode(
+            override var title: String,
+            override val typeLabel: String,
+            val keyFactory: (String) -> ApplyUiNode,
+            val valueFactory: (String) -> ApplyUiNode
+        ) : ApplyUiNode(title, typeLabel) {
+            val entries = mutableListOf<ApplyMapEntryNode>()
+
+            override fun children(): List<ApplyUiNode> = entries
+
+            override fun encode(fieldPath: String): ApplyData {
+                val values = ArrayList<Pair<ApplyData, ApplyData>>(entries.size)
+                for ((index, entry) in entries.withIndex()) {
+                    values += entry.keyNode.encode("$fieldPath.key${index + 1}") to entry.valueNode.encode("$fieldPath.value${index + 1}")
+                }
+                return ApplyData.Map(values)
+            }
+
+            fun addEntry(): ApplyMapEntryNode {
+                val entryIndex = entries.size + 1
+                val entry = ApplyMapEntryNode(
+                    title = "entry $entryIndex",
+                    keyNode = keyFactory("key"),
+                    valueNode = valueFactory("value")
+                )
+                attach(entry)
+                entries += entry
+                return entry
+            }
+
+            fun removeEntry(entry: ApplyMapEntryNode) {
+                entries.remove(entry)
+                entry.parent = null
+                renumber()
+            }
+
+            private fun renumber() {
+                entries.forEachIndexed { index, entry -> entry.title = "entry ${index + 1}" }
+            }
         }
     }
 
