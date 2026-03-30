@@ -57,11 +57,13 @@
         <renamePsiElementProcessor implementation="com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor"/>
 
         <findUsagesHandlerFactory implementation="com.medusalabs.aiken.usages.AikenFindUsagesHandlerFactory"/>
+        <usageGroupingRuleProvider implementation="com.medusalabs.aiken.usages.AikenDeclarationUsageGroupingRuleProvider"/>
         <useScopeEnlarger implementation="com.medusalabs.aiken.search.AikenUseScopeEnlarger"/>
         <lang.findUsagesProvider language="Aiken" implementationClass="com.medusalabs.aiken.usages.AikenFindUsagesProvider"/>
         <lang.findUsagesProvider language="UPLC" implementationClass="com.medusalabs.aiken.usages.UplcFindUsagesProvider"/>
         <gotoSymbolContributor implementation="com.medusalabs.aiken.navigation.AikenGotoSymbolContributor"/>
         <lang.psiStructureViewFactory language="Aiken" implementationClass="com.medusalabs.aiken.structure.AikenStructureViewFactory"/>
+        <gotoDeclarationHandler implementation="com.medusalabs.aiken.navigation.AikenGotoDeclarationHandler"/>
 
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>

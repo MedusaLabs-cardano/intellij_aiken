@@ -1,13 +1,106 @@
 package com.medusalabs.aiken.navigation
 
-import com.intellij.codeInsight.TargetElementUtil
+import com.intellij.codeInsight.navigation.actions.GotoDeclarationAction
 import com.intellij.psi.PsiElement
 import com.medusalabs.aiken.AikenPlatformTestCase
 import org.junit.Test
 
 class AikenGotoDeclarationTest : AikenPlatformTestCase() {
     @Test
-    fun gotoDeclarationMatchesReferenceResolveForImportedFunction() {
+    fun gotoDeclarationFromImportedTypeUsagePrefersImportEntry() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/transaction.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        val mainFile = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            use transaction.{Transaction}
+
+            fn main(self: Trans<caret>action) {
+              self
+            }
+            """.trimIndent()
+        )
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+
+        val targets = gotoTargetsAtCaret()
+
+        assertNotNull(targets)
+        assertEquals(mainFile.virtualFile, targets!!.containingFile?.virtualFile)
+        assertEquals(mainFile.text.indexOf("{Transaction}") + 1, targets.textRange.startOffset)
+        assertEquals("Transaction", targets.text)
+    }
+
+    @Test
+    fun gotoDeclarationFromImportedTypeInUseStatementNavigatesToSourceDeclaration() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/transaction.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        val mainFile = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            use transaction.{Trans<caret>action}
+
+            fn main(self: Transaction) {
+              self
+            }
+            """.trimIndent()
+        )
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+
+        val targets = gotoTargetsAtCaret()
+
+        assertNotNull(targets)
+        assertEquals("transaction.ak", targets!!.containingFile?.name)
+        assertEquals(mainFile.virtualFile, myFixture.file.virtualFile)
+        assertEquals("Transaction", targets.text)
+    }
+
+    @Test
+    fun gotoDeclarationFromQualifiedImportedMemberPrefersModuleImportPoint() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/second.ak",
+            """
+            pub fn compute(left: Int, right: Int, carry: Int) -> Int {
+              left
+            }
+            """.trimIndent()
+        )
+        val mainFile = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            use second as chosen
+
+            fn main() -> Int {
+              chosen.comp<caret>ute(1, 2, 3)
+            }
+            """.trimIndent()
+        )
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+
+        val targets = gotoTargetsAtCaret()
+
+        assertNotNull(targets)
+        assertEquals(mainFile.virtualFile, targets!!.containingFile?.virtualFile)
+        assertEquals(mainFile.text.indexOf("chosen"), targets.textRange.startOffset)
+        assertEquals("chosen", targets.text)
+    }
+
+    @Test
+    fun gotoDeclarationFromImportedFunctionPrefersImportEntry() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
             "lib/first.ak",
@@ -37,14 +130,16 @@ class AikenGotoDeclarationTest : AikenPlatformTestCase() {
         )
         myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
 
-        val expected = myFixture.getReferenceAtCaretPositionWithAssertion().resolve()
         val targets = gotoTargetsAtCaret()
 
-        assertSingleTargetMatches(expected, targets)
+        assertNotNull(targets)
+        assertEquals(mainFile.virtualFile, targets!!.containingFile?.virtualFile)
+        assertEquals(mainFile.text.indexOf("{compute}") + 1, targets.textRange.startOffset)
+        assertEquals("compute", targets.text)
     }
 
     @Test
-    fun gotoDeclarationMatchesReferenceResolveForQualifiedModuleAliasCall() {
+    fun gotoDeclarationFromQualifiedModuleAliasCallPrefersImportAlias() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
             "lib/second.ak",
@@ -70,10 +165,12 @@ class AikenGotoDeclarationTest : AikenPlatformTestCase() {
         )
         myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
 
-        val expected = myFixture.getReferenceAtCaretPositionWithAssertion().resolve()
         val targets = gotoTargetsAtCaret()
 
-        assertSingleTargetMatches(expected, targets)
+        assertNotNull(targets)
+        assertEquals(mainFile.virtualFile, targets!!.containingFile?.virtualFile)
+        assertEquals(mainFile.text.indexOf("chosen"), targets.textRange.startOffset)
+        assertEquals("chosen", targets.text)
     }
 
     @Test
@@ -112,17 +209,19 @@ class AikenGotoDeclarationTest : AikenPlatformTestCase() {
             """.trimIndent()
             )
 
-        val expected = namedTargetAtCaret(file)
         val targets = gotoTargetsAtCaret()
+        val usagesTarget = GotoDeclarationAction.findElementToShowUsagesOf(myFixture.editor, myFixture.caretOffset)
 
-        assertNotNull(targets)
-        assertSameLocation(expected, targets!!)
+        assertNull(targets)
+        assertNotNull(usagesTarget)
+        assertSameLocation(namedTargetAtCaret(file), usagesTarget!!)
     }
 
     private fun gotoTargetsAtCaret(): PsiElement? =
-        TargetElementUtil.findTargetElement(
+        GotoDeclarationAction.findTargetElement(
+            project,
             myFixture.editor,
-            TargetElementUtil.getInstance().definitionSearchFlags
+            myFixture.caretOffset
         )
 
     private fun assertSingleTargetMatches(expected: PsiElement?, targets: PsiElement?) {
