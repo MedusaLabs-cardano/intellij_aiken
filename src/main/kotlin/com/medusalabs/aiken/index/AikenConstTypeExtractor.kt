@@ -10,12 +10,30 @@ data class AikenConstTypeEntry(
     val offset: Int
 )
 
+data class AikenConstDeclaration(
+    val name: String,
+    val offset: Int,
+    val nameEnd: Int
+)
+
 object AikenConstTypeExtractor {
     fun extract(text: CharSequence): List<AikenConstTypeEntry> {
+        val results = ArrayList<AikenConstTypeEntry>()
+        for (declaration in extractDeclarations(text)) {
+            extractConstType(text, declaration.nameEnd)?.let { constType ->
+                if (declaration.name.isNotBlank()) {
+                    results += AikenConstTypeEntry(declaration.name, normalizeWhitespace(constType), declaration.offset)
+                }
+            }
+        }
+        return results
+    }
+
+    fun extractDeclarations(text: CharSequence): List<AikenConstDeclaration> {
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
 
-        val results = ArrayList<AikenConstTypeEntry>()
+        val results = ArrayList<AikenConstDeclaration>()
         var braceDepth = 0
         var expectingConstName = false
 
@@ -41,10 +59,8 @@ object AikenConstTypeExtractor {
                         val nameStart = lexer.tokenStart
                         val nameEnd = lexer.tokenEnd
                         val name = text.subSequence(nameStart, nameEnd).toString()
-                        extractConstType(text, nameEnd)?.let { constType ->
-                            if (name.isNotBlank()) {
-                                results += AikenConstTypeEntry(name, normalizeWhitespace(constType), nameStart)
-                            }
+                        if (name.isNotBlank()) {
+                            results += AikenConstDeclaration(name, nameStart, nameEnd)
                         }
                         expectingConstName = false
                         lexer.advance()

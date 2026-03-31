@@ -120,6 +120,27 @@ class AikenUseCompletionProviderTest : AikenPlatformTestCase() {
         myFixture.checkResult("use placeholder.{Qwe}")
     }
 
+    @Test
+    fun suggestsModulesByExportedSymbolNameForWrongKeyboardLayout() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/placeholder.ak",
+            """
+            pub type Qwe {
+              Qwe
+            }
+            """.trimIndent()
+        )
+
+        val file = myFixture.addFileToProject("lib/main.ak", "use <caret>")
+        myFixture.configureFromExistingVirtualFile(file.virtualFile)
+
+        myFixture.type("йцу")
+
+        val suggestions = completionVariants()
+        assertTrue("Expected reverse export suggestions for wrong-layout prefix, got: $suggestions", suggestions.contains("placeholder.{Qwe}"))
+    }
+
     private fun completionVariants(): List<String> =
         myFixture.completeBasic()
             ?.map { it.lookupString }

@@ -26,8 +26,19 @@ import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.project.AikenSearchScopes
 
 object AikenRecordCompletionSupport {
+    fun isRecordFieldContext(text: String, offset: Int): Boolean =
+        RecordCompletionContext.detect(text, offset) != null
+
+    fun isRecordFieldNameContext(text: String, offset: Int): Boolean =
+        RecordCompletionContext.detect(text, offset)?.mode == RecordCompletionMode.FIELD_NAME
+
     fun isRecordFieldValueContext(text: String, offset: Int): Boolean =
         RecordCompletionContext.detect(text, offset)?.mode == RecordCompletionMode.FIELD_VALUE
+
+    fun currentFieldValueText(text: String, offset: Int): String? =
+        RecordCompletionContext.detect(text, offset)
+            ?.takeIf { it.mode == RecordCompletionMode.FIELD_VALUE }
+            ?.currentValueText
 
     fun recordSpecificVariants(anchor: PsiElement?, offset: Int): RecordCompletionSuggestions? {
         val file = anchor?.containingFile ?: return null
@@ -42,6 +53,7 @@ object AikenRecordCompletionSupport {
             when (context.mode) {
             RecordCompletionMode.FIELD_NAME -> fieldNameLookups(ownerEntries, context.existingFieldNames)
             RecordCompletionMode.FIELD_VALUE -> fieldValueLookups(anchor, ownerEntries, context.currentFieldName, context.currentValueText)
+            RecordCompletionMode.SPREAD -> spreadLookups(anchor, ownerEntries)
         }
         if (lookups.isEmpty()) return null
         return RecordCompletionSuggestions(context.mode, lookups)
@@ -100,6 +112,7 @@ object AikenRecordCompletionSupport {
         val siblingFieldCandidates =
             ownerEntries
                 .asSequence()
+                .filter { it.isCurrentFile && it.entry.ownerName != it.entry.resultTypeName }
                 .flatMap { entry -> entry.entry.fields.asSequence() }
                 .filter { field -> field.name != currentFieldName }
                 .map { field ->
@@ -112,9 +125,22 @@ object AikenRecordCompletionSupport {
             anchor = anchor,
             expectedType = expectedType,
             currentValueText = currentValueText,
-            extraCandidates = siblingFieldCandidates,
-            excludedNames = setOf(currentFieldName)
+            extraCandidates = siblingFieldCandidates
         )
+    }
+
+    private fun spreadLookups(
+        anchor: PsiElement,
+        ownerEntries: List<VisibleConstructibleEntry>
+    ): List<LookupElement> {
+        val expectedType =
+            ownerEntries
+                .asSequence()
+                .map { normalizeTypeText(it.entry.resultTypeName) }
+                .firstOrNull { it.isNotEmpty() }
+                ?: return emptyList()
+
+        return AikenTypeDirectedCompletionSupport.spreadLookupsForExpectedType(anchor, expectedType)
     }
 
     private fun visibleConstructibles(anchor: PsiElement, useModel: com.medusalabs.aiken.imports.AikenUseModel): List<VisibleConstructibleEntry> {
@@ -352,7 +378,18 @@ object AikenRecordCompletionSupport {
 
                 val expression = text.substring(start, end).trim()
                 val lastSegment = expression.substringAfterLast('.')
-                return expression.takeIf { lastSegment.firstOrNull()?.isUpperCase() == true }
+                if (lastSegment.firstOrNull()?.isUpperCase() != true) return null
+
+                var boundaryIndex = index
+                while (boundaryIndex >= 0 && text[boundaryIndex].isWhitespace()) boundaryIndex--
+                if (boundaryIndex >= 0) {
+                    val boundaryChar = text[boundaryIndex]
+                    if (boundaryChar.isLetterOrDigit() || boundaryChar == '_' || boundaryChar == '>') {
+                        return null
+                    }
+                }
+
+                return expression
             }
 
             private fun parseCurrentFieldContext(bodyText: String): ParsedFieldContext? {
@@ -387,7 +424,16 @@ object AikenRecordCompletionSupport {
                 val currentFieldName = extractFieldName(currentEntry).orEmpty()
                 val colonIndex = topLevelColonIndex(currentEntry)
 
-                return if (colonIndex >= 0) {
+                val trimmedEntry = currentEntry.trimStart()
+
+                return if (trimmedEntry.startsWith("..")) {
+                    ParsedFieldContext(
+                        mode = RecordCompletionMode.SPREAD,
+                        currentFieldName = "",
+                        existingFieldNames = existingFieldNames,
+                        currentValueText = trimmedEntry.removePrefix("..")
+                    )
+                } else if (colonIndex >= 0) {
                     ParsedFieldContext(
                         mode = RecordCompletionMode.FIELD_VALUE,
                         currentFieldName = currentFieldName,
@@ -466,5 +512,6 @@ data class RecordCompletionSuggestions(
 
 enum class RecordCompletionMode {
     FIELD_NAME,
-    FIELD_VALUE
+    FIELD_VALUE,
+    SPREAD
 }

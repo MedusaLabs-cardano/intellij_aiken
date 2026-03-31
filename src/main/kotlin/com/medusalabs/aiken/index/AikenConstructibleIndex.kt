@@ -55,7 +55,7 @@ fun decodeAikenConstructibleIndexValue(value: String): List<AikenConstructibleEn
 class AikenConstructibleIndex : FileBasedIndexExtension<String, String>() {
     override fun getName(): ID<String, String> = AIKEN_CONSTRUCTIBLE_INDEX_NAME
 
-    override fun getVersion(): Int = 2
+    override fun getVersion(): Int = 3
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -113,6 +113,7 @@ private fun encodeConstructibleEntries(entries: List<AikenConstructibleEntry>): 
             entry.resultTypeName,
             entry.kind.name,
             entry.offset.toString(),
+            entry.supportsNamedSyntax.toString(),
             entry.exported.toString(),
             entry.fields.joinToString(AIKEN_CONSTRUCTIBLE_FIELD_SEPARATOR.toString()) { field ->
                 listOf(field.name, field.type, field.offset.toString()).joinToString(AIKEN_CONSTRUCTIBLE_FIELD_PART_SEPARATOR.toString())
@@ -122,13 +123,14 @@ private fun encodeConstructibleEntries(entries: List<AikenConstructibleEntry>): 
 
 private fun decodeConstructibleEntry(raw: String): AikenConstructibleEntry? {
     val parts = raw.split(AIKEN_CONSTRUCTIBLE_PART_SEPARATOR)
-    if (parts.size < 6) return null
+    if (parts.size < 7) return null
 
     val kind = runCatching { AikenConstructibleKind.valueOf(parts[2]) }.getOrNull() ?: return null
     val offset = parts[3].toIntOrNull() ?: return null
-    val exported = parts[4].toBooleanStrictOrNull() ?: return null
+    val supportsNamedSyntax = parts[4].toBooleanStrictOrNull() ?: return null
+    val exported = parts[5].toBooleanStrictOrNull() ?: return null
     val fields =
-        parts[5]
+        parts[6]
             .split(AIKEN_CONSTRUCTIBLE_FIELD_SEPARATOR)
             .asSequence()
             .filter { it.isNotBlank() }
@@ -150,6 +152,7 @@ private fun decodeConstructibleEntry(raw: String): AikenConstructibleEntry? {
         kind = kind,
         offset = offset,
         fields = fields,
+        supportsNamedSyntax = supportsNamedSyntax,
         exported = exported
     )
 }

@@ -61,17 +61,19 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                                 text.getOrNull(useContext.replaceRange.startOffset - 1) == '.'
                             )
 
+                val moduleMatcher = result.prefixMatcher.cloneWithPrefix(prefix)
+                val reverseExportMatcher = result.prefixMatcher.cloneWithPrefix(normalizedPrefix)
                 val moduleSuggestions =
                     catalog.moduleNames
                         .asSequence()
-                        .filter { it.startsWith(prefix) }
+                        .filter { AikenCompletionPrefixMatching.matches(it, moduleMatcher, prefix) }
                         .take(MAX_SUGGESTIONS)
                         .toList()
                 val reverseExportSuggestions =
                     if (normalizedPrefix.isBlank()) {
                         emptyList()
                     } else {
-                        catalog.modulesExporting(normalizedPrefix)
+                        catalog.modulesExporting { AikenCompletionPrefixMatching.matches(it, reverseExportMatcher, normalizedPrefix) }
                             .asSequence()
                             .filter { it.module !in moduleSuggestions }
                             .take(MAX_SUGGESTIONS)
@@ -134,10 +136,11 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                 }
 
                 if (!preferPub) {
+                    val moduleResult = result.withPrefixMatcher("")
                     val reverseResult = result.withPrefixMatcher("")
 
                     for (module in moduleSuggestions) {
-                        result.addElement(
+                        moduleResult.addElement(
                             LookupElementBuilder.create(module)
                                 .withIcon(AllIcons.Nodes.Package)
                                 .withTypeText("module", true)
@@ -182,11 +185,12 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
                 val prefix = normalizeEntityPrefix(useContext.currentPrefix(text))
                 val alreadyImported = useContext.existingItems
                 val entityResult = result.withPrefixMatcher("")
+                val entityMatcher = result.prefixMatcher.cloneWithPrefix(prefix)
 
                 val pubSuggestions =
                     catalog.publicEntities(module)
                         .asSequence()
-                        .filter { it.startsWith(prefix) && !alreadyImported.contains(it) }
+                        .filter { AikenCompletionPrefixMatching.matches(it, entityMatcher, prefix) && !alreadyImported.contains(it) }
                         .take(MAX_SUGGESTIONS)
                         .toList()
 
@@ -567,15 +571,17 @@ private data class AikenImportCatalog(
 
     fun containsModule(module: String): Boolean = entitiesByModule.containsKey(module)
 
-    fun modulesExporting(symbolPrefix: String): List<ReverseExportMatch> =
+    fun modulesExporting(nameMatches: (String) -> Boolean): List<ReverseExportMatch> =
         entitiesByModule
             .asSequence()
             .mapNotNull { (module, exports) ->
-                val match = exports.firstOrNull { it.startsWith(symbolPrefix) } ?: return@mapNotNull null
+                val match =
+                    exports.firstOrNull(nameMatches)
+                        ?: return@mapNotNull null
                 val kind = exportKind(module, match) ?: return@mapNotNull null
                 ReverseExportMatch(module = module, matchedExport = match, kind = kind)
             }
-            .sortedWith(compareByDescending<ReverseExportMatch> { it.matchedExport == symbolPrefix }.thenBy { it.module })
+            .sortedBy { it.module }
             .toList()
 
     private fun exportKind(module: String, symbolName: String): ExportKind? {

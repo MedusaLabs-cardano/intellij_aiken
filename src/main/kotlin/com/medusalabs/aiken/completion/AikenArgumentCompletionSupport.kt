@@ -12,6 +12,22 @@ import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 
 object AikenArgumentCompletionSupport {
+    fun hasArgumentContext(anchor: PsiElement?, offset: Int): Boolean {
+        val file = anchor?.containingFile ?: return false
+        return findCallContexts(file.text, offset).isNotEmpty()
+    }
+
+    fun hasArgumentContext(text: String, offset: Int = text.length): Boolean =
+        findCallContexts(text, offset.coerceIn(0, text.length)).isNotEmpty()
+
+    fun hasPipeContext(anchor: PsiElement?, offset: Int): Boolean {
+        val file = anchor?.containingFile ?: return false
+        return findPipeContext(file.text, offset) != null
+    }
+
+    fun hasPipeContext(text: String, offset: Int = text.length): Boolean =
+        findPipeContext(text, offset.coerceIn(0, text.length)) != null
+
     fun argumentSpecificVariants(anchor: PsiElement?, offset: Int): List<LookupElement> {
         val file = anchor?.containingFile ?: return emptyList()
         val text = file.text
@@ -22,7 +38,31 @@ object AikenArgumentCompletionSupport {
         return emptyList()
     }
 
+    fun pipeSpecificVariants(anchor: PsiElement?, offset: Int): List<LookupElement> {
+        val file = anchor?.containingFile ?: return emptyList()
+        val pipeContext = findPipeContext(file.text, offset) ?: return emptyList()
+        val inferredInputType =
+            AikenTypeDirectedCompletionSupport.inferExpressionType(anchor, pipeContext.leftExpression, pipeContext.pipeOffset)
+                ?: return emptyList()
+        return AikenTypeDirectedCompletionSupport.pipeFunctionLookupsForInputType(
+            anchor = anchor,
+            inputType = inferredInputType,
+            qualifier = pipeContext.qualifier
+        )
+    }
+
     private fun expectedArgumentType(anchor: PsiElement, call: CallContext): String? {
+        val constructorExpectedTypes =
+            AikenConstructibleCompletionSupport.expectedParameterTypes(
+                anchor = anchor,
+                calleeName = call.calleeName,
+                qualifier = call.qualifier,
+                parameterIndex = call.argumentIndex + call.implicitArgumentShift
+            )
+        if (constructorExpectedTypes.size == 1) {
+            return constructorExpectedTypes.first()
+        }
+
         val file = anchor.containingFile ?: return null
         val signatures = collectSignatures(anchor, file.text, call)
         if (signatures.isEmpty()) return null
@@ -227,6 +267,121 @@ object AikenArgumentCompletionSupport {
         return if (text[index] == '>' && text[index - 1] == '|') 1 else 0
     }
 
+    private fun findPipeContext(text: String, offset: Int): PipeContext? {
+        if (text.isEmpty() || offset <= 0) return null
+        val pipeOffset = findLastTopLevelPipe(text, offset) ?: return null
+        val leftExpression = extractPipeLeftExpression(text, pipeOffset)?.trim().orEmpty()
+        if (leftExpression.isEmpty()) return null
+
+        val rightText = text.substring((pipeOffset + 2).coerceAtMost(text.length), offset.coerceIn(0, text.length))
+        val trimmedRightText = rightText.trimStart()
+        return PipeContext(
+            leftExpression = leftExpression,
+            qualifier = readPipeQualifier(trimmedRightText),
+            pipeOffset = pipeOffset
+        )
+    }
+
+    private fun findLastTopLevelPipe(text: String, offset: Int): Int? {
+        var inString = false
+        var inLineComment = false
+        var lastPipeOffset: Int? = null
+        var index = 0
+        val limit = offset.coerceIn(0, text.length)
+
+        while (index + 1 < limit) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < limit) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '|' -> {
+                    if (text[index + 1] == '>') {
+                        lastPipeOffset = index
+                    }
+                }
+            }
+            index++
+        }
+
+        return lastPipeOffset
+    }
+
+    private fun extractPipeLeftExpression(text: String, pipeOffset: Int): String? {
+        var index = pipeOffset - 1
+        while (index >= 0 && text[index].isWhitespace()) index--
+        if (index < 0) return null
+
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        while (index >= 0) {
+            when (text[index]) {
+                ')' -> parenDepth++
+                ']' -> bracketDepth++
+                '}' -> braceDepth++
+                '(' -> {
+                    if (parenDepth > 0) parenDepth-- else return text.substring(index + 1, pipeOffset)
+                }
+                '[' -> {
+                    if (bracketDepth > 0) bracketDepth-- else return text.substring(index + 1, pipeOffset)
+                }
+                '{' -> {
+                    if (braceDepth > 0) braceDepth-- else return text.substring(index + 1, pipeOffset)
+                }
+                '=' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return text.substring(index + 1, pipeOffset)
+                ':' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return text.substring(index + 1, pipeOffset)
+                ',' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return text.substring(index + 1, pipeOffset)
+                '\n', '\r' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return text.substring(index + 1, pipeOffset)
+                '>' -> {
+                    if (index > 0 && text[index - 1] == '|' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                        return text.substring(index + 1, pipeOffset)
+                    }
+                }
+            }
+            index--
+        }
+
+        return text.substring(0, pipeOffset)
+    }
+
+    private fun readPipeQualifier(text: String): String? {
+        val trimmed = text.trimStart()
+        if (trimmed.isEmpty() || !isIdentifierChar(trimmed[0])) return null
+        var index = 1
+        while (index < trimmed.length && (isIdentifierChar(trimmed[index]) || trimmed[index] == '.')) {
+            index++
+        }
+        val identifier = trimmed.substring(0, index)
+        return identifier.substringBeforeLast('.', "").trim().takeIf { it.isNotEmpty() }
+    }
+
     private fun isIdentifierChar(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '_'
 
     private fun splitTopLevelArguments(text: String, openParenOffset: Int): List<String>? {
@@ -385,5 +540,11 @@ object AikenArgumentCompletionSupport {
         val name: String,
         val qualifier: String?,
         val callableStartOffset: Int
+    )
+
+    private data class PipeContext(
+        val leftExpression: String,
+        val qualifier: String?,
+        val pipeOffset: Int
     )
 }

@@ -22,6 +22,7 @@ data class AikenConstructibleEntry(
     val kind: AikenConstructibleKind,
     val offset: Int,
     val fields: List<AikenConstructibleFieldEntry>,
+    val supportsNamedSyntax: Boolean,
     val exported: Boolean
 )
 
@@ -45,13 +46,11 @@ object AikenConstructibleExtractor {
 
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType ?: break
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
 
-            when (tokenType) {
-                AikenTokenTypes.LBRACE -> braceDepth += 1
-                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
-            }
-
-            when (text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()) {
+            when (tokenText) {
+                "{" -> braceDepth += 1
+                "}" -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
                 "(" -> parenDepth += 1
                 ")" -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
                 "[" -> bracketDepth += 1
@@ -74,6 +73,7 @@ object AikenConstructibleExtractor {
                             kind = AikenConstructibleKind.TYPE,
                             offset = currentTypeBody.offset,
                             fields = currentTypeBody.directFields.toList(),
+                            supportsNamedSyntax = true,
                             exported = currentTypeBody.exported
                         )
                 }
@@ -126,6 +126,25 @@ object AikenConstructibleExtractor {
                         continue
                     }
                     else -> {
+                        if (text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "(") {
+                            val parsedArguments = parseConstructorArguments(text, lexer.tokenStart)
+                            if (parsedArguments != null) {
+                                results +=
+                                    AikenConstructibleEntry(
+                                        ownerName = pendingConstructible.ownerName,
+                                        resultTypeName = pendingConstructible.resultTypeName,
+                                        kind = AikenConstructibleKind.CONSTRUCTOR,
+                                        offset = pendingConstructible.offset,
+                                        fields = parsedArguments.fields,
+                                        supportsNamedSyntax = parsedArguments.supportsNamedSyntax,
+                                        exported = pendingConstructible.exported
+                                    )
+                                pendingConstructible = null
+                                parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                                restartLexer(lexer, text, parsedArguments.resumeOffset)
+                                continue
+                            }
+                        }
                         results +=
                             AikenConstructibleEntry(
                                 ownerName = pendingConstructible.ownerName,
@@ -133,6 +152,7 @@ object AikenConstructibleExtractor {
                                 kind = AikenConstructibleKind.CONSTRUCTOR,
                                 offset = pendingConstructible.offset,
                                 fields = emptyList(),
+                                supportsNamedSyntax = false,
                                 exported = pendingConstructible.exported
                             )
                         pendingConstructible = null
@@ -242,6 +262,7 @@ object AikenConstructibleExtractor {
                     kind = AikenConstructibleKind.CONSTRUCTOR,
                     offset = pendingConstructible.offset,
                     fields = emptyList(),
+                    supportsNamedSyntax = false,
                     exported = pendingConstructible.exported
                 )
         }
@@ -258,6 +279,7 @@ object AikenConstructibleExtractor {
                     kind = AikenConstructibleKind.TYPE,
                     offset = currentTypeBody.offset,
                     fields = currentTypeBody.directFields.toList(),
+                    supportsNamedSyntax = true,
                     exported = currentTypeBody.exported
                 )
         }
@@ -355,6 +377,148 @@ object AikenConstructibleExtractor {
         )
     }
 
+    private fun parseConstructorArguments(
+        text: CharSequence,
+        openParenOffset: Int
+    ): ParsedArguments? {
+        if (openParenOffset !in 0 until text.length || text[openParenOffset] != '(') return null
+
+        val fields = ArrayList<AikenConstructibleFieldEntry>()
+        var supportsNamedSyntax = false
+        var index = openParenOffset + 1
+        var segmentStart = skipWhitespace(text, index)
+        var angleDepth = 0
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var inLineComment = false
+
+        while (index < text.length) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') {
+                    inLineComment = false
+                }
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < text.length) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < text.length && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '<' -> angleDepth++
+                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+                '(' -> parenDepth++
+                ')' -> {
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                        parseConstructorArgument(text, segmentStart, index, fields.size)?.let { parsed ->
+                            fields += parsed.field
+                            supportsNamedSyntax = supportsNamedSyntax || parsed.isNamed
+                        }
+                        return ParsedArguments(fields, index + 1, supportsNamedSyntax)
+                    }
+                    parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                }
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                ',' -> {
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                        parseConstructorArgument(text, segmentStart, index, fields.size)?.let { parsed ->
+                            fields += parsed.field
+                            supportsNamedSyntax = supportsNamedSyntax || parsed.isNamed
+                        }
+                        segmentStart = skipWhitespace(text, index + 1)
+                    }
+                }
+            }
+
+            index++
+        }
+
+        return null
+    }
+
+    private fun parseConstructorArgument(
+        text: CharSequence,
+        start: Int,
+        endExclusive: Int,
+        ordinal: Int
+    ): ParsedConstructorArgument? {
+        var startIndex = start
+        var endIndex = endExclusive
+        while (startIndex < endIndex && text[startIndex].isWhitespace()) startIndex++
+        while (endIndex > startIndex && text[endIndex - 1].isWhitespace()) endIndex--
+        if (startIndex >= endIndex) return null
+
+        val argumentText = text.subSequence(startIndex, endIndex).toString()
+        val colonIndex = topLevelColonIndex(argumentText)
+        val fieldName: String
+        val fieldType: String
+        val isNamed: Boolean
+
+        if (colonIndex >= 0) {
+            fieldName = argumentText.substring(0, colonIndex).trim()
+            fieldType = normalizeTypeText(argumentText.substring(colonIndex + 1))
+            isNamed = fieldName.isNotBlank()
+        } else {
+            fieldName = "arg${ordinal + 1}"
+            fieldType = normalizeTypeText(argumentText)
+            isNamed = false
+        }
+
+        if (fieldType.isEmpty()) return null
+
+        return ParsedConstructorArgument(
+            field = AikenConstructibleFieldEntry(fieldName, fieldType, startIndex),
+            isNamed = isNamed
+        )
+    }
+
+    private fun topLevelColonIndex(text: String): Int {
+        var angleDepth = 0
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        for (index in text.indices) {
+            when (text[index]) {
+                '<' -> angleDepth++
+                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                ':' -> if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return index
+            }
+        }
+        return -1
+    }
+
     private fun skipWhitespace(text: CharSequence, start: Int): Int {
         var index = start
         while (index < text.length && text[index].isWhitespace()) index++
@@ -414,6 +578,7 @@ object AikenConstructibleExtractor {
                 kind = AikenConstructibleKind.CONSTRUCTOR,
                 offset = offset,
                 fields = fields.toList(),
+                supportsNamedSyntax = true,
                 exported = exported
             )
     }
@@ -421,5 +586,16 @@ object AikenConstructibleExtractor {
     private data class ParsedField(
         val field: AikenConstructibleFieldEntry,
         val resumeOffset: Int
+    )
+
+    private data class ParsedArguments(
+        val fields: List<AikenConstructibleFieldEntry>,
+        val resumeOffset: Int,
+        val supportsNamedSyntax: Boolean
+    )
+
+    private data class ParsedConstructorArgument(
+        val field: AikenConstructibleFieldEntry,
+        val isNamed: Boolean
     )
 }

@@ -89,6 +89,124 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("Input"))
     }
 
+    fun testAutoPopupWorksForUnimportedTypeOnFirstCharacterInOrdinaryExpressionPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              Input
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main() {
+              let input = <caret>
+            }
+            """.trimIndent()
+        )
+
+        type("I")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+    }
+
+    fun testAutoPopupPrefersUnimportedTypeOnFirstCharacterWhenImportedSiblingTypeExists() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/transaction.ak",
+            """
+            pub type Input {
+              Input
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction}
+
+            fn main() {
+              let input = <caret>
+            }
+            """.trimIndent()
+        )
+
+        type("I")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+    }
+
+    fun testAutoPopupPrefersUnimportedTypeAfterWhitespaceRefreshOnFirstCharacter() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/transaction.ak",
+            """
+            pub type Input {
+              Input
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction}
+
+            fn main() {
+              let input =<caret>
+            }
+            """.trimIndent()
+        )
+
+        type(" I")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+    }
+
+    fun testAutoPopupMatchesWrongKeyboardLayoutForUnimportedTypeAfterWhitespace() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/transaction.ak",
+            """
+            pub type Input {
+              Input
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction}
+
+            fn main() {
+              let input = <caret>
+            }
+            """.trimIndent()
+        )
+
+        type("ш")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+    }
+
     fun testAutoPopupWorksForUnimportedFunctionInOrdinaryExpressionPosition() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -114,12 +232,100 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("before"))
     }
 
+    fun testAutoPopupWorksForUnimportedModuleInOrdinaryExpressionPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/aiken/list.ak",
+            """
+            pub fn map(items) {
+              items
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main() {
+              let q = <caret>
+            }
+            """.trimIndent()
+        )
+
+        type("lis")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("list"))
+    }
+
+    fun testAutoPopupWorksForListSpreadTypedAfterReturningBeforeExistingIdentifier() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              amount: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            fn main(input1: Input, input2: Input) {
+              let inputs = [input1, input2]
+              let tx = Transaction { inputs: [input1, <caret>inputs] }
+            }
+            """.trimIndent()
+        )
+
+        type("..")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("inputs"))
+    }
+
+    fun testAutoPopupWorksForRecordSpreadTypedBeforeExistingFieldNameWithoutComma() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              amount: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            const placeholder: Transaction = Transaction { inputs: [] }
+
+            fn main() {
+              let preserved = Transaction { inputs: [] }
+              let tx = Transaction { <caret>inputs: [] }
+            }
+            """.trimIndent()
+        )
+
+        type("..")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("preserved"))
+        assertTrue(suggestions.toString(), suggestions.contains("placeholder"))
+    }
+
     fun testAutoPopupRefreshesActiveLookupForLongerOrdinaryPrefixes() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
             "lib/interval.ak",
             """
             pub fn entirely_after() -> Bool {
+              True
+            }
+
+            pub fn entirely_before() -> Bool {
+              True
+            }
+
+            pub fn entirely_between() -> Bool {
               True
             }
             """.trimIndent()
@@ -140,6 +346,8 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
 
         val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
         assertTrue(suggestions.toString(), suggestions.contains("entirely_after"))
+        assertTrue(suggestions.toString(), suggestions.contains("entirely_before"))
+        assertTrue(suggestions.toString(), suggestions.contains("entirely_between"))
     }
 
     fun testAutoPopupWorksForQualifiedCompletion() {
@@ -171,6 +379,39 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
 
         val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
         assertTrue(suggestions.toString(), suggestions.contains("add"))
+    }
+
+    fun testAutoPopupWorksAfterPipeWhitespace() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/aiken/list.ak",
+            """
+            pub fn length(items: List<a>) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/list
+
+            pub type Input {
+              amount: Int,
+            }
+
+            fn main(input1: Input, input2: Input) {
+              let inputs = [input1, input2]
+              let q = inputs<caret>
+            }
+            """.trimIndent()
+        )
+
+        type(" |> ")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("list.length"))
+        assertFalse(suggestions.toString(), suggestions.contains("let"))
     }
 
     fun testAutoPopupWorksForRecordFieldNameCompletion() {
