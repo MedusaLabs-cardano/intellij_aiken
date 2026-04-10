@@ -146,28 +146,42 @@ object AikenTypeDirectedCompletionSupport {
             ): String? = AikenTypeDirectedCompletionSupport.resolveFunctionSignature(anchor, functionName, modulePath)
         }
 
+    private data class ExpectedTypeDistanceCacheKey(
+        val candidateType: String,
+        val expectedType: AikenExpectedTypeProfile
+    )
+
+    private data class FunctionCacheKey(
+        val functionName: String,
+        val modulePath: String?
+    )
+
     internal fun lookupsForExpectedType(
         anchor: PsiElement,
         expectedType: String,
         currentValueText: String = "",
         extraCandidates: List<AikenTypedCompletionCandidate> = emptyList(),
         context: AikenTypedCandidateContext = AikenTypedCandidateContext.None,
-        excludedNames: Set<String> = emptySet()
+        excludedNames: Set<String> = emptySet(),
+        pruneByPrefix: Boolean = false
     ): List<LookupElement> {
         val effectiveContext = effectiveExpectedTypeContext(expectedType, currentValueText) ?: return emptyList()
         val normalizedExpectedType = normalizeTypeText(effectiveContext.expectedType)
         if (normalizedExpectedType.isEmpty()) return emptyList()
         if (effectiveContext.isSpread) {
-            return spreadLookupsForExpectedType(anchor, normalizedExpectedType, excludedNames)
+            return spreadLookupsForExpectedType(anchor, normalizedExpectedType, excludedNames, currentValueText)
         }
         val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
+        val completionPrefix = if (pruneByPrefix) currentCompletionPrefix(currentValueText) else ""
+        val cachedResolver = cachedTypedCandidateResolver()
         return AikenTypedCandidateResolver.collectCandidatesForExpectedType(
             anchor = anchor,
             expectedType = expectedTypeProfile,
             extraCandidates = extraCandidates,
             context = context,
             excludedNames = excludedNames,
-            resolver = typedCandidateResolver
+            prefix = completionPrefix,
+            resolver = cachedResolver
         ).map { candidate ->
             AikenTypedLookupFactory.createExpectedTypeLookup(candidate, normalizedExpectedType)
         }
@@ -182,24 +196,28 @@ object AikenTypeDirectedCompletionSupport {
         return lookupsForExpectedType(
             anchor = anchor,
             expectedType = context.expectedType,
-            currentValueText = context.currentValueText
+            currentValueText = context.currentValueText,
+            pruneByPrefix = true
         )
     }
 
     fun spreadLookupsForExpectedType(
         anchor: PsiElement,
         expectedType: String,
-        excludedNames: Set<String> = emptySet()
+        excludedNames: Set<String> = emptySet(),
+        currentValueText: String = ""
     ): List<LookupElement> {
         val normalizedExpectedType = normalizeTypeText(expectedType)
         if (normalizedExpectedType.isEmpty()) return emptyList()
 
         val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
+        val completionPrefix = currentCompletionPrefix(currentValueText)
         return AikenTypedCandidateResolver.collectSpreadCandidatesForExpectedType(
             anchor = anchor,
             expectedType = expectedTypeProfile,
             excludedNames = excludedNames,
-            resolver = typedCandidateResolver
+            prefix = completionPrefix,
+            resolver = cachedTypedCandidateResolver()
         ).map { candidate ->
             AikenTypedLookupFactory.createSpreadLookup(candidate, normalizedExpectedType)
         }
@@ -216,13 +234,15 @@ object AikenTypeDirectedCompletionSupport {
         if (normalizedExpectedType.isEmpty() || effectiveContext.isSpread) return emptyList()
 
         val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
+        val completionPrefix = currentCompletionPrefix(currentValueText)
         return AikenTypedCandidateResolver.collectCandidatesForExpectedType(
             anchor = anchor,
             expectedType = expectedTypeProfile,
             extraCandidates = emptyList(),
             context = AikenTypedCandidateContext.None,
             excludedNames = excludedNames,
-            resolver = typedCandidateResolver
+            prefix = completionPrefix,
+            resolver = cachedTypedCandidateResolver()
         )
             .asSequence()
             .filterIsInstance<AikenTypedExpectedTypeCandidate.Constructible>()
@@ -253,13 +273,59 @@ object AikenTypeDirectedCompletionSupport {
         if (normalizedInputType.isEmpty()) return emptyList()
 
         val inputTypeProfile = buildExpectedTypeProfile(anchor, normalizedInputType)
+        val cachedResolver = cachedTypedCandidateResolver()
         return AikenTypedCandidateResolver.collectPipeCandidatesForInputType(
             anchor = anchor,
             inputType = inputTypeProfile,
             qualifier = qualifier,
             excludedNames = excludedNames,
-            resolver = typedCandidateResolver
+            resolver = cachedResolver
         ).map(AikenTypedLookupFactory::createPipeLookup)
+    }
+
+    private fun currentCompletionPrefix(currentValueText: String): String =
+        AikenSyntaxText.identifierPrefix(currentValueText, currentValueText.length).trim()
+
+    private fun cachedTypedCandidateResolver(): AikenTypedCandidateResolver.Resolver {
+        val expectedTypeDistanceCache = HashMap<ExpectedTypeDistanceCacheKey, Int?>()
+        val inferredFunctionReturnTypeCache = HashMap<FunctionCacheKey, String?>()
+        val resolvedFunctionSignatureCache = HashMap<FunctionCacheKey, String?>()
+
+        return object : AikenTypedCandidateResolver.Resolver by typedCandidateResolver {
+            override fun expectedTypeDistance(
+                anchor: PsiElement,
+                candidateType: String,
+                expectedType: AikenExpectedTypeProfile
+            ): Int? {
+                val normalizedCandidate = normalizeTypeText(candidateType)
+                val cacheKey = ExpectedTypeDistanceCacheKey(normalizedCandidate, expectedType)
+                return expectedTypeDistanceCache.getOrPut(cacheKey) {
+                    typedCandidateResolver.expectedTypeDistance(anchor, normalizedCandidate, expectedType)
+                }
+            }
+
+            override fun inferFunctionReturnType(
+                anchor: PsiElement,
+                functionName: String,
+                modulePath: String?
+            ): String? {
+                val cacheKey = FunctionCacheKey(functionName, modulePath)
+                return inferredFunctionReturnTypeCache.getOrPut(cacheKey) {
+                    typedCandidateResolver.inferFunctionReturnType(anchor, functionName, modulePath)
+                }
+            }
+
+            override fun resolveFunctionSignature(
+                anchor: PsiElement,
+                functionName: String,
+                modulePath: String?
+            ): String? {
+                val cacheKey = FunctionCacheKey(functionName, modulePath)
+                return resolvedFunctionSignatureCache.getOrPut(cacheKey) {
+                    typedCandidateResolver.resolveFunctionSignature(anchor, functionName, modulePath)
+                }
+            }
+        }
     }
 
     fun inferExpressionType(

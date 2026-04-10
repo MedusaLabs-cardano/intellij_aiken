@@ -22,6 +22,8 @@ fun aikenFunctionSignatureModuleKey(modulePath: String, functionName: String): S
     "module|$modulePath|$functionName"
 
 fun aikenFunctionSignatureReturnTypeKey(returnType: String): String = "return|$returnType"
+fun aikenFunctionSignatureGenericReturnAnyKey(): String = "return-generic|any"
+fun aikenFunctionSignatureGenericReturnHeadKey(typeHead: String): String = "return-generic-head|$typeHead"
 
 private const val AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR = '\u001e'
 private const val AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR = '\u001f'
@@ -61,6 +63,72 @@ fun aikenFunctionSignatureReturnType(signature: String): String? {
     return suffix.removePrefix("->").trim().takeIf { it.isNotEmpty() }
 }
 
+fun aikenFunctionSignatureGenericReturnKeys(returnType: String): Set<String> {
+    val normalizedReturnType = returnType.replace(Regex("\\s+"), " ").trim()
+    if (normalizedReturnType.isEmpty()) return emptySet()
+
+    return when {
+        isGenericTypeVariable(normalizedReturnType) -> setOf(aikenFunctionSignatureGenericReturnAnyKey())
+        hasGenericWildcardArgument(normalizedReturnType) ->
+            genericTypeHead(normalizedReturnType)
+                ?.let { head -> setOf(aikenFunctionSignatureGenericReturnHeadKey(head)) }
+                .orEmpty()
+        else -> emptySet()
+    }
+}
+
+private fun isGenericTypeVariable(typeText: String): Boolean =
+    typeText.isNotEmpty() &&
+        typeText.none { it == '<' || it == '>' || it == ',' || it == '(' || it == ')' || it == '[' || it == ']' || it == '{' || it == '}' || it == '.' || it == '/' || it.isWhitespace() } &&
+        typeText.first().isLowerCase()
+
+private fun genericTypeHead(typeText: String): String? =
+    typeText.substringBefore('<', "").trim().takeIf { it.isNotEmpty() }
+
+private fun hasGenericWildcardArgument(typeText: String): Boolean {
+    val openIndex = typeText.indexOf('<')
+    if (openIndex <= 0 || !typeText.endsWith(">")) return false
+    val inner = typeText.substring(openIndex + 1, typeText.length - 1)
+    val arguments = splitTopLevelTypeArguments(inner) ?: return false
+    return arguments.any { argument ->
+        val normalizedArgument = argument.trim()
+        normalizedArgument.isNotEmpty() &&
+            (isGenericTypeVariable(normalizedArgument) || hasGenericWildcardArgument(normalizedArgument))
+    }
+}
+
+private fun splitTopLevelTypeArguments(text: String): List<String>? {
+    if (text.isBlank()) return emptyList()
+    val result = ArrayList<String>()
+    var angleDepth = 0
+    var parenDepth = 0
+    var bracketDepth = 0
+    var braceDepth = 0
+    var segmentStart = 0
+
+    for (index in text.indices) {
+        when (text[index]) {
+            '<' -> angleDepth++
+            '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+            '(' -> parenDepth++
+            ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+            '[' -> bracketDepth++
+            ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+            '{' -> braceDepth++
+            '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            ',' ->
+                if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                    result += text.substring(segmentStart, index).trim()
+                    segmentStart = index + 1
+                }
+        }
+    }
+
+    if (angleDepth != 0 || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0) return null
+    result += text.substring(segmentStart).trim()
+    return result
+}
+
 /**
  * Indexes function signatures across all `.ak` files in a project.
  *
@@ -69,7 +137,7 @@ fun aikenFunctionSignatureReturnType(signature: String): String? {
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
     override fun getName(): ID<String, String> = AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 
-    override fun getVersion(): Int = 4
+    override fun getVersion(): Int = 5
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -96,12 +164,22 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
                     aikenFunctionSignatureReturnType(entry.signature)?.let { returnType ->
                         returnTypeEntries.getOrPut(returnType) { ArrayList() } +=
                             AikenFunctionReturnTypeEntry(modulePath, entry.name, entry.signature)
+                        for (genericKey in aikenFunctionSignatureGenericReturnKeys(returnType)) {
+                            returnTypeEntries.getOrPut(genericKey) { ArrayList() } +=
+                                AikenFunctionReturnTypeEntry(modulePath, entry.name, entry.signature)
+                        }
                     }
                 }
             }
 
-            for ((returnType, entries) in returnTypeEntries) {
-                result[aikenFunctionSignatureReturnTypeKey(returnType)] =
+            for ((returnTypeOrGenericKey, entries) in returnTypeEntries) {
+                val key =
+                    if (returnTypeOrGenericKey.startsWith("return-generic|")) {
+                        returnTypeOrGenericKey
+                    } else {
+                        aikenFunctionSignatureReturnTypeKey(returnTypeOrGenericKey)
+                    }
+                result[key] =
                     encodeAikenFunctionReturnTypeIndexValues(entries)
             }
 

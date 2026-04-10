@@ -1,5 +1,6 @@
 package com.medusalabs.aiken.completion
 
+import com.intellij.codeInsight.completion.PlainPrefixMatcher
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiElement
@@ -17,6 +18,8 @@ import com.medusalabs.aiken.index.AikenPublicExportExtractor
 import com.medusalabs.aiken.index.aikenConstTypeModuleKey
 import com.medusalabs.aiken.index.aikenConstTypeTypeKey
 import com.medusalabs.aiken.index.aikenConstructibleResultTypeKey
+import com.medusalabs.aiken.index.aikenFunctionSignatureGenericReturnAnyKey
+import com.medusalabs.aiken.index.aikenFunctionSignatureGenericReturnHeadKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureReturnTypeKey
 import com.medusalabs.aiken.index.decodeAikenConstTypeIndexValues
@@ -85,6 +88,7 @@ internal object AikenTypedCandidateResolver {
         extraCandidates: List<AikenTypedCompletionCandidate>,
         context: AikenTypedCandidateContext = AikenTypedCandidateContext.None,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate> {
         val seen = LinkedHashSet<String>()
@@ -115,23 +119,23 @@ internal object AikenTypedCandidateResolver {
             add(candidate)
         }
 
-        for (binding in collectVisibleTypedBindings(anchor, expectedType, excludedNames, resolver)) {
+        for (binding in collectVisibleTypedBindings(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(binding)
         }
 
-        for (constant in collectVisibleTypedConsts(anchor, expectedType, excludedNames, resolver)) {
+        for (constant in collectVisibleTypedConsts(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constant)
         }
 
-        for (function in collectVisibleTypedFunctions(anchor, expectedType, excludedNames, resolver)) {
+        for (function in collectVisibleTypedFunctions(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(function)
         }
 
-        for (constant in collectUnimportedConstsReturning(anchor, expectedType, excludedNames, resolver)) {
+        for (constant in collectUnimportedConstsReturning(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constant)
         }
 
-        for (function in collectUnimportedFunctionsReturning(anchor, expectedType, excludedNames, resolver)) {
+        for (function in collectUnimportedFunctionsReturning(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(function)
         }
 
@@ -158,16 +162,34 @@ internal object AikenTypedCandidateResolver {
             )
         }
 
-        for (constructible in collectVisibleConstructibles(anchor, expectedType, excludedNames, resolver)) {
+        for (constructible in collectVisibleConstructibles(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constructible)
         }
 
-        for (constructible in collectUnimportedConstructiblesReturning(anchor, expectedType, excludedNames, resolver)) {
+        for (constructible in collectUnimportedConstructiblesReturning(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constructible)
         }
 
         return result
     }
+
+    fun collectCandidatesForExpectedType(
+        anchor: PsiElement,
+        expectedType: AikenExpectedTypeProfile,
+        extraCandidates: List<AikenTypedCompletionCandidate>,
+        context: AikenTypedCandidateContext = AikenTypedCandidateContext.None,
+        excludedNames: Set<String>,
+        resolver: Resolver
+    ): List<AikenTypedExpectedTypeCandidate> =
+        collectCandidatesForExpectedType(
+            anchor = anchor,
+            expectedType = expectedType,
+            extraCandidates = extraCandidates,
+            context = context,
+            excludedNames = excludedNames,
+            prefix = "",
+            resolver = resolver
+        )
 
     private fun builtInInvariantCandidates(
         expectedType: AikenExpectedTypeProfile,
@@ -183,6 +205,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate> {
         val seen = LinkedHashSet<String>()
@@ -194,20 +217,34 @@ internal object AikenTypedCandidateResolver {
             }
         }
 
-        for (binding in collectVisibleTypedBindings(anchor, expectedType, excludedNames, resolver)) {
+        for (binding in collectVisibleTypedBindings(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(binding)
         }
 
-        for (constant in collectVisibleTypedConsts(anchor, expectedType, excludedNames, resolver)) {
+        for (constant in collectVisibleTypedConsts(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constant)
         }
 
-        for (constant in collectUnimportedConstsReturning(anchor, expectedType, excludedNames, resolver)) {
+        for (constant in collectUnimportedConstsReturning(anchor, expectedType, excludedNames, prefix, resolver)) {
             add(constant)
         }
 
         return result
     }
+
+    fun collectSpreadCandidatesForExpectedType(
+        anchor: PsiElement,
+        expectedType: AikenExpectedTypeProfile,
+        excludedNames: Set<String>,
+        resolver: Resolver
+    ): List<AikenTypedExpectedTypeCandidate> =
+        collectSpreadCandidatesForExpectedType(
+            anchor = anchor,
+            expectedType = expectedType,
+            excludedNames = excludedNames,
+            prefix = "",
+            resolver = resolver
+        )
 
     fun collectPipeCandidatesForInputType(
         anchor: PsiElement,
@@ -248,6 +285,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Identifier> {
         val file = anchor.containingFile ?: return emptyList()
@@ -280,6 +318,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Identifier> {
         val file = anchor.containingFile ?: return emptyList()
@@ -326,6 +365,20 @@ internal object AikenTypedCandidateResolver {
         return result
     }
 
+    fun collectVisibleTypedConsts(
+        anchor: PsiElement,
+        expectedType: AikenExpectedTypeProfile,
+        excludedNames: Set<String>,
+        resolver: Resolver
+    ): List<AikenTypedExpectedTypeCandidate.Identifier> =
+        collectVisibleTypedConsts(
+            anchor = anchor,
+            expectedType = expectedType,
+            excludedNames = excludedNames,
+            prefix = "",
+            resolver = resolver
+        )
+
     private fun collectContextualCandidates(
         anchor: PsiElement,
         context: AikenTypedCandidateContext,
@@ -361,6 +414,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Function> {
         val file = anchor.containingFile ?: return emptyList()
@@ -532,6 +586,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Constructible> {
         val file = anchor.containingFile ?: return emptyList()
@@ -627,6 +682,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Function> {
         val file = anchor.containingFile ?: return emptyList()
@@ -646,17 +702,21 @@ internal object AikenTypedCandidateResolver {
         val scope = AikenSearchScopes.forElement(anchor)
         val seenModulesAndNames = LinkedHashSet<Pair<String, String>>()
         val result = ArrayList<AikenTypedExpectedTypeCandidate.Function>()
+        val prefixMatcher = prefixMatcher(prefix)
+        var indexedMatchesFound = false
 
         for (compatibleType in expectedType.compatibleTypes.keys) {
             for (encodedValue in index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureReturnTypeKey(compatibleType), scope)) {
                 for (entry in decodeAikenFunctionReturnTypeIndexValues(encodedValue)) {
                     if (entry.modulePath == currentModulePath) continue
                     if (entry.functionName in excludedNames) continue
+                    if (!matchesNamePrefix(entry.functionName, prefixMatcher, prefix)) continue
                     if (entry.functionName in importedSymbolsByModule[entry.modulePath].orEmpty()) continue
                     if (!seenModulesAndNames.add(entry.modulePath to entry.functionName)) continue
                     val returnType = com.medusalabs.aiken.index.aikenFunctionSignatureReturnType(entry.signature) ?: continue
                     val matchDistance = resolver.expectedTypeDistance(anchor, returnType, expectedType)
                         ?: continue
+                    indexedMatchesFound = true
                     result +=
                         AikenTypedExpectedTypeCandidate.Function(
                             name = entry.functionName,
@@ -670,16 +730,42 @@ internal object AikenTypedCandidateResolver {
             }
         }
 
-        if (root != null) {
+        for (genericKey in genericReturnLookupKeys(expectedType)) {
+            for (encodedValue in index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, genericKey, scope)) {
+                for (entry in decodeAikenFunctionReturnTypeIndexValues(encodedValue)) {
+                    if (entry.modulePath == currentModulePath) continue
+                    if (entry.functionName in excludedNames) continue
+                    if (!matchesNamePrefix(entry.functionName, prefixMatcher, prefix)) continue
+                    if (entry.functionName in importedSymbolsByModule[entry.modulePath].orEmpty()) continue
+                    if (!seenModulesAndNames.add(entry.modulePath to entry.functionName)) continue
+                    val returnType = com.medusalabs.aiken.index.aikenFunctionSignatureReturnType(entry.signature) ?: continue
+                    val matchDistance = resolver.expectedTypeDistance(anchor, returnType, expectedType) ?: continue
+                    indexedMatchesFound = true
+                    result +=
+                        AikenTypedExpectedTypeCandidate.Function(
+                            name = entry.functionName,
+                            signature = entry.signature,
+                            origin = AikenTypedCandidateOrigin.UNIMPORTED,
+                            modulePath = entry.modulePath,
+                            autoImportMode = AikenTypedCandidateAutoImportMode.SYMBOL,
+                            matchDistance = matchDistance
+                        )
+                }
+            }
+        }
+
+        if (root != null && !indexedMatchesFound) {
             for (moduleFile in collectModuleFiles(root)) {
                 val modulePath = AikenModulePath.fromFile(moduleFile) ?: continue
                 if (modulePath == currentModulePath) continue
 
                 val moduleText = moduleFile.contentsToByteArray().toString(Charsets.UTF_8)
                 val exportedSymbols = AikenPublicExportExtractor.extract(moduleText).toSet()
+                if (prefixMatcher != null && exportedSymbols.none { name -> matchesNamePrefix(name, prefixMatcher, prefix) }) continue
                 for (entry in AikenFunctionSignatureExtractor.extractEntries(moduleText)) {
                     if (entry.name !in exportedSymbols) continue
                     if (entry.name in excludedNames) continue
+                    if (!matchesNamePrefix(entry.name, prefixMatcher, prefix)) continue
                     if (entry.name in importedSymbolsByModule[modulePath].orEmpty()) continue
                     if (!seenModulesAndNames.add(modulePath to entry.name)) continue
                     val returnType =
@@ -755,6 +841,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Identifier> {
         val file = anchor.containingFile ?: return emptyList()
@@ -829,6 +916,7 @@ internal object AikenTypedCandidateResolver {
         anchor: PsiElement,
         expectedType: AikenExpectedTypeProfile,
         excludedNames: Set<String>,
+        prefix: String = "",
         resolver: Resolver
     ): List<AikenTypedExpectedTypeCandidate.Constructible> {
         val file = anchor.containingFile ?: return emptyList()
@@ -994,5 +1082,34 @@ internal object AikenTypedCandidateResolver {
             }
 
         return result
+    }
+
+    private fun prefixMatcher(prefix: String): PlainPrefixMatcher? =
+        prefix.trim().takeIf { it.isNotEmpty() }?.let(::PlainPrefixMatcher)
+
+    private fun matchesNamePrefix(
+        candidateName: String,
+        prefixMatcher: PlainPrefixMatcher?,
+        prefix: String
+    ): Boolean =
+        prefixMatcher == null || AikenCompletionPrefixMatching.matches(candidateName, prefixMatcher, prefix)
+
+    private fun genericReturnLookupKeys(expectedType: AikenExpectedTypeProfile): Set<String> {
+        val keys = LinkedHashSet<String>()
+        keys += aikenFunctionSignatureGenericReturnAnyKey()
+        for (compatibleType in expectedType.compatibleTypes.keys) {
+            val genericHeadKey = genericHeadLookupKey(compatibleType)
+            if (genericHeadKey != null) {
+                keys += genericHeadKey
+            }
+        }
+        return keys
+    }
+
+    private fun genericHeadLookupKey(typeText: String): String? {
+        val normalized = typeText.trim()
+        if (!normalized.contains('<') || !normalized.endsWith(">")) return null
+        val head = normalized.substringBefore('<').trim()
+        return head.takeIf { it.isNotEmpty() }?.let(::aikenFunctionSignatureGenericReturnHeadKey)
     }
 }
