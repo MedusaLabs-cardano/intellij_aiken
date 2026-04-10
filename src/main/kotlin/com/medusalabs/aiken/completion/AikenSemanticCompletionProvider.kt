@@ -3,11 +3,12 @@ package com.medusalabs.aiken.completion
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
+import com.intellij.codeInsight.completion.PlainPrefixMatcher
 import com.intellij.codeInsight.lookup.LookupElement
+import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.util.ProcessingContext
-import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.lang.AikenFileType
 
 class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>() {
@@ -20,56 +21,22 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         if (file.fileType != AikenFileType) return
 
         val offset = parameters.offset.coerceIn(0, file.textLength)
-        if (insideUseStatement(file, offset)) return
+        val resolution = AikenCompletionScenarioResolver.resolve(file, offset)
+        when (resolution.scenario) {
+            AikenCompletionScenario.UseModule,
+            AikenCompletionScenario.UseSymbol -> return
+            else -> Unit
+        }
 
-        val anchor = findAnchorElement(file, offset)
-        val prefixOffset =
-            anchor
-                ?.takeIf { isIdentifierLikeElement(it) }
-                ?.textRange
-                ?.endOffset
-                ?.coerceAtLeast(offset)
-                ?: offset
-        val prefix = completionPrefix(file.text, prefixOffset)
-        val qualifierContext = qualifiedAccessContext(file.text, offset)
+        val anchor = resolution.anchor
+        val prefix = resolution.prefix
+        val text = file.text
 
         val constructibleInvocationSuggestions =
             AikenConstructibleCompletionSupport.invocationFormVariants(parameters, anchor, offset)
-        val insideListLiteralContext = AikenCompletionContexts.insideListLiteralContext(file.text, offset)
-        val insideRecordFieldContext = AikenRecordCompletionSupport.isRecordFieldContext(file.text, offset)
-        val insideRecordFieldValue = AikenRecordCompletionSupport.isRecordFieldValueContext(file.text, offset)
-        val currentRecordValueText =
-            if (insideRecordFieldValue) {
-                AikenRecordCompletionSupport.currentFieldValueText(file.text, offset).orEmpty()
-            } else {
-                ""
-            }
-        val keepOuterRecordTyping = currentRecordValueText.trimStart().startsWith("Some(")
-        val insideNestedArgumentContext =
-            insideRecordFieldValue &&
-                AikenArgumentCompletionSupport.hasArgumentContext(currentRecordValueText) &&
-                !keepOuterRecordTyping
-        val recordSuggestions =
-            if (insideNestedArgumentContext) {
-                null
-            } else {
-                AikenRecordCompletionSupport.recordSpecificVariants(anchor, offset)
-            }
-        val argumentSuggestions =
-            if (insideNestedArgumentContext || (!insideRecordFieldContext && recordSuggestions == null)) {
-                AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
-            } else {
-                emptyList()
-            }
-        val inferredListSuggestions =
-            if (insideListLiteralContext && !insideRecordFieldContext && !insideRecordFieldValue && anchor != null) {
-                AikenTypeDirectedCompletionSupport.listLiteralItemLookups(anchor, file.text, offset)
-            } else {
-                emptyList()
-            }
 
         if (constructibleInvocationSuggestions.isNotEmpty()) {
-            val invocationResult = result.withPrefixMatcher("")
+            val invocationResult = AikenCompletionSorting.withConstructibleFormSorter(parameters, result.withPrefixMatcher(""))
             for (lookupElement in constructibleInvocationSuggestions) {
                 invocationResult.addElement(lookupElement)
             }
@@ -77,101 +44,338 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             return
         }
 
-        if (inferredListSuggestions.isNotEmpty()) {
-            val listResult = result.withPrefixMatcher("")
-            for (lookupElement in inferredListSuggestions) {
-                listResult.addElement(lookupElement)
-            }
-            result.stopHere()
-            return
-        }
+        when (val scenario = resolution.scenario) {
+            AikenCompletionScenario.RecordFieldName,
+            is AikenCompletionScenario.RecordFieldValue,
+            AikenCompletionScenario.RecordSpread -> {
+                AikenRecordCompletionSupport.recordSpecificVariants(anchor, offset)?.let { suggestions ->
+                    val specialResult =
+                        if (suggestions.mode == RecordCompletionMode.FIELD_VALUE || suggestions.mode == RecordCompletionMode.SPREAD) {
+                            AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(""))
+                        } else {
+                            result.withPrefixMatcher(prefix)
+                        }
 
-        if (argumentSuggestions.isNotEmpty()) {
-            val specialResult = result.withPrefixMatcher("")
-            for (lookupElement in argumentSuggestions) {
-                specialResult.addElement(lookupElement)
+                    for (lookupElement in suggestions.lookups) {
+                        specialResult.addElement(lookupElement)
+                    }
+                }
+                if (resolution.scenario != AikenCompletionScenario.RecordFieldName && resolution.qualifiedAccessQualifier != null) {
+                    addQualifiedSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        qualifier = resolution.qualifiedAccessQualifier,
+                        allowBareTypes = resolution.policy.bareTypesAllowed
+                    )
+                }
+                result.stopHere()
+                return
             }
-        }
-
-        recordSuggestions?.let { suggestions ->
-            val specialResult =
-                if (suggestions.mode == RecordCompletionMode.FIELD_VALUE || suggestions.mode == RecordCompletionMode.SPREAD) {
-                    result.withPrefixMatcher("")
-                } else {
-                    result.withPrefixMatcher(prefix)
+            AikenCompletionScenario.ListItem -> {
+                val inferredListSuggestions =
+                    if (anchor != null) {
+                        AikenTypeDirectedCompletionSupport.listLiteralItemLookups(anchor, text, offset)
+                    } else {
+                        emptyList()
+                    }
+                if (inferredListSuggestions.isNotEmpty()) {
+                    if (shouldShowTypedSuggestions(inferredListSuggestions, prefix)) {
+                        addTypedSupplementalSuggestions(
+                            parameters,
+                            result,
+                            inferredListSuggestions,
+                            prefix,
+                            includeNonMatchingSuggestions = true
+                        )
+                        result.stopHere()
+                        return
+                    }
                 }
 
-            for (lookupElement in suggestions.lookups) {
+                val argumentSuggestions =
+                    if (resolution.hasArgumentContext) {
+                        AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
+                    } else {
+                        emptyList()
+                    }
+                addTypedSupplementalSuggestions(
+                    parameters,
+                    result,
+                    argumentSuggestions,
+                    prefix,
+                    includeNonMatchingSuggestions = true
+                )
+
+                if (resolution.qualifiedAccessQualifier != null) {
+                    addQualifiedSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        qualifier = resolution.qualifiedAccessQualifier,
+                        allowBareTypes = resolution.policy.bareTypesAllowed
+                    )
+                    result.stopHere()
+                    return
+                }
+
+                if (resolution.policy.lexicalFallbackAllowed) {
+                    addOrdinarySemanticSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        file = file,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
+                        excludedLookups = argumentSuggestions
+                    )
+                } else if (resolution.policy.typedCompletionStopsFurtherMerging) {
+                    result.stopHere()
+                }
+                return
+            }
+            AikenCompletionScenario.PipeTarget -> {
+                val pipeSuggestions = AikenArgumentCompletionSupport.pipeSpecificVariants(anchor, offset)
+                val pipeResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(prefix))
+                for (lookupElement in pipeSuggestions) {
+                    pipeResult.addElement(lookupElement)
+                }
+                result.stopHere()
+                return
+            }
+            is AikenCompletionScenario.QualifiedAccess -> {
+                val argumentSuggestions =
+                    if (resolution.hasArgumentContext) {
+                        AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
+                    } else {
+                        emptyList()
+                    }
+                addTypedSupplementalSuggestions(parameters, result, argumentSuggestions, prefix, includeNonMatchingSuggestions = true)
+                addQualifiedSuggestions(
+                    parameters = parameters,
+                    result = result,
+                    anchor = anchor,
+                    offset = offset,
+                    prefix = prefix,
+                    qualifier = scenario.qualifier,
+                    allowBareTypes = resolution.policy.bareTypesAllowed
+                )
+                result.stopHere()
+                return
+            }
+            AikenCompletionScenario.FunctionArgument -> {
+                val bindingInitializerSuggestions =
+                    if (anchor != null) {
+                        AikenTypeDirectedCompletionSupport.bindingInitializerLookups(anchor, text, offset)
+                    } else {
+                        emptyList()
+                    }
+                val bindingInitializerPrefixMatch =
+                    typedSuggestionsMatchPrefix(bindingInitializerSuggestions, prefix)
+                if (bindingInitializerSuggestions.isNotEmpty()) {
+                    if (shouldShowTypedSuggestions(bindingInitializerSuggestions, prefix)) {
+                        addTypedSupplementalSuggestions(parameters, result, bindingInitializerSuggestions, prefix)
+                    }
+                    if (bindingInitializerPrefixMatch) {
+                        result.stopHere()
+                        return
+                    }
+                }
+
+                val argumentSuggestions = AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
+                val addedArgumentTyped = shouldShowTypedSuggestions(argumentSuggestions, prefix)
+                if (addedArgumentTyped) {
+                    addTypedSupplementalSuggestions(parameters, result, argumentSuggestions, prefix, includeNonMatchingSuggestions = true)
+                }
+                if (resolution.stopAfterArgumentSuggestions && (addedArgumentTyped || argumentSuggestions.isEmpty())) {
+                    result.stopHere()
+                    return
+                }
+                if (resolution.policy.lexicalFallbackAllowed) {
+                    addOrdinarySemanticSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        file = file,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
+                        excludedLookups = argumentSuggestions
+                    )
+                }
+                return
+            }
+            AikenCompletionScenario.OrdinaryExpression -> {
+                val bindingInitializerSuggestions =
+                    if (anchor != null) {
+                        AikenTypeDirectedCompletionSupport.bindingInitializerLookups(anchor, text, offset)
+                    } else {
+                        emptyList()
+                    }
+                val bindingInitializerPrefixMatch =
+                    typedSuggestionsMatchPrefix(bindingInitializerSuggestions, prefix)
+                if (bindingInitializerSuggestions.isNotEmpty()) {
+                    if (shouldShowTypedSuggestions(bindingInitializerSuggestions, prefix)) {
+                        addTypedSupplementalSuggestions(parameters, result, bindingInitializerSuggestions, prefix)
+                    }
+                    if (bindingInitializerPrefixMatch) {
+                        result.stopHere()
+                        return
+                    }
+                }
+
+                if (resolution.policy.lexicalFallbackAllowed) {
+                    addOrdinarySemanticSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        file = file,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
+                        excludedLookups = emptyList()
+                    )
+                }
+                return
+            }
+            AikenCompletionScenario.UseModule,
+            AikenCompletionScenario.UseSymbol -> return
+        }
+    }
+
+    private fun addSupplementalSuggestions(
+        result: CompletionResultSet,
+        suggestions: List<LookupElement>
+    ) {
+        if (suggestions.isEmpty()) return
+        val specialResult = result.withPrefixMatcher("")
+        for (lookupElement in suggestions) {
+            specialResult.addElement(lookupElement)
+        }
+    }
+
+    private fun addTypedSupplementalSuggestions(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+        suggestions: List<LookupElement>,
+        prefix: String,
+        includeNonMatchingSuggestions: Boolean = false
+    ) {
+        if (suggestions.isEmpty()) return
+        if (prefix.isBlank()) {
+            val specialResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(""))
+            for (lookupElement in suggestions) {
                 specialResult.addElement(lookupElement)
             }
-        }
-
-        if (recordSuggestions?.mode == RecordCompletionMode.FIELD_VALUE && recordSuggestions.lookups.isNotEmpty()) {
-            result.stopHere()
             return
         }
 
-        if (insideNestedArgumentContext) {
-            result.stopHere()
-            return
-        }
-        if (insideRecordFieldContext) {
-            result.stopHere()
-            return
+        val (matchingSuggestions, nonMatchingSuggestions) = partitionTypedSuggestionsByPrefix(suggestions, prefix)
+        if (matchingSuggestions.isEmpty()) return
+
+        val matchingResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(prefix))
+        for (lookupElement in matchingSuggestions) {
+            matchingResult.addElement(lookupElement)
         }
 
-        val insidePipeContext = AikenArgumentCompletionSupport.hasPipeContext(anchor, offset)
-        val pipeSuggestions =
-            if (insidePipeContext && !AikenArgumentCompletionSupport.hasArgumentContext(anchor, offset)) {
-                AikenArgumentCompletionSupport.pipeSpecificVariants(anchor, offset)
+        if (includeNonMatchingSuggestions && nonMatchingSuggestions.isNotEmpty()) {
+            val relaxedResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(""))
+            for (lookupElement in nonMatchingSuggestions) {
+                relaxedResult.addElement(lookupElement)
+            }
+        }
+    }
+
+    private fun typedSuggestionsMatchPrefix(
+        suggestions: List<LookupElement>,
+        prefix: String
+    ): Boolean =
+        prefix.isBlank() || partitionTypedSuggestionsByPrefix(suggestions, prefix).first.isNotEmpty()
+
+    private fun shouldShowTypedSuggestions(
+        suggestions: List<LookupElement>,
+        prefix: String
+    ): Boolean =
+        prefix.isBlank() || typedSuggestionsMatchPrefix(suggestions, prefix)
+
+    private fun partitionTypedSuggestionsByPrefix(
+        suggestions: List<LookupElement>,
+        prefix: String
+    ): Pair<List<LookupElement>, List<LookupElement>> {
+        if (prefix.isBlank()) return suggestions to emptyList()
+        val matcher = PlainPrefixMatcher(prefix)
+        val matching = ArrayList<LookupElement>()
+        val nonMatching = ArrayList<LookupElement>()
+        for (lookup in suggestions) {
+            val matchesPrefix =
+                lookup.allLookupStrings.any { candidate ->
+                    AikenCompletionPrefixMatching.matches(candidate, matcher, prefix)
+                }
+            if (matchesPrefix) {
+                matching += lookup
             } else {
-                emptyList()
+                nonMatching += lookup
             }
-        if (insidePipeContext) {
-            val pipeResult = result.withPrefixMatcher(prefix)
-            for (lookupElement in pipeSuggestions) {
-                pipeResult.addElement(lookupElement)
-            }
-            result.stopHere()
-            return
         }
+        return matching to nonMatching
+    }
 
-        if (qualifierContext != null) {
-            val semanticVariants =
-                anchor
-                    ?.let { currentAnchor ->
-                        AikenReferenceVariants.qualifiedVariants(
-                            element = currentAnchor,
-                            qualifier = qualifierContext.qualifier,
-                            allowBareTypes = !AikenCompletionContexts.isLikelyValueExpressionContext(file.text, offset)
-                        )
-                    }
-                    .orEmpty()
-            val semanticResult = result.withPrefixMatcher(prefix)
-            for (lookupElement in semanticVariants) {
-                semanticResult.addElement(lookupElement)
-            }
-            result.stopHere()
-            return
+    private fun addQualifiedSuggestions(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+        anchor: PsiElement?,
+        offset: Int,
+        prefix: String,
+        qualifier: String,
+        allowBareTypes: Boolean
+    ) {
+        val semanticVariants =
+            anchor
+                ?.let { currentAnchor ->
+                    AikenReferenceVariants.qualifiedVariants(
+                        element = currentAnchor,
+                        qualifier = qualifier,
+                        allowBareTypes = allowBareTypes,
+                        offsetExclusive = offset
+                    )
+                }
+                .orEmpty()
+        val semanticResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(prefix))
+        for (lookupElement in semanticVariants) {
+            semanticResult.addElement(lookupElement)
         }
+    }
 
+    private fun addOrdinarySemanticSuggestions(
+        parameters: CompletionParameters,
+        result: CompletionResultSet,
+        file: PsiFile,
+        anchor: PsiElement?,
+        offset: Int,
+        prefix: String,
+        stopAfter: Boolean,
+        excludedLookups: List<LookupElement>
+    ) {
         val semanticVariants =
             anchor
                 ?.let { variantsForAnchor(it, offset) }
                 .orEmpty()
                 .filterNot { lookup ->
-                    recordSuggestions?.lookups?.any { it.lookupString == lookup.lookupString } == true ||
-                        argumentSuggestions.any { it.lookupString == lookup.lookupString }
+                    excludedLookups.any { lookupCollisionKey(it) == lookupCollisionKey(lookup) }
                 }
-        val semanticResult = result.withPrefixMatcher(prefix)
-        val unimportedResult = result.withPrefixMatcher("")
+        val semanticResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(prefix))
+        val unimportedResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(""))
         val unimportedSemanticVariants =
             anchor
                 ?.let { currentAnchor ->
                     AikenReferenceVariants.unimportedExportsMatching(
                         currentAnchor,
-                        nameMatches = { AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix) },
-                        excludedNames = semanticVariants.mapTo(LinkedHashSet()) { it.lookupString }
+                        nameMatches = { AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix) }
                     )
                 }
                 .orEmpty()
@@ -189,7 +393,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             }
 
         if (semanticVariants.isEmpty() && unimportedSemanticVariants.isEmpty() && unimportedModuleVariants.isEmpty()) {
-            if (insideListLiteralContext) {
+            if (stopAfter) {
                 result.stopHere()
             }
             return
@@ -205,7 +409,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             unimportedResult.addElement(lookupElement)
         }
 
-        if (insideListLiteralContext) {
+        if (stopAfter || AikenCompletionContexts.insideListLiteralContext(file.text, offset)) {
             result.stopHere()
         }
     }
@@ -219,75 +423,34 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 .asSequence()
                 .flatMap { reference -> reference.variants.asSequence() }
                 .mapNotNull { it as? LookupElement }
-                .distinctBy(LookupElement::getLookupString)
+                .distinctBy(::lookupDedupKey)
                 .toList()
         val fallbackVariants =
             AikenReferenceVariants.forElement(anchor, offset)
                 .mapNotNull { it as? LookupElement }
         return (referenceVariants + fallbackVariants)
-            .distinctBy(LookupElement::getLookupString)
+            .distinctBy(::lookupDedupKey)
     }
 
-    private fun insideUseStatement(file: PsiFile, offset: Int): Boolean {
-        val caretOffset = offset.coerceAtLeast(0)
-        val lookupOffset = (caretOffset - 1).coerceAtLeast(0)
-        val model = AikenUseStatementParser.parseModel(file.text)
-        return model.statements.any { statement ->
-            caretOffset in statement.statementRange.startOffset..statement.statementRange.endOffset ||
-                lookupOffset in statement.statementRange.startOffset..statement.statementRange.endOffset
+    private fun lookupDedupKey(lookup: LookupElement): String {
+        val presentation = LookupElementPresentation()
+        lookup.renderElement(presentation)
+        return buildString {
+            append(lookup.lookupString)
+            append('\u0000')
+            append(presentation.tailText.orEmpty())
+            append('\u0000')
+            append(presentation.typeText.orEmpty())
         }
     }
 
-    private fun findAnchorElement(file: PsiFile, offset: Int): PsiElement? {
-        val candidateOffsets =
-            linkedSetOf(
-                (offset - 1).coerceAtLeast(0),
-                offset.coerceAtMost(file.textLength),
-                (offset + 1).coerceAtMost(file.textLength)
-            )
-        val leaves = candidateOffsets.mapNotNull(file::findElementAt)
-        return leaves.firstOrNull(::isIdentifierLikeElement)
-            ?: leaves.firstOrNull { it.text.isNotBlank() }
-            ?: leaves.firstOrNull()
+    private fun lookupCollisionKey(lookup: LookupElement): String {
+        val presentation = LookupElementPresentation()
+        lookup.renderElement(presentation)
+        return buildString {
+            append(lookup.lookupString)
+            append('\u0000')
+            append(presentation.tailText.orEmpty())
+        }
     }
-
-    private fun isIdentifierLikeElement(element: PsiElement): Boolean =
-        element.text.isNotEmpty() && element.text.all { it.isLetterOrDigit() || it == '_' }
-
-    private fun completionPrefix(text: String, offset: Int): String {
-        if (text.isEmpty()) return ""
-
-        var index = offset.coerceIn(0, text.length) - 1
-        while (index >= 0 && (text[index].isLetterOrDigit() || text[index] == '_')) {
-            index--
-        }
-        return text.substring(index + 1, offset.coerceIn(0, text.length))
-    }
-
-    private fun qualifiedAccessContext(text: String, offset: Int): QualifiedAccessContext? {
-        var index = offset.coerceIn(0, text.length) - 1
-        while (index >= 0 && (text[index].isLetterOrDigit() || text[index] == '_')) {
-            index--
-        }
-        while (index >= 0 && text[index].isWhitespace()) {
-            index--
-        }
-        if (index < 0 || text[index] != '.') return null
-        index--
-        while (index >= 0 && text[index].isWhitespace()) {
-            index--
-        }
-        val end = index + 1
-        while (index >= 0 && (text[index].isLetterOrDigit() || text[index] == '_')) {
-            index--
-        }
-        val start = index + 1
-        if (start >= end) return null
-        return QualifiedAccessContext(text.substring(start, end))
-    }
-
-    private data class QualifiedAccessContext(
-        val qualifier: String
-    )
-
 }

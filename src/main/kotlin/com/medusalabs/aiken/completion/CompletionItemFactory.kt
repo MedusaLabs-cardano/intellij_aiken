@@ -14,18 +14,41 @@ enum class CompletionSymbolKind {
     IDENTIFIER
 }
 
-object CompletionItemFactory {
+internal object CompletionItemFactory {
     fun create(
         text: String,
         kind: CompletionSymbolKind,
-        priority: Double
-    ): LookupElement = create(text, kind, priority, typeTextFor(kind))
+        rankingCategory: AikenOrdinaryCompletionCategory? = defaultRankingCategory(kind)
+    ): LookupElement = create(text, kind, typeTextFor(kind), rankingCategory)
+
+    fun create(
+        text: String,
+        kind: CompletionSymbolKind,
+        typeText: String,
+        rankingCategory: AikenOrdinaryCompletionCategory? = defaultRankingCategory(kind)
+    ): LookupElement = buildLookup(text, kind, priority = null, typeText = typeText, rankingCategory = rankingCategory)
 
     fun create(
         text: String,
         kind: CompletionSymbolKind,
         priority: Double,
-        typeText: String
+        rankingCategory: AikenOrdinaryCompletionCategory? = defaultRankingCategory(kind)
+    ): LookupElement = create(text, kind, priority, typeTextFor(kind), rankingCategory)
+
+    fun create(
+        text: String,
+        kind: CompletionSymbolKind,
+        priority: Double,
+        typeText: String,
+        rankingCategory: AikenOrdinaryCompletionCategory? = defaultRankingCategory(kind)
+    ): LookupElement = buildLookup(text, kind, priority = priority, typeText = typeText, rankingCategory = rankingCategory)
+
+    private fun buildLookup(
+        text: String,
+        kind: CompletionSymbolKind,
+        priority: Double?,
+        typeText: String,
+        rankingCategory: AikenOrdinaryCompletionCategory? = defaultRankingCategory(kind)
     ): LookupElement {
         val builder =
             LookupElementBuilder
@@ -34,8 +57,22 @@ object CompletionItemFactory {
                 .withTypeText(typeText, true)
                 .withBoldness(kind == CompletionSymbolKind.KEYWORD)
 
-        return PrioritizedLookupElement.withPriority(builder, priority)
+        val lookup =
+            priority?.let { explicitPriority ->
+                PrioritizedLookupElement.withPriority(builder, explicitPriority)
+            } ?: builder
+        return if (rankingCategory != null) {
+            AikenCompletionSorting.annotate(lookup, rankingCategory, kind)
+        } else {
+            lookup
+        }
     }
+
+    private fun defaultRankingCategory(kind: CompletionSymbolKind): AikenOrdinaryCompletionCategory? =
+        when (kind) {
+            CompletionSymbolKind.KEYWORD -> AikenOrdinaryCompletionCategory.KEYWORD
+            else -> null
+        }
 
     private fun typeTextFor(kind: CompletionSymbolKind): String =
         when (kind) {

@@ -98,6 +98,38 @@ class AikenUseCompletionProviderTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun prefersExactReverseExportMatchBeforeFuzzyReverseExportMatch() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/zzz_exact.ak",
+            """
+            pub type Qwe {
+              Qwe
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/aaa_fuzzy.ak",
+            """
+            pub type QweBox {
+              QweBox
+            }
+            """.trimIndent()
+        )
+
+        val file = myFixture.addFileToProject("lib/main.ak", "use Qwe<caret>")
+        myFixture.configureFromExistingVirtualFile(file.virtualFile)
+
+        val suggestions = completionVariants()
+        assertTrue("Expected exact reverse export suggestion, got: $suggestions", suggestions.contains("zzz_exact.{Qwe}"))
+        assertTrue("Expected fuzzy reverse export suggestion, got: $suggestions", suggestions.contains("aaa_fuzzy.{QweBox}"))
+        assertTrue(
+            "Expected exact reverse export match before fuzzy match. Suggestions were: $suggestions",
+            suggestions.indexOf("zzz_exact.{Qwe}") < suggestions.indexOf("aaa_fuzzy.{QweBox}")
+        )
+    }
+
+    @Test
     fun insertsFullImportForReverseExportSuggestion() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(

@@ -1,5 +1,6 @@
 package com.medusalabs.aiken.completion
 
+import com.intellij.codeInsight.completion.PlainPrefixMatcher
 import com.intellij.testFramework.fixtures.CompletionAutoPopupTestCase
 import java.nio.file.Path
 
@@ -257,6 +258,106 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("list"))
     }
 
+    fun testAutoPopupAndExplicitCompletionConvergeForOrdinaryPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/interval.ak",
+            """
+            pub fn entirely_after() -> Bool {
+              True
+            }
+
+            pub fn entirely_before() -> Bool {
+              True
+            }
+
+            pub fn entirely_between() -> Bool {
+              True
+            }
+            """.trimIndent()
+        )
+
+        assertAutoPopupAndExplicitCompletionConverge(
+            """
+            fn main() {
+              let interval = <caret>
+            }
+            """.trimIndent(),
+            typedText = "ent",
+            meaningfulPrefix = "ent"
+        )
+    }
+
+    fun testAutoPopupAndExplicitCompletionConvergeForQualifiedPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/math.ak",
+            """
+            pub fn add(left: Int, right: Int) -> Int {
+              left
+            }
+
+            pub fn abs(value: Int) -> Int {
+              value
+            }
+            """.trimIndent()
+        )
+
+        assertAutoPopupAndExplicitCompletionConverge(
+            """
+            use math as math_utils
+
+            fn main(seed: Int) -> Int {
+              math_utils<caret>
+            }
+            """.trimIndent(),
+            typedText = ".a",
+            meaningfulPrefix = "a"
+        )
+    }
+
+    fun testAutoPopupAndExplicitCompletionConvergeForTypedExpectedValuePrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Qwe {
+              Qwe
+            }
+
+            pub type Transaction {
+              value: Qwe,
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/helpers.ak",
+            """
+            use models.{Qwe}
+
+            pub fn from() -> Qwe {
+              Qwe
+            }
+
+            pub fn from_asset(policy_id: ByteArray, quantity: Int) -> Qwe {
+              Qwe
+            }
+            """.trimIndent()
+        )
+
+        assertAutoPopupAndExplicitCompletionConverge(
+            """
+            use models.{Transaction}
+
+            fn main() {
+              let tx = Transaction { value: <caret> }
+            }
+            """.trimIndent(),
+            typedText = "from",
+            meaningfulPrefix = "from"
+        )
+    }
+
     fun testAutoPopupWorksForListSpreadTypedAfterReturningBeforeExistingIdentifier() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -410,7 +511,8 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         type(" |> ")
 
         val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
-        assertTrue(suggestions.toString(), suggestions.contains("list.length"))
+        assertTrue(suggestions.toString(), suggestions.contains("length"))
+        assertFalse(suggestions.toString(), suggestions.contains("list.length"))
         assertFalse(suggestions.toString(), suggestions.contains("let"))
     }
 
@@ -714,5 +816,48 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("backup"))
         assertTrue(suggestions.toString(), suggestions.contains("VerificationKey"))
         assertTrue(suggestions.toString(), suggestions.contains("Script"))
+    }
+
+    private fun assertAutoPopupAndExplicitCompletionConverge(
+        initialText: String,
+        typedText: String,
+        meaningfulPrefix: String = typedText
+    ) {
+        myFixture.configureByText("auto_main.ak", initialText)
+        type(typedText)
+
+        val autoPopupSuggestions =
+            myFixture.lookupElements
+                ?.map { it.lookupString }
+                .orEmpty()
+                .filterMeaningfulMatches(meaningfulPrefix)
+        assertTrue(
+            "Expected meaningful auto-popup suggestions for '$typedText'",
+            autoPopupSuggestions.isNotEmpty()
+        )
+
+        myFixture.configureByText(
+            "explicit_main.ak",
+            initialText.replace("<caret>", "$typedText<caret>")
+        )
+
+        val explicitSuggestions =
+            myFixture.completeBasic()
+                ?.map { it.lookupString }
+                .orEmpty()
+                .filterMeaningfulMatches(meaningfulPrefix)
+
+        assertEquals(
+            "Expected auto-popup and explicit completion to converge for '$typedText'",
+            autoPopupSuggestions,
+            explicitSuggestions
+        )
+    }
+
+    private fun List<String>.filterMeaningfulMatches(prefix: String): List<String> {
+        val matcher = PlainPrefixMatcher(prefix)
+        return filter { candidate ->
+            AikenCompletionPrefixMatching.matches(candidate, matcher, prefix)
+        }
     }
 }

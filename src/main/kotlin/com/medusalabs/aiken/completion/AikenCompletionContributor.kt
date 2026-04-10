@@ -27,7 +27,11 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
             PlatformPatterns.psiElement().withLanguage(AikenLanguage),
             KeywordCompletionProvider(
                 keywords = AikenLexing.keywords + setOf("True", "False"),
-                stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING)
+                stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING),
+                priority = null,
+                visibilityResolver = { parameters ->
+                    AikenCompletionScenarioPolicies.forFile(parameters.originalFile, parameters.offset).keywordVisibility
+                }
             )
         )
     }

@@ -1,6 +1,7 @@
 package com.medusalabs.aiken.completion
 
 object AikenCompletionContexts {
+    // Keep this as a low-level fallback heuristic only. Scenario policy should decide first.
     fun isLikelyValueExpressionContext(text: String, offset: Int): Boolean {
         if (text.isEmpty()) return false
         var index = offset.coerceIn(0, text.length) - 1
@@ -12,6 +13,26 @@ object AikenCompletionContexts {
             '=', '(', '[', ',' -> true
             else -> index > 0 && text[index] == '>' && text[index - 1] == '-'
         }
+    }
+
+    fun isLikelyTypeReferenceContext(text: String, offset: Int): Boolean {
+        if (text.isEmpty()) return false
+        var index = offset.coerceIn(0, text.length) - 1
+        while (index >= 0 && AikenSyntaxText.isIdentifierChar(text[index])) index--
+        while (index >= 0 && text[index].isWhitespace()) index--
+        if (index < 0) return false
+
+        if (text[index] == ':') return true
+        if (index > 0 && text[index] == '>' && text[index - 1] == '-') return true
+        return isKeywordIsAt(text, index)
+    }
+
+    private fun isKeywordIsAt(text: String, index: Int): Boolean {
+        if (index < 1) return false
+        if (text[index - 1] != 'i' || text[index] != 's') return false
+        val beforeBoundary = index - 2 < 0 || !AikenSyntaxText.isIdentifierChar(text[index - 2])
+        val afterBoundary = index + 1 >= text.length || !AikenSyntaxText.isIdentifierChar(text[index + 1])
+        return beforeBoundary && afterBoundary
     }
 
     fun insideListLiteralContext(text: String, offset: Int): Boolean {

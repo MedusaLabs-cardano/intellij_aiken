@@ -134,6 +134,7 @@ object AikenLocalScopeAnalyzer {
 
         val openBraces = ArrayList<Int>()
         var collectingBindings = false
+        var bindingPatternStart = -1
         var collectingParams = false
         var afterParams = false
         var parenDepth = 0
@@ -191,15 +192,22 @@ object AikenLocalScopeAnalyzer {
 
             if (collectingBindings) {
                 when {
-                    tokenType == TokenType.WHITE_SPACE -> {}
-                    tokenType == AikenTokenTypes.OPERATOR && tokenText == "=" -> collectingBindings = false
-                    tokenType == AikenTokenTypes.IDENTIFIER || tokenType == AikenTokenTypes.FIELD -> {
+                    tokenType == TokenType.WHITE_SPACE || tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.WHITESPACE -> {}
+                    tokenType == AikenTokenTypes.OPERATOR && tokenText == "=" -> {
                         val scope =
                             openBraces.lastOrNull()?.let { start ->
                                 val end = bracePairsByStart[start] ?: text.length
                                 TextRange(start, end)
                             } ?: TextRange(0, text.length)
-                        candidates.add(ScopeCandidate(tokenText, lexer.tokenStart, scope))
+                        if (bindingPatternStart in 0..lexer.tokenStart) {
+                            val patternEnd = topLevelBindingPatternEnd(text, bindingPatternStart, lexer.tokenStart)
+                            val patternBindings = extractPatternBindings(text, bindingPatternStart, patternEnd)
+                            for ((name, declarationOffset) in patternBindings) {
+                                candidates.add(ScopeCandidate(name, declarationOffset, scope))
+                            }
+                        }
+                        collectingBindings = false
+                        bindingPatternStart = -1
                     }
                 }
                 lexer.advance()
@@ -208,6 +216,7 @@ object AikenLocalScopeAnalyzer {
 
             if (tokenType == AikenTokenTypes.KEYWORD && (tokenText == "let" || tokenText == "expect")) {
                 collectingBindings = true
+                bindingPatternStart = lexer.tokenEnd
                 lexer.advance()
                 continue
             }
@@ -245,7 +254,395 @@ object AikenLocalScopeAnalyzer {
             lexer.advance()
         }
 
+        candidates += collectWhenPatternCandidates(text)
+
         return candidates
+    }
+
+    private fun collectWhenPatternCandidates(text: CharSequence): List<ScopeCandidate> {
+        val result = ArrayList<ScopeCandidate>()
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+            if (tokenType != AikenTokenTypes.KEYWORD || tokenText != "when") {
+                lexer.advance()
+                continue
+            }
+
+            val whenStart = lexer.tokenStart
+            val whenEnd = lexer.tokenEnd
+            val whenBody = findWhenBody(text, whenEnd)
+            if (whenBody == null) {
+                lexer.advance()
+                continue
+            }
+
+            var cursor = whenBody.openBrace + 1
+            while (cursor < whenBody.closeBrace) {
+                val arrowOffset = findTopLevelArrowInRange(text, cursor, whenBody.closeBrace) ?: break
+                val expressionStart = skipWhitespaceForward(text, arrowOffset + 2)
+                if (expressionStart >= whenBody.closeBrace) break
+                val expressionEnd = consumeExpressionEndWithin(text, expressionStart, whenBody.closeBrace)
+                if (expressionEnd <= expressionStart) break
+
+                val scope = TextRange(expressionStart, expressionEnd)
+                val patternBindings = extractPatternBindings(text, cursor, arrowOffset)
+                for ((name, declarationOffset) in patternBindings) {
+                    result += ScopeCandidate(name = name, declarationOffset = declarationOffset, scope = scope)
+                }
+
+                cursor = expressionEnd
+            }
+
+            lexer.start(text, (whenBody.closeBrace + 1).coerceAtMost(text.length), text.length, 0)
+            continue
+        }
+
+        return result
+    }
+
+    private data class WhenBodyRange(
+        val openBrace: Int,
+        val closeBrace: Int
+    )
+
+    private fun findWhenBody(
+        text: CharSequence,
+        afterWhenOffset: Int
+    ): WhenBodyRange? {
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text, afterWhenOffset.coerceIn(0, text.length), text.length, 0)
+
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var angleDepth = 0
+        var sawTopLevelIs = false
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            if (tokenType == TokenType.WHITE_SPACE || tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.WHITESPACE) {
+                lexer.advance()
+                continue
+            }
+
+            val atTopLevel = parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
+            if (tokenType == AikenTokenTypes.KEYWORD && tokenText == "is" && atTopLevel) {
+                sawTopLevelIs = true
+                lexer.advance()
+                continue
+            }
+
+            if (tokenType == AikenTokenTypes.LBRACE && sawTopLevelIs && atTopLevel) {
+                val openBrace = lexer.tokenStart
+                val closeBrace = findMatchingBrace(text, openBrace) ?: return null
+                return WhenBodyRange(openBrace = openBrace, closeBrace = closeBrace)
+            }
+
+            when {
+                tokenType == AikenTokenTypes.LPAREN -> parenDepth++
+                tokenType == AikenTokenTypes.RPAREN -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                tokenType == AikenTokenTypes.LBRACKET -> bracketDepth++
+                tokenType == AikenTokenTypes.RBRACKET -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                tokenType == AikenTokenTypes.LBRACE -> braceDepth++
+                tokenType == AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                tokenType == AikenTokenTypes.OPERATOR && tokenText == "<" -> angleDepth++
+                tokenType == AikenTokenTypes.OPERATOR && tokenText == ">" -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+            }
+            lexer.advance()
+        }
+
+        return null
+    }
+
+    private fun findMatchingBrace(
+        text: CharSequence,
+        openOffset: Int
+    ): Int? {
+        if (openOffset !in text.indices || text[openOffset] != '{') return null
+        var depth = 0
+        var inString = false
+        var inLineComment = false
+        var index = openOffset
+
+        while (index < text.length) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < text.length) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < text.length && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return index + 1
+                }
+            }
+            index++
+        }
+
+        return null
+    }
+
+    private fun findTopLevelArrowInRange(
+        text: CharSequence,
+        start: Int,
+        endExclusive: Int
+    ): Int? {
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var angleDepth = 0
+        var inString = false
+        var inLineComment = false
+        var index = start.coerceIn(0, text.length)
+        val limit = endExclusive.coerceIn(index, text.length)
+
+        while (index + 1 < limit) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < limit) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && ch == '-' && text[index + 1] == '>') {
+                return index
+            }
+
+            when (ch) {
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                '<' -> angleDepth++
+                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+            }
+            index++
+        }
+
+        return null
+    }
+
+    private fun consumeExpressionEndWithin(
+        text: CharSequence,
+        start: Int,
+        limitExclusive: Int
+    ): Int {
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var inLineComment = false
+        var index = start.coerceIn(0, text.length)
+        val limit = limitExclusive.coerceIn(index, text.length)
+
+        while (index < limit) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < limit) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                '\n', '\r' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return index
+            }
+            index++
+        }
+
+        return limit
+    }
+
+    private fun extractPatternBindings(
+        text: CharSequence,
+        start: Int,
+        endExclusive: Int
+    ): List<Pair<String, Int>> {
+        if (start >= endExclusive || start !in 0..text.length) return emptyList()
+        val safeEnd = endExclusive.coerceIn(start, text.length)
+        val patternText = text.subSequence(start, safeEnd).toString()
+        val lexer = AikenLexing.createLexer()
+        lexer.start(patternText)
+        val bindings = ArrayList<Pair<String, Int>>()
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            if (tokenType != AikenTokenTypes.IDENTIFIER && tokenType != AikenTokenTypes.FIELD) {
+                lexer.advance()
+                continue
+            }
+
+            val name = patternText.substring(lexer.tokenStart, lexer.tokenEnd)
+            if (name == "_" || name.isBlank()) {
+                lexer.advance()
+                continue
+            }
+            val nextIndex = skipWhitespaceForward(patternText, lexer.tokenEnd)
+            if (nextIndex < patternText.length && patternText[nextIndex] == ':') {
+                lexer.advance()
+                continue
+            }
+            bindings += name to (start + lexer.tokenStart)
+            lexer.advance()
+        }
+
+        return bindings
+    }
+
+    private fun topLevelBindingPatternEnd(
+        text: CharSequence,
+        start: Int,
+        endExclusive: Int
+    ): Int {
+        var angleDepth = 0
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var inLineComment = false
+        var index = start.coerceIn(0, text.length)
+        val limit = endExclusive.coerceIn(index, text.length)
+
+        while (index < limit) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+            if (inString) {
+                if (ch == '\\' && index + 1 < limit) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+            if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '<' -> angleDepth++
+                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                ':' ->
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                        return index
+                    }
+            }
+            index++
+        }
+
+        return limit
+    }
+
+    private fun skipWhitespaceForward(
+        text: CharSequence,
+        start: Int
+    ): Int {
+        var index = start.coerceIn(0, text.length)
+        while (index < text.length && text[index].isWhitespace()) index++
+        return index
     }
 
     private fun collectScopeBracePairs(document: Document, text: CharSequence): List<ScopeBracePair> {

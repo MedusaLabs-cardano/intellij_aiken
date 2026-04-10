@@ -62,7 +62,8 @@ object AikenPublicExportExtractor {
                     AikenTokenTypes.COMMENT -> {}
                     AikenTokenTypes.IDENTIFIER,
                     AikenTokenTypes.FUNCTION,
-                    AikenTokenTypes.TYPE -> {
+                    AikenTokenTypes.TYPE,
+                    AikenTokenTypes.FIELD -> {
                         val name = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                         if (name.isNotBlank()) {
                             results += name

@@ -3,7 +3,6 @@ package com.medusalabs.aiken.completion
 import com.intellij.codeInsight.AutoPopupController
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionType
-import com.intellij.codeInsight.completion.PrioritizedLookupElement
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.icons.AllIcons
@@ -25,88 +24,43 @@ import com.medusalabs.aiken.project.AikenSearchScopes
 object AikenConstructibleCompletionSupport {
     private val PENDING_CONSTRUCTIBLE_FORM_KEY =
         Key.create<PendingConstructibleInvocation>("aiken.pending.constructible.form")
+    private data class ConstructibleLookupSpec(
+        val text: String,
+        val icon: javax.swing.Icon,
+        val typeText: String,
+        val insertionFamily: AikenConstructibleInsertionFamily,
+        val tailText: String? = null,
+        val rankingCategory: AikenConstructibleFormCompletionCategory? = null
+    )
 
     fun createVisibleLookup(
         constructible: AikenConstructibleCompletionInfo,
-        priority: Double,
         typeText: String,
         lookupName: String = constructible.name
-    ): LookupElement {
-        val builder =
-            LookupElementBuilder
-                .create(lookupName)
-                .withIcon(AllIcons.Nodes.Class)
-                .withTypeText(typeText, true)
-                .withInsertHandler { insertionContext, _ ->
-                    val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, lookupName)
-                    insertionContext.commitDocument()
-                    scheduleConstructibleFormPopup(
-                        insertionContext.editor,
-                        insertionContext.project,
-                        constructible,
-                        insertedOffset + lookupName.length
-                    )
-                }
-
-        return PrioritizedLookupElement.withPriority(builder, priority)
-    }
+    ): LookupElement =
+        createLookup(
+            ConstructibleLookupSpec(
+                text = lookupName,
+                icon = AllIcons.Nodes.Class,
+                typeText = typeText,
+                insertionFamily = rootInsertionFamily(constructible, lookupName)
+            )
+        )
 
     fun createAutoImportedLookup(
         constructible: AikenConstructibleCompletionInfo,
-        priority: Double,
         typeText: String,
         lookupName: String = constructible.name
-    ): LookupElement {
-        val builder =
-            LookupElementBuilder
-                .create(lookupName)
-                .withIcon(AllIcons.Nodes.Class)
-                .withTypeText(typeText, true)
-                .withTailText(" from ${constructible.modulePath}", true)
-                .withInsertHandler { insertionContext, _ ->
-                    val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, lookupName)
-                    val insertedRangeMarker =
-                        insertionContext.document.createRangeMarker(
-                            insertedOffset,
-                            insertedOffset + lookupName.length
-                        ).apply {
-                            isGreedyToLeft = false
-                            isGreedyToRight = true
-                        }
-                    insertionContext.commitDocument()
-                    val previousLaterRunnable = insertionContext.laterRunnable
-                    insertionContext.setLaterRunnable {
-                        try {
-                            previousLaterRunnable?.run()
-                            WriteCommandAction.runWriteCommandAction(insertionContext.project) {
-                                insertStandaloneUseImport(
-                                    insertionContext.document.charsSequence.toString(),
-                                    insertionContext.document,
-                                    constructible.modulePath ?: return@runWriteCommandAction,
-                                    constructible.name
-                                )
-                                insertionContext.commitDocument()
-                            }
-                            val caretOffset =
-                                if (insertedRangeMarker.isValid) {
-                                    insertedRangeMarker.endOffset
-                                } else {
-                                    insertionContext.editor.caretModel.offset
-                                }
-                            scheduleConstructibleFormPopup(
-                                insertionContext.editor,
-                                insertionContext.project,
-                                constructible,
-                                caretOffset
-                            )
-                        } finally {
-                            insertedRangeMarker.dispose()
-                        }
-                    }
-                }
-
-        return PrioritizedLookupElement.withPriority(builder, priority)
-    }
+    ): LookupElement =
+        createLookup(
+            ConstructibleLookupSpec(
+                text = lookupName,
+                icon = AllIcons.Nodes.Class,
+                typeText = typeText,
+                insertionFamily = rootInsertionFamily(constructible, lookupName),
+                tailText = constructible.modulePath?.let { " from $it" }
+            )
+        )
 
     fun invocationFormVariants(
         parameters: CompletionParameters,
@@ -144,7 +98,7 @@ object AikenConstructibleCompletionSupport {
         if (parameterIndex < 0) return emptySet()
         return resolveVisibleConstructibles(anchor, calleeName, qualifier)
             .mapNotNull { constructible -> constructible.fields.getOrNull(parameterIndex)?.type }
-            .map(::normalizeTypeText)
+            .map(AikenTypeText::normalizeWhitespace)
             .filter { it.isNotEmpty() }
             .toSet()
     }
@@ -180,40 +134,144 @@ object AikenConstructibleCompletionSupport {
     private fun createNamedFormLookup(
         constructible: AikenConstructibleCompletionInfo
     ): LookupElement =
-        PrioritizedLookupElement.withPriority(
-            LookupElementBuilder
-                .create("{}")
-                .withIcon(AllIcons.Nodes.Field)
-                .withTypeText("named fields", true)
-                .withInsertHandler { insertionContext, _ ->
-                    replaceInsertedLookupText(insertionContext, " {}")
-                    insertionContext.editor.caretModel.moveToOffset(insertionContext.startOffset + 2)
-                    insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
-                    insertionContext.commitDocument()
-                    AutoPopupController.getInstance(insertionContext.project)
-                        .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
-                },
-            5300.0
+        createLookup(
+            ConstructibleLookupSpec(
+                text = "{}",
+                icon = AllIcons.Nodes.Field,
+                typeText = "named fields",
+                insertionFamily = namedFormInsertionFamily(),
+                rankingCategory = AikenConstructibleFormCompletionCategory.NAMED
+            )
         )
 
     private fun createPositionalFormLookup(
         constructible: AikenConstructibleCompletionInfo
     ): LookupElement =
-        PrioritizedLookupElement.withPriority(
-            LookupElementBuilder
-                .create("()")
-                .withIcon(AllIcons.Nodes.Parameter)
-                .withTypeText("positional args", true)
-                .withInsertHandler { insertionContext, _ ->
-                    replaceInsertedLookupText(insertionContext, "()")
-                    insertionContext.editor.caretModel.moveToOffset(insertionContext.startOffset + 1)
-                    insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
-                    insertionContext.commitDocument()
-                    AutoPopupController.getInstance(insertionContext.project)
-                        .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
-                },
-            if (constructible.supportsNamedSyntax) 5290.0 else 5300.0
+        createLookup(
+            ConstructibleLookupSpec(
+                text = "()",
+                icon = AllIcons.Nodes.Parameter,
+                typeText = "positional args",
+                insertionFamily = positionalFormInsertionFamily(),
+                rankingCategory = AikenConstructibleFormCompletionCategory.POSITIONAL
+            )
         )
+
+    private fun createLookup(spec: ConstructibleLookupSpec): LookupElement {
+        var builder =
+            LookupElementBuilder
+                .create(spec.text)
+                .withIcon(spec.icon)
+                .withTypeText(spec.typeText, true)
+                .withInsertHandler { insertionContext, _ ->
+                    applyInsertionFamily(insertionContext, spec.insertionFamily)
+                }
+
+        if (spec.tailText != null) {
+            builder = builder.withTailText(spec.tailText, true)
+        }
+
+        return if (spec.rankingCategory != null) {
+            AikenCompletionSorting.annotateConstructibleForm(builder, spec.rankingCategory)
+        } else {
+            builder
+        }
+    }
+
+    private fun applyInsertionFamily(
+        insertionContext: com.intellij.codeInsight.completion.InsertionContext,
+        insertionFamily: AikenConstructibleInsertionFamily
+    ) {
+        when (insertionFamily) {
+            is AikenConstructibleInsertionFamily.Root -> {
+                val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, insertionFamily.lookupText)
+                val popupCaretOffset = insertedOffset + insertionFamily.lookupText.length
+                if (insertionFamily.autoImportTarget == null) {
+                    insertionContext.commitDocument()
+                    scheduleConstructibleFormPopup(
+                        insertionContext.editor,
+                        insertionContext.project,
+                        insertionFamily.constructible,
+                        popupCaretOffset
+                    )
+                    return
+                }
+
+                val insertedRangeMarker =
+                    insertionContext.document.createRangeMarker(insertedOffset, popupCaretOffset).apply {
+                        isGreedyToLeft = false
+                        isGreedyToRight = true
+                    }
+                insertionContext.commitDocument()
+                val previousLaterRunnable = insertionContext.laterRunnable
+                insertionContext.setLaterRunnable {
+                    try {
+                        previousLaterRunnable?.run()
+                        WriteCommandAction.runWriteCommandAction(insertionContext.project) {
+                            insertStandaloneUseImport(
+                                insertionContext.document.charsSequence.toString(),
+                                insertionContext.document,
+                                insertionFamily.autoImportTarget.modulePath,
+                                insertionFamily.autoImportTarget.symbolName
+                            )
+                            insertionContext.commitDocument()
+                        }
+                        val caretOffset =
+                            if (insertedRangeMarker.isValid) {
+                                insertedRangeMarker.endOffset
+                            } else {
+                                insertionContext.editor.caretModel.offset
+                            }
+                        scheduleConstructibleFormPopup(
+                            insertionContext.editor,
+                            insertionContext.project,
+                            insertionFamily.constructible,
+                            caretOffset
+                        )
+                    } finally {
+                        insertedRangeMarker.dispose()
+                    }
+                }
+            }
+            AikenConstructibleInsertionFamily.NamedForm -> {
+                replaceInsertedLookupText(insertionContext, " {}")
+                insertionContext.editor.caretModel.moveToOffset(insertionContext.startOffset + 2)
+                insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
+                insertionContext.commitDocument()
+                AutoPopupController.getInstance(insertionContext.project)
+                    .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+            }
+            AikenConstructibleInsertionFamily.PositionalForm -> {
+                replaceInsertedLookupText(insertionContext, "()")
+                insertionContext.editor.caretModel.moveToOffset(insertionContext.startOffset + 1)
+                insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
+                insertionContext.commitDocument()
+                AutoPopupController.getInstance(insertionContext.project)
+                    .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+            }
+        }
+    }
+
+    internal fun rootInsertionFamily(
+        constructible: AikenConstructibleCompletionInfo,
+        lookupName: String = constructible.name
+    ): AikenConstructibleInsertionFamily.Root =
+        AikenConstructibleInsertionFamily.Root(
+            lookupText = lookupName,
+            constructible = constructible,
+            autoImportTarget =
+                if (constructible.needsImport) {
+                    constructible.modulePath?.let { AikenConstructibleAutoImportTarget(it, constructible.name) }
+                } else {
+                    null
+                }
+        )
+
+    internal fun namedFormInsertionFamily(): AikenConstructibleInsertionFamily =
+        AikenConstructibleInsertionFamily.NamedForm
+
+    internal fun positionalFormInsertionFamily(): AikenConstructibleInsertionFamily =
+        AikenConstructibleInsertionFamily.PositionalForm
 
     private fun detectConstructibleAtCaret(
         anchor: PsiElement?,
@@ -388,24 +446,6 @@ object AikenConstructibleCompletionSupport {
     ) {
         document.insertString(0, "use $modulePath.{$symbolName}\n")
     }
-
-    private fun normalizeTypeText(text: String): String {
-        val builder = StringBuilder(text.length)
-        var lastWasSpace = false
-        for (ch in text) {
-            if (ch.isWhitespace()) {
-                if (!lastWasSpace) {
-                    builder.append(' ')
-                    lastWasSpace = true
-                }
-            } else {
-                builder.append(ch)
-                lastWasSpace = false
-            }
-        }
-        return builder.toString().trim()
-    }
-
     private fun isIdentifierChar(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '_'
 
     private fun AikenConstructibleEntry.toCompletionInfo(

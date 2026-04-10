@@ -2,7 +2,6 @@ package com.medusalabs.aiken.completion
 
 import com.intellij.codeInsight.AutoPopupController
 import com.intellij.codeInsight.completion.CompletionType
-import com.intellij.codeInsight.completion.PrioritizedLookupElement
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.openapi.project.DumbService
@@ -52,8 +51,18 @@ object AikenRecordCompletionSupport {
         val lookups =
             when (context.mode) {
             RecordCompletionMode.FIELD_NAME -> fieldNameLookups(ownerEntries, context.existingFieldNames)
-            RecordCompletionMode.FIELD_VALUE -> fieldValueLookups(anchor, ownerEntries, context.currentFieldName, context.currentValueText)
-            RecordCompletionMode.SPREAD -> spreadLookups(anchor, ownerEntries)
+            RecordCompletionMode.FIELD_VALUE ->
+                if (context.siteKind == RecordSiteKind.PATTERN) {
+                    patternFieldValueLookups(anchor, ownerEntries, context.currentFieldName, context.currentValueText)
+                } else {
+                    fieldValueLookups(anchor, ownerEntries, context.currentFieldName, context.currentValueText)
+                }
+            RecordCompletionMode.SPREAD ->
+                if (context.siteKind == RecordSiteKind.PATTERN) {
+                    emptyList()
+                } else {
+                    spreadLookups(anchor, ownerEntries)
+                }
         }
         if (lookups.isEmpty()) return null
         return RecordCompletionSuggestions(context.mode, lookups)
@@ -89,7 +98,7 @@ object AikenRecordCompletionSupport {
                                 .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
                         }
                     }
-            lookups += PrioritizedLookupElement.withPriority(builder, 4200.0)
+            lookups += builder
         }
 
         return lookups
@@ -109,24 +118,68 @@ object AikenRecordCompletionSupport {
                 ?.type
                 ?: return emptyList()
 
+        val hasTypedPrefix = AikenSyntaxText.identifierPrefix(currentValueText, currentValueText.length).isNotBlank()
         val siblingFieldCandidates =
             ownerEntries
                 .asSequence()
-                .filter { it.isCurrentFile && it.entry.ownerName != it.entry.resultTypeName }
+                .filter { ownerEntry ->
+                    hasTypedPrefix || (ownerEntry.isCurrentFile && ownerEntry.entry.ownerName != ownerEntry.entry.resultTypeName)
+                }
                 .flatMap { entry -> entry.entry.fields.asSequence() }
                 .filter { field -> field.name != currentFieldName }
                 .map { field ->
-                    AikenTypedCompletionCandidate(field.name, field.type, CompletionSymbolKind.FIELD, 3700.0)
+                    AikenTypedCandidateContext.RecordFieldValue.SiblingField(
+                        name = field.name,
+                        type = field.type
+                    )
                 }
-                .distinctBy { it.name }
+                .distinctBy(AikenTypedCandidateContext.RecordFieldValue.SiblingField::name)
                 .toList()
 
         return AikenTypeDirectedCompletionSupport.lookupsForExpectedType(
             anchor = anchor,
             expectedType = expectedType,
             currentValueText = currentValueText,
-            extraCandidates = siblingFieldCandidates
+            context = AikenTypedCandidateContext.RecordFieldValue(siblingFieldCandidates)
         )
+    }
+
+    private fun patternFieldValueLookups(
+        anchor: PsiElement,
+        ownerEntries: List<VisibleConstructibleEntry>,
+        currentFieldName: String,
+        currentValueText: String
+    ): List<LookupElement> {
+        val expectedType =
+            ownerEntries
+                .asSequence()
+                .flatMap { entry -> entry.entry.fields.asSequence() }
+                .firstOrNull { it.name == currentFieldName }
+                ?.type
+                ?: return emptyList()
+
+        val prefix = AikenSyntaxText.identifierPrefix(currentValueText, currentValueText.length).trim()
+        if (prefix.isNotBlank()) {
+            // Once user starts typing, switch back to full typed matching flow.
+            return AikenTypeDirectedCompletionSupport.lookupsForExpectedType(
+                anchor = anchor,
+                expectedType = expectedType,
+                currentValueText = currentValueText
+            )
+        }
+
+        val result = ArrayList<LookupElement>()
+        result +=
+            AikenCompletionSorting.annotateTyped(
+                AikenTypedLookupFactory.createTypeDirectedLookup(
+                    text = currentFieldName,
+                    kind = CompletionSymbolKind.IDENTIFIER,
+                    typeText = AikenTypeText.normalizeWhitespace(expectedType)
+                ),
+                AikenTypedCompletionCategory.LOCAL_BINDING
+            )
+        result += AikenTypeDirectedCompletionSupport.constructibleLookupsForExpectedType(anchor, expectedType)
+        return result.distinctBy { it.lookupString }
     }
 
     private fun spreadLookups(
@@ -136,7 +189,7 @@ object AikenRecordCompletionSupport {
         val expectedType =
             ownerEntries
                 .asSequence()
-                .map { normalizeTypeText(it.entry.resultTypeName) }
+                .map { AikenTypeText.normalizeWhitespace(it.entry.resultTypeName) }
                 .firstOrNull { it.isNotEmpty() }
                 ?: return emptyList()
 
@@ -297,25 +350,9 @@ object AikenRecordCompletionSupport {
         return result.distinctBy { Triple(it.modulePath, it.entry.ownerName, it.entry.offset) }
     }
 
-    private fun normalizeTypeText(text: String): String {
-        val builder = StringBuilder(text.length)
-        var lastWasSpace = false
-        for (ch in text) {
-            if (ch.isWhitespace()) {
-                if (!lastWasSpace) {
-                    builder.append(' ')
-                    lastWasSpace = true
-                }
-            } else {
-                builder.append(ch)
-                lastWasSpace = false
-            }
-        }
-        return builder.toString().trim()
-    }
-
     private data class RecordCompletionContext(
         val ownerExpression: String,
+        val siteKind: RecordSiteKind,
         val mode: RecordCompletionMode,
         val currentFieldName: String,
         val existingFieldNames: Set<String>,
@@ -329,6 +366,7 @@ object AikenRecordCompletionSupport {
 
                 return RecordCompletionContext(
                     ownerExpression = site.ownerExpression,
+                    siteKind = site.siteKind,
                     mode = parsed.mode,
                     currentFieldName = parsed.currentFieldName,
                     existingFieldNames = parsed.existingFieldNames,
@@ -337,36 +375,24 @@ object AikenRecordCompletionSupport {
             }
 
             private fun findRecordLiteralSite(text: String, offset: Int): RecordLiteralSite? {
-                var braceDepth = 0
-                var parenDepth = 0
-                var bracketDepth = 0
-                var index = offset.coerceAtMost(text.length) - 1
-
-                while (index >= 0) {
-                    when (text[index]) {
-                        '}' -> braceDepth++
-                        '{' -> {
-                            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0) {
-                                val ownerExpression = readOwnerExpression(text, index) ?: return null
-                                return RecordLiteralSite(
-                                    ownerExpression = ownerExpression,
-                                    bodyRange = TextRange(index + 1, offset.coerceAtMost(text.length))
-                                )
-                            }
-                            braceDepth = (braceDepth - 1).coerceAtLeast(0)
-                        }
-                        ')' -> parenDepth++
-                        '(' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
-                        ']' -> bracketDepth++
-                        '[' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
-                    }
-                    index--
-                }
-
-                return null
+                val braceOffset =
+                    AikenTopLevelText.findEnclosingOpening(
+                        text = text,
+                        opening = '{',
+                        offsetExclusive = offset.coerceAtMost(text.length)
+                    )
+                        ?: return null
+                val ownerInfo = readOwnerExpression(text, braceOffset) ?: return null
+                val ownerExpression = ownerInfo.first
+                val ownerStart = ownerInfo.second
+                return RecordLiteralSite(
+                    ownerExpression = ownerExpression,
+                    siteKind = detectRecordSiteKind(text, ownerStart = ownerStart),
+                    bodyRange = TextRange(braceOffset + 1, offset.coerceAtMost(text.length))
+                )
             }
 
-            private fun readOwnerExpression(text: String, braceOffset: Int): String? {
+            private fun readOwnerExpression(text: String, braceOffset: Int): Pair<String, Int>? {
                 var index = braceOffset - 1
                 while (index >= 0 && text[index].isWhitespace()) index--
                 if (index < 0) return null
@@ -384,24 +410,177 @@ object AikenRecordCompletionSupport {
                 while (boundaryIndex >= 0 && text[boundaryIndex].isWhitespace()) boundaryIndex--
                 if (boundaryIndex >= 0) {
                     val boundaryChar = text[boundaryIndex]
-                    if (boundaryChar.isLetterOrDigit() || boundaryChar == '_' || boundaryChar == '>') {
+                    if (boundaryChar == '{' && isTypeDeclarationOpeningBrace(text, boundaryIndex)) {
                         return null
+                    }
+                    if (boundaryChar.isLetterOrDigit() || boundaryChar == '_' || boundaryChar == '>') {
+                        val precedingWord = readIdentifierEndingAt(text, boundaryIndex).orEmpty()
+                        if (precedingWord != "let" && precedingWord != "expect") {
+                            return null
+                        }
                     }
                 }
 
-                return expression
+                return expression to start
             }
 
-            private fun parseCurrentFieldContext(bodyText: String): ParsedFieldContext? {
-                var currentEntryStart = 0
-                val existingFieldNames = LinkedHashSet<String>()
+            private fun detectRecordSiteKind(
+                text: String,
+                ownerStart: Int
+            ): RecordSiteKind {
+                val precedingWord = readIdentifierEndingAt(text, ownerStart - 1).orEmpty()
+                if (precedingWord == "let" || precedingWord == "expect") return RecordSiteKind.PATTERN
+                if (isInsideWhenArmPattern(text, ownerStart)) return RecordSiteKind.PATTERN
+                return RecordSiteKind.VALUE
+            }
+
+            private data class WhenBodyRange(
+                val openBrace: Int,
+                val closeBrace: Int
+            )
+
+            private fun isInsideWhenArmPattern(
+                text: String,
+                ownerOffset: Int
+            ): Boolean {
+                val lexer = com.medusalabs.aiken.highlight.lexer.AikenLexing.createLexer()
+                lexer.start(text)
+
+                while (lexer.tokenType != null) {
+                    val tokenType = lexer.tokenType
+                    val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                    if (tokenType != com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.KEYWORD || tokenText != "when") {
+                        lexer.advance()
+                        continue
+                    }
+
+                    val whenBody = findWhenBody(text, lexer.tokenEnd)
+                    if (whenBody == null) {
+                        lexer.advance()
+                        continue
+                    }
+                    if (ownerOffset <= whenBody.openBrace || ownerOffset >= whenBody.closeBrace) {
+                        lexer.start(text, (whenBody.closeBrace + 1).coerceAtMost(text.length), text.length, 0)
+                        continue
+                    }
+
+                    var cursor = whenBody.openBrace + 1
+                    while (cursor < whenBody.closeBrace) {
+                        val arrowOffset = findTopLevelArrowInRange(text, cursor, whenBody.closeBrace) ?: break
+                        val patternStart = skipWhitespaceForward(text, cursor)
+                        if (ownerOffset in patternStart until arrowOffset) return true
+
+                        val expressionStart = skipWhitespaceForward(text, arrowOffset + 2)
+                        if (expressionStart >= whenBody.closeBrace) break
+                        val expressionEnd = consumeExpressionEndWithin(text, expressionStart, whenBody.closeBrace)
+                        cursor = if (expressionEnd > cursor) expressionEnd else (arrowOffset + 2)
+                    }
+
+                    lexer.start(text, (whenBody.closeBrace + 1).coerceAtMost(text.length), text.length, 0)
+                }
+
+                return false
+            }
+
+            private fun findWhenBody(
+                text: String,
+                afterWhenOffset: Int
+            ): WhenBodyRange? {
+                val lexer = com.medusalabs.aiken.highlight.lexer.AikenLexing.createLexer()
+                lexer.start(text, afterWhenOffset.coerceIn(0, text.length), text.length, 0)
+
                 var parenDepth = 0
                 var bracketDepth = 0
                 var braceDepth = 0
                 var angleDepth = 0
+                var sawTopLevelIs = false
 
-                for (index in bodyText.indices) {
-                    val ch = bodyText[index]
+                while (lexer.tokenType != null) {
+                    val tokenType = lexer.tokenType
+                    val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+                    if (
+                        tokenType == com.intellij.psi.TokenType.WHITE_SPACE ||
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.WHITESPACE ||
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.COMMENT
+                    ) {
+                        lexer.advance()
+                        continue
+                    }
+
+                    val atTopLevel = parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
+                    if (tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.KEYWORD && tokenText == "is" && atTopLevel) {
+                        sawTopLevelIs = true
+                        lexer.advance()
+                        continue
+                    }
+                    if (tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.LBRACE && sawTopLevelIs && atTopLevel) {
+                        val open = lexer.tokenStart
+                        val close = AikenSyntaxText.findMatchingDelimiter(text, open, '{', '}') ?: return null
+                        return WhenBodyRange(openBrace = open, closeBrace = close)
+                    }
+
+                    when {
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.LPAREN -> parenDepth++
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.RPAREN -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.LBRACKET -> bracketDepth++
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.RBRACKET -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.LBRACE -> braceDepth++
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.OPERATOR && tokenText == "<" -> angleDepth++
+                        tokenType == com.medusalabs.aiken.highlight.lexer.AikenTokenTypes.OPERATOR && tokenText == ">" -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+                    }
+                    lexer.advance()
+                }
+
+                return null
+            }
+
+            private fun findTopLevelArrowInRange(
+                text: String,
+                start: Int,
+                endExclusive: Int
+            ): Int? {
+                var parenDepth = 0
+                var bracketDepth = 0
+                var braceDepth = 0
+                var angleDepth = 0
+                var inString = false
+                var inLineComment = false
+                var index = start.coerceIn(0, text.length)
+                val limit = endExclusive.coerceIn(index, text.length)
+
+                while (index + 1 < limit) {
+                    val ch = text[index]
+
+                    if (inLineComment) {
+                        if (ch == '\n' || ch == '\r') inLineComment = false
+                        index++
+                        continue
+                    }
+                    if (inString) {
+                        if (ch == '\\' && index + 1 < limit) {
+                            index += 2
+                            continue
+                        }
+                        if (ch == '"') inString = false
+                        index++
+                        continue
+                    }
+                    if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                        inLineComment = true
+                        index += 2
+                        continue
+                    }
+                    if (ch == '"') {
+                        inString = true
+                        index++
+                        continue
+                    }
+
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && ch == '-' && text[index + 1] == '>') {
+                        return index
+                    }
+
                     when (ch) {
                         '(' -> parenDepth++
                         ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
@@ -411,34 +590,130 @@ object AikenRecordCompletionSupport {
                         '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
                         '<' -> angleDepth++
                         '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
-                        ',' -> {
-                            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0) {
-                                extractFieldName(bodyText.substring(currentEntryStart, index))?.let(existingFieldNames::add)
-                                currentEntryStart = index + 1
-                            }
-                        }
                     }
+                    index++
+                }
+                return null
+            }
+
+            private fun consumeExpressionEndWithin(
+                text: String,
+                start: Int,
+                limitExclusive: Int
+            ): Int {
+                var parenDepth = 0
+                var bracketDepth = 0
+                var braceDepth = 0
+                var inString = false
+                var inLineComment = false
+                var index = start.coerceIn(0, text.length)
+                val limit = limitExclusive.coerceIn(index, text.length)
+
+                while (index < limit) {
+                    val ch = text[index]
+                    if (inLineComment) {
+                        if (ch == '\n' || ch == '\r') inLineComment = false
+                        index++
+                        continue
+                    }
+                    if (inString) {
+                        if (ch == '\\' && index + 1 < limit) {
+                            index += 2
+                            continue
+                        }
+                        if (ch == '"') inString = false
+                        index++
+                        continue
+                    }
+                    if (ch == '/' && index + 1 < limit && text[index + 1] == '/') {
+                        inLineComment = true
+                        index += 2
+                        continue
+                    }
+                    if (ch == '"') {
+                        inString = true
+                        index++
+                        continue
+                    }
+                    when (ch) {
+                        '(' -> parenDepth++
+                        ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                        '[' -> bracketDepth++
+                        ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                        '{' -> braceDepth++
+                        '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                        '\n', '\r' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return index
+                    }
+                    index++
+                }
+                return limit
+            }
+
+            private fun skipWhitespaceForward(
+                text: String,
+                start: Int
+            ): Int {
+                var index = start.coerceIn(0, text.length)
+                while (index < text.length && text[index].isWhitespace()) index++
+                return index
+            }
+
+            private fun readIdentifierEndingAt(
+                text: String,
+                endIndex: Int
+            ): String? {
+                var index = endIndex.coerceAtMost(text.lastIndex)
+                while (index >= 0 && text[index].isWhitespace()) index--
+                if (index < 0 || !(text[index].isLetterOrDigit() || text[index] == '_')) return null
+                val endExclusive = index + 1
+                while (index >= 0 && (text[index].isLetterOrDigit() || text[index] == '_')) index--
+                val start = index + 1
+                if (start >= endExclusive) return null
+                return text.substring(start, endExclusive)
+            }
+
+            private fun isTypeDeclarationOpeningBrace(
+                text: String,
+                braceIndex: Int
+            ): Boolean {
+                var index = braceIndex - 1
+                while (index >= 0 && text[index].isWhitespace()) index--
+                if (index < 0 || !(text[index].isLetterOrDigit() || text[index] == '_')) return false
+
+                while (index >= 0 && (text[index].isLetterOrDigit() || text[index] == '_')) index--
+                while (index >= 0 && text[index].isWhitespace()) index--
+                val precedingWord = readIdentifierEndingAt(text, index).orEmpty()
+                return precedingWord == "type"
+            }
+
+            private fun parseCurrentFieldContext(bodyText: String): ParsedFieldContext? {
+                val existingFieldNames = LinkedHashSet<String>()
+                val entryRanges = AikenTopLevelText.splitRanges(bodyText, ',', trackAngles = true)
+
+                for (range in entryRanges.dropLast(1)) {
+                    extractFieldName(bodyText.substring(range.startOffset, range.endOffset))?.let(existingFieldNames::add)
                 }
 
-                val currentEntry = bodyText.substring(currentEntryStart)
+                val currentEntryRange = entryRanges.lastOrNull() ?: TextRange(0, bodyText.length)
+                val currentEntry = bodyText.substring(currentEntryRange.startOffset, currentEntryRange.endOffset)
                 val currentFieldName = extractFieldName(currentEntry).orEmpty()
-                val colonIndex = topLevelColonIndex(currentEntry)
+                val colonIndex = AikenTopLevelText.indexOf(currentEntry, ':', trackAngles = true)
+                val currentSegment = AikenCurrentExpressionSegment.fromText(currentEntry)
 
-                val trimmedEntry = currentEntry.trimStart()
-
-                return if (trimmedEntry.startsWith("..")) {
+                return if (currentSegment.isSpread) {
                     ParsedFieldContext(
                         mode = RecordCompletionMode.SPREAD,
                         currentFieldName = "",
                         existingFieldNames = existingFieldNames,
-                        currentValueText = trimmedEntry.removePrefix("..")
+                        currentValueText = currentSegment.effectiveValueText
                     )
                 } else if (colonIndex >= 0) {
+                    val valueSegment = AikenCurrentExpressionSegment.fromText(currentEntry.substring(colonIndex + 1))
                     ParsedFieldContext(
                         mode = RecordCompletionMode.FIELD_VALUE,
                         currentFieldName = currentFieldName,
                         existingFieldNames = existingFieldNames,
-                        currentValueText = currentEntry.substring(colonIndex + 1)
+                        currentValueText = valueSegment.text
                     )
                 } else {
                     ParsedFieldContext(
@@ -451,43 +726,19 @@ object AikenRecordCompletionSupport {
             }
 
             private fun extractFieldName(entryText: String): String? {
-                val colonIndex = topLevelColonIndex(entryText)
+                val colonIndex = AikenTopLevelText.indexOf(entryText, ':', trackAngles = true)
                 val head = if (colonIndex >= 0) entryText.substring(0, colonIndex) else entryText
                 val trimmed = head.trim()
                 if (trimmed.isEmpty()) return null
                 val identifier = trimmed.takeLastWhile { it.isLetterOrDigit() || it == '_' }
                 return identifier.takeIf { it.isNotBlank() }
             }
-
-            private fun topLevelColonIndex(text: String): Int {
-                var parenDepth = 0
-                var bracketDepth = 0
-                var braceDepth = 0
-                var angleDepth = 0
-                for (index in text.indices) {
-                    when (text[index]) {
-                        '(' -> parenDepth++
-                        ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
-                        '[' -> bracketDepth++
-                        ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
-                        '{' -> braceDepth++
-                        '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
-                        '<' -> angleDepth++
-                        '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
-                        ':' -> {
-                            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0) {
-                                return index
-                            }
-                        }
-                    }
-                }
-                return -1
-            }
         }
     }
 
     private data class RecordLiteralSite(
         val ownerExpression: String,
+        val siteKind: RecordSiteKind,
         val bodyRange: TextRange
     )
 
@@ -503,6 +754,11 @@ object AikenRecordCompletionSupport {
         val existingFieldNames: Set<String>,
         val currentValueText: String
     )
+}
+
+private enum class RecordSiteKind {
+    VALUE,
+    PATTERN
 }
 
 data class RecordCompletionSuggestions(
