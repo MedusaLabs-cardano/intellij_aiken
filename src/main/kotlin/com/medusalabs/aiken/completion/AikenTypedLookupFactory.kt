@@ -23,6 +23,7 @@ internal object AikenTypedLookupFactory {
         val insertionFamily: AikenTypedInsertionFamily,
         val rankingCategory: AikenTypedCompletionCategory? = null,
         val matchDistance: Int = 0,
+        val scopeDistance: Int = Int.MAX_VALUE,
         val tailText: String? = null,
         val lookupStrings: Set<String> = emptySet(),
         val bold: Boolean = false
@@ -60,7 +61,7 @@ internal object AikenTypedLookupFactory {
             StandardLookupSpec(
                 text = name,
                 kind = CompletionSymbolKind.FUNCTION,
-                typeText = expectedType,
+                typeText = functionPresentationType(signature, expectedType),
                 insertionFamily =
                     AikenTypedInsertionFamily.FunctionCall(
                         name = name,
@@ -81,7 +82,7 @@ internal object AikenTypedLookupFactory {
             StandardLookupSpec(
                 text = name,
                 kind = CompletionSymbolKind.FUNCTION,
-                typeText = aikenFunctionSignatureReturnType(signature).orEmpty(),
+                typeText = functionPresentationType(signature),
                 insertionFamily =
                     AikenTypedInsertionFamily.PipeCall(
                         lookupText = name,
@@ -102,7 +103,7 @@ internal object AikenTypedLookupFactory {
             StandardLookupSpec(
                 text = name,
                 kind = CompletionSymbolKind.FUNCTION,
-                typeText = expectedType,
+                typeText = functionPresentationType(signature, expectedType),
                 insertionFamily =
                     AikenTypedInsertionFamily.FunctionCall(
                         name = name,
@@ -120,7 +121,7 @@ internal object AikenTypedLookupFactory {
             StandardLookupSpec(
                 text = lookupText,
                 kind = CompletionSymbolKind.FUNCTION,
-                typeText = aikenFunctionSignatureReturnType(signature).orEmpty(),
+                typeText = functionPresentationType(signature),
                 insertionFamily =
                     AikenTypedInsertionFamily.PipeCall(
                         lookupText = lookupText,
@@ -139,7 +140,7 @@ internal object AikenTypedLookupFactory {
             StandardLookupSpec(
                 text = lookupText,
                 kind = CompletionSymbolKind.FUNCTION,
-                typeText = aikenFunctionSignatureReturnType(signature).orEmpty(),
+                typeText = functionPresentationType(signature),
                 insertionFamily =
                     AikenTypedInsertionFamily.PipeCall(
                         lookupText = lookupText,
@@ -224,18 +225,19 @@ internal object AikenTypedLookupFactory {
         constructible: AikenTypedExpectedTypeCandidate.Constructible,
         typeText: String
     ): LookupElement =
-        AikenCompletionSorting.annotateTyped(
-            if (
-                constructible.autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL &&
-                !constructible.modulePath.isNullOrBlank()
-            ) {
+            AikenCompletionSorting.annotateTyped(
+                if (
+                    constructible.autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL &&
+                    !constructible.modulePath.isNullOrBlank()
+                ) {
                 AikenConstructibleCompletionSupport.createAutoImportedLookup(constructible.toCompletionInfo(), typeText = typeText)
-            } else {
-                AikenConstructibleCompletionSupport.createVisibleLookup(constructible.toCompletionInfo(), typeText = typeText)
-            },
-            AikenTypedCompletionCategory.CONSTRUCTIBLE,
-            constructible.matchDistance
-        )
+                } else {
+                    AikenConstructibleCompletionSupport.createVisibleLookup(constructible.toCompletionInfo(), typeText = typeText)
+                },
+                AikenTypedCompletionCategory.CONSTRUCTIBLE,
+                constructible.matchDistance,
+                constructible.scopeDistance()
+            )
 
     fun createAutoImportedConstructibleLookup(
         constructible: AikenTypedExpectedTypeCandidate.Constructible,
@@ -244,7 +246,8 @@ internal object AikenTypedLookupFactory {
         AikenCompletionSorting.annotateTyped(
             AikenConstructibleCompletionSupport.createAutoImportedLookup(constructible.toCompletionInfo(), typeText = typeText),
             AikenTypedCompletionCategory.CONSTRUCTIBLE,
-            constructible.matchDistance
+            constructible.matchDistance,
+            constructible.scopeDistance()
         )
 
     internal fun expectedTypeRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
@@ -353,6 +356,7 @@ internal object AikenTypedLookupFactory {
                         insertionFamily = expectedTypeInsertionFamily(candidate),
                         rankingCategory = expectedTypeRankingCategory(candidate),
                         matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
                         tailText = candidate.autoImportTailText(),
                         bold = candidate.kind == CompletionSymbolKind.KEYWORD
                     )
@@ -362,10 +366,11 @@ internal object AikenTypedLookupFactory {
                     StandardLookupSpec(
                         text = candidate.name,
                         kind = CompletionSymbolKind.FUNCTION,
-                        typeText = expectedType,
+                        typeText = functionPresentationType(candidate.signature, expectedType),
                         insertionFamily = expectedTypeInsertionFamily(candidate),
                         rankingCategory = expectedTypeRankingCategory(candidate),
                         matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
                         tailText = candidate.autoImportTailText()
                     )
                 )
@@ -377,7 +382,8 @@ internal object AikenTypedLookupFactory {
                         typeText = expectedType,
                         insertionFamily = expectedTypeInsertionFamily(candidate),
                         rankingCategory = expectedTypeRankingCategory(candidate),
-                        matchDistance = candidate.matchDistance
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance()
                     )
                 )
             is AikenTypedExpectedTypeCandidate.OptionSome ->
@@ -388,7 +394,8 @@ internal object AikenTypedLookupFactory {
                         typeText = expectedType,
                         insertionFamily = expectedTypeInsertionFamily(candidate),
                         rankingCategory = expectedTypeRankingCategory(candidate),
-                        matchDistance = candidate.matchDistance
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance()
                     )
                 )
             is AikenTypedExpectedTypeCandidate.Constructible ->
@@ -418,6 +425,7 @@ internal object AikenTypedLookupFactory {
                         insertionFamily = spreadInsertionFamily(candidate),
                         rankingCategory = spreadRankingCategory(candidate),
                         matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
                         tailText = candidate.autoImportTailText(),
                         bold = candidate.kind == CompletionSymbolKind.KEYWORD
                     )
@@ -432,10 +440,11 @@ internal object AikenTypedLookupFactory {
                     StandardLookupSpec(
                         text = candidate.lookupText,
                         kind = CompletionSymbolKind.FUNCTION,
-                        typeText = aikenFunctionSignatureReturnType(candidate.signature).orEmpty(),
+                        typeText = functionPresentationType(candidate.signature),
                         insertionFamily = pipeInsertionFamily(candidate),
                         rankingCategory = pipeRankingCategory(candidate),
                         matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
                         tailText = candidate.autoImportTailText(),
                         lookupStrings =
                             if (candidate.origin == AikenTypedCandidateOrigin.QUALIFIED) {
@@ -480,11 +489,19 @@ internal object AikenTypedLookupFactory {
 
         return if (spec.rankingCategory != null) {
             val lookup = builder
-            AikenCompletionSorting.annotateTyped(lookup, spec.rankingCategory, spec.matchDistance)
+            AikenCompletionSorting.annotateTyped(lookup, spec.rankingCategory, spec.matchDistance, spec.scopeDistance)
         } else {
             builder
         }
     }
+
+    private fun functionPresentationType(
+        signature: String,
+        fallbackType: String = ""
+    ): String =
+        AikenTypeText.normalizeGenericVariablesForDisplay(
+            aikenFunctionSignatureReturnType(signature).orEmpty().ifBlank { fallbackType }
+        )
 
     private fun applyInsertionFamily(
         insertionContext: InsertionContext,

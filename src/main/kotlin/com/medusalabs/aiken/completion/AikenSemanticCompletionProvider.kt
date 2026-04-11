@@ -188,9 +188,14 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 }
 
                 val argumentSuggestions = AikenArgumentCompletionSupport.argumentSpecificVariants(anchor, offset)
+                val argumentPrefixMatch = typedSuggestionsMatchPrefix(argumentSuggestions, prefix)
                 val addedArgumentTyped = shouldShowTypedSuggestions(argumentSuggestions, prefix)
                 if (addedArgumentTyped) {
                     addTypedSupplementalSuggestions(parameters, result, argumentSuggestions, prefix, includeNonMatchingSuggestions = true)
+                }
+                if (argumentSuggestions.isNotEmpty() && (prefix.isBlank() || argumentPrefixMatch)) {
+                    result.stopHere()
+                    return
                 }
                 if (resolution.stopAfterArgumentSuggestions && (addedArgumentTyped || argumentSuggestions.isEmpty())) {
                     result.stopHere()

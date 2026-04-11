@@ -1025,6 +1025,42 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun doesNotLeakOrdinaryLexicalSuggestionsWhenTypedFunctionArgumentSuggestionsMatchPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/aiken/list.ak",
+            """
+            pub fn length(items: List<a>) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/list
+
+            pub type Input {
+              amount: Int,
+            }
+
+            fn main(input1: Input, input2: Input) {
+              let inputs = [input1, input2]
+              let input_count = 2
+              let input_bytes = "seed"
+              let q = list.length(inp<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected typed binding suggestion, got: $suggestions", suggestions.contains("inputs"))
+        assertFalse("Unexpected wrong-type lexical leak: $suggestions", suggestions.contains("input_count"))
+        assertFalse("Unexpected wrong-type lexical leak: $suggestions", suggestions.contains("input_bytes"))
+    }
+
+    @Test
     fun prefersScopedBindingsBeforeImportedModuleFunctionsInQualifiedArgumentCompletion() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -1074,6 +1110,132 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
             "Expected scoped binding to outrank imported module functions. Suggestions were: $suggestions",
             suggestions.indexOf("rat") in 0 until suggestions.indexOf("reduce")
         )
+    }
+
+    @Test
+    fun prefersNearestScopeBindingForTypedSuggestionsInsideWhenBranch() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              output: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            fn main(tx: Transaction, input: Input) {
+              when tx is {
+                Transaction { inputs: [inp] } -> {
+                  let Input { output: _ } = <caret>
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected nearest-scope binding in suggestions, got: $suggestions", suggestions.contains("inp"))
+        assertTrue("Expected outer binding in suggestions, got: $suggestions", suggestions.contains("input"))
+        assertTrue(
+            "Expected when-branch binding to outrank outer-scope binding. Suggestions were: $suggestions",
+            suggestions.indexOf("inp") in 0 until suggestions.indexOf("input")
+        )
+    }
+
+    @Test
+    fun doesNotSuggestPrivateFunctionsFromOtherModulesInTypedCompletion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/helpers.ak",
+            """
+            pub type Box {
+              value: Int,
+            }
+
+            fn hidden_box() -> Box {
+              Box { value: 0 }
+            }
+
+            pub fn shown_box() -> Box {
+              Box { value: 1 }
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use helpers.{Box}
+
+            fn main() {
+              let value: Box = <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected public function suggestion, got: $suggestions", suggestions.contains("shown_box"))
+        assertFalse("Private function from another module leaked into suggestions: $suggestions", suggestions.contains("hidden_box"))
+    }
+
+    @Test
+    fun doesNotSuggestPrivateConstsFromOtherModulesInTypedCompletion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/helpers.ak",
+            """
+            pub type Box {
+              value: Int,
+            }
+
+            const hidden_box_seed: Box = Box { value: 0 }
+            pub const shown_box_seed: Box = Box { value: 1 }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use helpers.{Box}
+
+            fn main() {
+              let value: Box = <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected public const suggestion, got: $suggestions", suggestions.contains("shown_box_seed"))
+        assertFalse("Private const from another module leaked into suggestions: $suggestions", suggestions.contains("hidden_box_seed"))
+    }
+
+    @Test
+    fun stillSuggestsPrivateSameFileTopLevelFunctionsInTypedCompletion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Box {
+              value: Int,
+            }
+
+            fn hidden_box() -> Box {
+              Box { value: 0 }
+            }
+
+            fn main() {
+              let value: Box = <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected same-file private function suggestion, got: $suggestions", suggestions.contains("hidden_box"))
     }
 
     @Test

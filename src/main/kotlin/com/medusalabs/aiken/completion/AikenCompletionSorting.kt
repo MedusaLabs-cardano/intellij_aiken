@@ -38,6 +38,7 @@ internal enum class AikenTypedCompletionCategory {
 
 private data class AikenTypedCompletionRanking(
     val category: AikenTypedCompletionCategory,
+    val scopeDistance: Int,
     val matchDistance: Int
 ) : Comparable<AikenTypedCompletionRanking> {
     private val categoryWeight: Int
@@ -60,7 +61,13 @@ private data class AikenTypedCompletionRanking(
             }
 
     override fun compareTo(other: AikenTypedCompletionRanking): Int =
-        compareValuesBy(this, other, AikenTypedCompletionRanking::categoryWeight, AikenTypedCompletionRanking::matchDistance)
+        compareValuesBy(
+            this,
+            other,
+            AikenTypedCompletionRanking::categoryWeight,
+            AikenTypedCompletionRanking::scopeDistance,
+            AikenTypedCompletionRanking::matchDistance
+        )
 }
 
 internal enum class AikenConstructibleFormCompletionCategory {
@@ -122,6 +129,7 @@ internal object AikenCompletionSorting {
     private val fallbackTypedRanking =
         AikenTypedCompletionRanking(
             category = AikenTypedCompletionCategory.OTHER,
+            scopeDistance = Int.MAX_VALUE,
             matchDistance = Int.MAX_VALUE
         )
     private val fallbackConstructibleFormRanking = AikenConstructibleFormCompletionCategory.OTHER
@@ -145,11 +153,24 @@ internal object AikenCompletionSorting {
     fun annotateTyped(
         lookup: LookupElement,
         category: AikenTypedCompletionCategory,
-        matchDistance: Int = 0
+        matchDistance: Int = 0,
+        scopeDistance: Int = Int.MAX_VALUE
     ): LookupElement {
-        lookup.putUserData(typedRankingKey, AikenTypedCompletionRanking(category, matchDistance))
+        lookup.putUserData(typedRankingKey, AikenTypedCompletionRanking(category, scopeDistance, matchDistance))
         return lookup
     }
+
+    fun annotateTyped(
+        lookup: LookupElement,
+        category: AikenTypedCompletionCategory,
+        matchDistance: Int
+    ): LookupElement =
+        annotateTyped(
+            lookup = lookup,
+            category = category,
+            matchDistance = matchDistance,
+            scopeDistance = Int.MAX_VALUE
+        )
 
     fun withTypedSorter(
         parameters: CompletionParameters,

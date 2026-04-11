@@ -147,4 +147,33 @@ class AikenTypedLookupFactoryTest {
 
         assertEquals(AikenTypedCompletionCategory.QUALIFIED_FUNCTION, category)
     }
+
+    @Test
+    fun rendersGenericFunctionReturnTypeUsingDisplayPlaceholders() {
+        val lookup =
+            AikenTypedLookupFactory.createExpectedTypeLookup(
+                AikenTypedExpectedTypeCandidate.Function(
+                    name = "reduce",
+                    signature = "fn(items: List<a>, zero: b, f: fn(b, a) -> b) -> b",
+                    origin = AikenTypedCandidateOrigin.UNIMPORTED,
+                    modulePath = "collections",
+                    autoImportMode = AikenTypedCandidateAutoImportMode.SYMBOL
+                ),
+                expectedType = "List<Bool>"
+            )
+
+        val presentation = LookupElementPresentation()
+        lookup.renderElement(presentation)
+
+        assertEquals("reduce", presentation.itemText)
+        assertEquals("T", presentation.typeText)
+        assertEquals(" from collections", presentation.tailText)
+    }
+
+    @Test
+    fun normalizesNestedGenericTypeVariablesForDisplay() {
+        assertEquals("List<T>", AikenTypeText.normalizeGenericVariablesForDisplay("List<a>"))
+        assertEquals("Result<List<T>, Option<U>>", AikenTypeText.normalizeGenericVariablesForDisplay("Result<List<a>, Option<b>>"))
+        assertEquals("fn(T, U) -> T", AikenTypeText.normalizeGenericVariablesForDisplay("fn(b, a) -> b"))
+    }
 }

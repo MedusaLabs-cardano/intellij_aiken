@@ -137,7 +137,7 @@ private fun splitTopLevelTypeArguments(text: String): List<String>? {
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
     override fun getName(): ID<String, String> = AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 
-    override fun getVersion(): Int = 5
+    override fun getVersion(): Int = 6
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -158,6 +158,7 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
             val returnTypeEntries = LinkedHashMap<String, MutableList<AikenFunctionReturnTypeEntry>>()
 
             for (entry in AikenFunctionSignatureExtractor.extractEntries(text)) {
+                if (!entry.exported) continue
                 result[aikenFunctionSignatureNameKey(entry.name)] = entry.signature
                 if (!modulePath.isNullOrBlank()) {
                     result[aikenFunctionSignatureModuleKey(modulePath, entry.name)] = entry.signature

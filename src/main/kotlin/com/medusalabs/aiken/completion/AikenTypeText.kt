@@ -84,4 +84,77 @@ internal object AikenTypeText {
         arguments += text.substring(segmentStart).trim()
         return arguments.filter { it.isNotEmpty() }
     }
+
+    fun normalizeGenericVariablesForDisplay(text: String): String {
+        if (text.isBlank()) return text
+
+        val normalized = normalizeWhitespace(text)
+        val genericMapping = LinkedHashMap<String, String>()
+        val builder = StringBuilder(normalized.length)
+        var index = 0
+
+        while (index < normalized.length) {
+            val ch = normalized[index]
+            if (!isIdentifierStart(ch)) {
+                builder.append(ch)
+                index++
+                continue
+            }
+
+            val start = index
+            index++
+            while (index < normalized.length && isIdentifierPart(normalized[index])) {
+                index++
+            }
+
+            val token = normalized.substring(start, index)
+            builder.append(
+                if (shouldRenderAsGenericVariable(normalized, start, index, token)) {
+                    genericMapping.getOrPut(token) { genericPlaceholder(genericMapping.size) }
+                } else {
+                    token
+                }
+            )
+        }
+
+        return builder.toString()
+    }
+
+    private fun shouldRenderAsGenericVariable(
+        text: String,
+        start: Int,
+        endExclusive: Int,
+        token: String
+    ): Boolean {
+        if (token == "fn") return false
+        val firstChar = token.firstOrNull() ?: return false
+        if (!firstChar.isLowerCase()) return false
+
+        val nextIndex = skipWhitespaceForward(text, endExclusive)
+        if (nextIndex < text.length && text[nextIndex] == '.') return false
+
+        return true
+    }
+
+    private fun genericPlaceholder(position: Int): String =
+        when (position) {
+            0 -> "T"
+            1 -> "U"
+            2 -> "V"
+            3 -> "W"
+            4 -> "X"
+            5 -> "Y"
+            6 -> "Z"
+            else -> "T${position + 1}"
+        }
+
+    private fun skipWhitespaceForward(text: String, start: Int): Int {
+        var index = start
+        while (index < text.length && text[index].isWhitespace()) index++
+        return index
+    }
+
+    private fun isIdentifierStart(ch: Char): Boolean = ch == '_' || ch.isLetter()
+
+    private fun isIdentifierPart(ch: Char): Boolean = ch == '_' || ch.isLetterOrDigit()
 }

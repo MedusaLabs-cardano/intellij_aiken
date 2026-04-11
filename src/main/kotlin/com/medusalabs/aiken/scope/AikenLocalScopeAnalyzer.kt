@@ -12,7 +12,8 @@ import com.medusalabs.aiken.lang.AikenFileType
 object AikenLocalScopeAnalyzer {
     data class VisibleBinding(
         val name: String,
-        val declarationOffset: Int
+        val declarationOffset: Int,
+        val scopeDistance: Int
     )
 
     fun findDeclarationOffset(document: Document, name: String, caretOffset: Int): Int? =
@@ -39,6 +40,14 @@ object AikenLocalScopeAnalyzer {
         val text = document.charsSequence
         val bracePairs = collectScopeBracePairs(document, text)
         val candidates = collectScopeCandidates(text, bracePairs)
+        val containingScopes =
+            candidates
+                .asSequence()
+                .map(ScopeCandidate::scope)
+                .filter { scope -> scope.containsOffset(caretOffset) || scope.startOffset == caretOffset }
+                .distinct()
+                .sortedBy { scope -> scope.endOffset - scope.startOffset }
+                .toList()
 
         return candidates
             .asSequence()
@@ -49,8 +58,19 @@ object AikenLocalScopeAnalyzer {
             .groupBy { it.name }
             .values
             .mapNotNull { entries -> entries.maxByOrNull { it.declarationOffset } }
-            .sortedByDescending { it.declarationOffset }
-            .map { candidate -> VisibleBinding(candidate.name, candidate.declarationOffset) }
+            .sortedWith(
+                compareBy<ScopeCandidate>(
+                    { scopeDistanceFor(candidateScope = it.scope, containingScopes = containingScopes) },
+                    { -it.declarationOffset }
+                )
+            )
+            .map { candidate ->
+                VisibleBinding(
+                    name = candidate.name,
+                    declarationOffset = candidate.declarationOffset,
+                    scopeDistance = scopeDistanceFor(candidate.scope, containingScopes)
+                )
+            }
             .toList()
     }
 
@@ -98,6 +118,12 @@ object AikenLocalScopeAnalyzer {
         val matchingDeclaration: ScopeCandidate?,
         val innermostScope: TextRange?
     )
+
+    private fun scopeDistanceFor(
+        candidateScope: TextRange,
+        containingScopes: List<TextRange>
+    ): Int =
+        containingScopes.indexOfFirst { it == candidateScope }.takeIf { it >= 0 } ?: Int.MAX_VALUE
 
     private fun analyze(document: Document, name: String, caretOffset: Int): Analysis {
         val text = document.charsSequence

@@ -11,13 +11,15 @@ object AikenFunctionSignatureExtractor {
 
     data class SignatureEntry(
         val name: String,
-        val signature: String
+        val signature: String,
+        val exported: Boolean
     )
 
     private data class IndexedSignatureEntry(
         val name: String,
         val signature: String,
-        val nameOffset: Int
+        val nameOffset: Int,
+        val exported: Boolean
     )
 
     fun extract(text: CharSequence): Map<String, String> {
@@ -29,7 +31,7 @@ object AikenFunctionSignatureExtractor {
     }
 
     fun extractEntries(text: CharSequence): List<SignatureEntry> {
-        return extractIndexedEntries(text).map { entry -> SignatureEntry(entry.name, entry.signature) }
+        return extractIndexedEntries(text).map { entry -> SignatureEntry(entry.name, entry.signature, entry.exported) }
     }
 
     private fun extractIndexedEntries(text: CharSequence): List<IndexedSignatureEntry> {
@@ -37,15 +39,53 @@ object AikenFunctionSignatureExtractor {
         lexer.start(text)
 
         val result = ArrayList<IndexedSignatureEntry>()
+        var braceDepth = 0
         var expectingFunctionName = false
         var expectingCallableConstName = false
+        var sawPub = false
+        var awaitingDeclarationKeyword = false
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
 
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> braceDepth += 1
+                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
             if (tokenType == AikenTokenTypes.KEYWORD) {
                 val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-                expectingFunctionName = declarationKeywords.contains(word)
-                expectingCallableConstName = word == CONST_KEYWORD
+                when {
+                    braceDepth == 0 && word == "pub" -> {
+                        sawPub = true
+                        awaitingDeclarationKeyword = true
+                        expectingFunctionName = false
+                        expectingCallableConstName = false
+                    }
+                    braceDepth == 0 && declarationKeywords.contains(word) -> {
+                        expectingFunctionName = true
+                        expectingCallableConstName = false
+                        awaitingDeclarationKeyword = false
+                    }
+                    braceDepth == 0 && word == CONST_KEYWORD -> {
+                        expectingCallableConstName = true
+                        expectingFunctionName = false
+                        awaitingDeclarationKeyword = false
+                    }
+                    braceDepth == 0 && sawPub && awaitingDeclarationKeyword && word == "opaque" -> {
+                        expectingFunctionName = false
+                        expectingCallableConstName = false
+                    }
+                    braceDepth == 0 -> {
+                        expectingFunctionName = false
+                        expectingCallableConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
+                    else -> {
+                        expectingFunctionName = false
+                        expectingCallableConstName = false
+                    }
+                }
                 lexer.advance()
                 continue
             }
@@ -59,12 +99,18 @@ object AikenFunctionSignatureExtractor {
                         val name = text.subSequence(nameStart, nameEnd).toString()
                         extractSignature(text, nameStart, nameEnd, lexer)?.let { signature ->
                             if (name.length >= 2) {
-                                result += IndexedSignatureEntry(name, signature, nameStart)
+                                result += IndexedSignatureEntry(name, signature, nameStart, sawPub)
                             }
                         }
                         expectingFunctionName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
                     }
-                    else -> expectingFunctionName = false
+                    else -> {
+                        expectingFunctionName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
                 }
                 lexer.advance()
                 continue
@@ -81,12 +127,18 @@ object AikenFunctionSignatureExtractor {
                         val name = text.subSequence(nameStart, nameEnd).toString()
                         extractCallableConstSignature(text, nameStart, nameEnd)?.let { signature ->
                             if (name.length >= 2) {
-                                result += IndexedSignatureEntry(name, signature, nameStart)
+                                result += IndexedSignatureEntry(name, signature, nameStart, sawPub)
                             }
                         }
                         expectingCallableConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
                     }
-                    else -> expectingCallableConstName = false
+                    else -> {
+                        expectingCallableConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
                 }
                 lexer.advance()
                 continue

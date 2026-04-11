@@ -1,6 +1,8 @@
 package com.medusalabs.aiken.completion
 
 import com.medusalabs.aiken.index.AikenConstructibleFieldEntry
+import java.util.Collections
+import java.util.WeakHashMap
 
 internal enum class AikenTypedCandidateOrigin {
     EXTRA,
@@ -111,3 +113,16 @@ internal sealed interface AikenTypedExpectedTypeCandidate {
             listOf("constructible", source.name, origin.name, modulePath.orEmpty(), name).joinToString(":")
     }
 }
+
+private val typedCandidateScopeDistances =
+    Collections.synchronizedMap(WeakHashMap<AikenTypedExpectedTypeCandidate, Int>())
+
+internal fun <T : AikenTypedExpectedTypeCandidate> T.withScopeDistance(scopeDistance: Int): T {
+    if (scopeDistance != Int.MAX_VALUE) {
+        typedCandidateScopeDistances[this] = scopeDistance
+    }
+    return this
+}
+
+internal fun AikenTypedExpectedTypeCandidate.scopeDistance(): Int =
+    typedCandidateScopeDistances[this] ?: Int.MAX_VALUE

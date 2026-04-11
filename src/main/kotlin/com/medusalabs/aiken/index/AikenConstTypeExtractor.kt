@@ -7,13 +7,15 @@ import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 data class AikenConstTypeEntry(
     val name: String,
     val type: String,
-    val offset: Int
+    val offset: Int,
+    val exported: Boolean
 )
 
 data class AikenConstDeclaration(
     val name: String,
     val offset: Int,
-    val nameEnd: Int
+    val nameEnd: Int,
+    val exported: Boolean
 )
 
 object AikenConstTypeExtractor {
@@ -22,7 +24,7 @@ object AikenConstTypeExtractor {
         for (declaration in extractDeclarations(text)) {
             extractConstType(text, declaration.nameEnd)?.let { constType ->
                 if (declaration.name.isNotBlank()) {
-                    results += AikenConstTypeEntry(declaration.name, normalizeWhitespace(constType), declaration.offset)
+                    results += AikenConstTypeEntry(declaration.name, normalizeWhitespace(constType), declaration.offset, declaration.exported)
                 }
             }
         }
@@ -36,6 +38,8 @@ object AikenConstTypeExtractor {
         val results = ArrayList<AikenConstDeclaration>()
         var braceDepth = 0
         var expectingConstName = false
+        var sawPub = false
+        var awaitingDeclarationKeyword = false
 
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
@@ -60,19 +64,45 @@ object AikenConstTypeExtractor {
                         val nameEnd = lexer.tokenEnd
                         val name = text.subSequence(nameStart, nameEnd).toString()
                         if (name.isNotBlank()) {
-                            results += AikenConstDeclaration(name, nameStart, nameEnd)
+                            results += AikenConstDeclaration(name, nameStart, nameEnd, sawPub)
                         }
                         expectingConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
                         lexer.advance()
                         continue
                     }
-                    else -> expectingConstName = false
+                    else -> {
+                        expectingConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
                 }
             }
 
             if (tokenType == AikenTokenTypes.KEYWORD) {
                 val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-                expectingConstName = braceDepth == 0 && word == "const"
+                when {
+                    braceDepth == 0 && word == "pub" -> {
+                        sawPub = true
+                        awaitingDeclarationKeyword = true
+                        expectingConstName = false
+                    }
+                    braceDepth == 0 && sawPub && awaitingDeclarationKeyword && word == "const" -> {
+                        expectingConstName = true
+                        awaitingDeclarationKeyword = false
+                    }
+                    braceDepth == 0 && word == "const" -> {
+                        expectingConstName = true
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
+                    braceDepth == 0 -> {
+                        expectingConstName = false
+                        sawPub = false
+                        awaitingDeclarationKeyword = false
+                    }
+                }
             }
 
             lexer.advance()

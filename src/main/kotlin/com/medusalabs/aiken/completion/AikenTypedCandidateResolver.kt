@@ -308,7 +308,7 @@ internal object AikenTypedCandidateResolver {
                         origin = AikenTypedCandidateOrigin.LOCAL,
                         source = AikenTypedCandidateSource.BINDING,
                         matchDistance = matchDistance
-                    )
+                    ).withScopeDistance(binding.scopeDistance)
         }
 
         return result
