@@ -129,6 +129,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         result = result,
                         file = file,
                         anchor = anchor,
+                        fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
@@ -207,6 +208,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         result = result,
                         file = file,
                         anchor = anchor,
+                        fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
@@ -240,6 +242,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         result = result,
                         file = file,
                         anchor = anchor,
+                        fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
@@ -361,40 +364,32 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         result: CompletionResultSet,
         file: PsiFile,
         anchor: PsiElement?,
+        fallbackAnchor: PsiElement,
         offset: Int,
         prefix: String,
         stopAfter: Boolean,
         excludedLookups: List<LookupElement>
     ) {
+        val effectiveAnchor = anchor ?: fallbackAnchor
         val semanticVariants =
-            anchor
-                ?.let { variantsForAnchor(it, offset) }
-                .orEmpty()
+            variantsForAnchor(effectiveAnchor, offset)
                 .filterNot { lookup ->
                     excludedLookups.any { lookupCollisionKey(it) == lookupCollisionKey(lookup) }
                 }
         val semanticResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(prefix))
         val unimportedResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(""))
         val unimportedSemanticVariants =
-            anchor
-                ?.let { currentAnchor ->
-                    AikenReferenceVariants.unimportedExportsMatching(
-                        currentAnchor,
-                        nameMatches = { AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix) }
-                    )
-                }
-                .orEmpty()
+            AikenReferenceVariants.unimportedExportsMatching(
+                effectiveAnchor,
+                nameMatches = { AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix) }
+            )
         val unimportedModuleVariants =
             if (prefix.isBlank()) {
                 emptyList()
             } else {
-                anchor
-                    ?.let { currentAnchor ->
-                        AikenReferenceVariants.unimportedModulesMatching(currentAnchor) {
-                            AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix)
-                        }
-                    }
-                    .orEmpty()
+                AikenReferenceVariants.unimportedModulesMatching(effectiveAnchor) {
+                    AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix)
+                }
             }
 
         if (semanticVariants.isEmpty() && unimportedSemanticVariants.isEmpty() && unimportedModuleVariants.isEmpty()) {

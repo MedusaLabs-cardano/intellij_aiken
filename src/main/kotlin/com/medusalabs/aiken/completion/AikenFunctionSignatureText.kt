@@ -12,7 +12,9 @@ internal object AikenFunctionSignatureText {
         parameters(signature).getOrNull(parameterIndex)?.type?.takeIf { it.isNotEmpty() }
 
     fun returnType(signature: String): String? {
-        val closeParenIndex = signature.lastIndexOf(')')
+        val openParenIndex = signature.indexOf('(')
+        if (openParenIndex < 0) return null
+        val closeParenIndex = AikenSyntaxText.findMatchingDelimiter(signature, openParenIndex, '(', ')') ?: return null
         if (closeParenIndex < 0 || closeParenIndex >= signature.lastIndex) return null
         val suffix = signature.substring(closeParenIndex + 1).trim()
         if (!suffix.startsWith("->")) return null

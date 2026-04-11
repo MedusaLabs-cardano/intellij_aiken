@@ -10,21 +10,23 @@ import com.medusalabs.aiken.lang.AikenLanguage
 
 class AikenCompletionContributor : CompletionContributor(), DumbAware {
     init {
+        val inAikenFile = PlatformPatterns.psiElement().inFile(PlatformPatterns.psiFile().withLanguage(AikenLanguage))
+
         extend(
             CompletionType.BASIC,
-            PlatformPatterns.psiElement().withLanguage(AikenLanguage),
+            inAikenFile,
             AikenUseCompletionProvider()
         )
 
         extend(
             CompletionType.BASIC,
-            PlatformPatterns.psiElement().withLanguage(AikenLanguage),
+            inAikenFile,
             AikenSemanticCompletionProvider()
         )
 
         extend(
             CompletionType.BASIC,
-            PlatformPatterns.psiElement().withLanguage(AikenLanguage),
+            inAikenFile,
             KeywordCompletionProvider(
                 keywords = AikenLexing.keywords + setOf("True", "False"),
                 stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING),

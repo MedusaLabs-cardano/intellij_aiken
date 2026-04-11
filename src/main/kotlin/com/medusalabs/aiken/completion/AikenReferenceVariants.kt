@@ -28,6 +28,7 @@ import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.project.AikenProjectRoots
 import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
+import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 
 object AikenReferenceVariants {
     private data class AutoImportedLookupSpec(
@@ -271,6 +272,17 @@ object AikenReferenceVariants {
         val importedTargets = (resolvedTargets + importedChainTargets).toList()
         val importedTargetSet = importedTargets.toCollection(LinkedHashSet())
 
+        for (handler in AikenFunctionSignatureExtractor.extractValidatorHandlerEntries(file.text)) {
+            if (handler.validatorName != qualifierChain || !seen.add(handler.handlerName)) continue
+            variants +=
+                CompletionItemFactory.create(
+                    text = handler.handlerName,
+                    kind = CompletionSymbolKind.FUNCTION,
+                    typeText = "fn",
+                    rankingCategory = AikenOrdinaryCompletionCategory.LOCAL
+                )
+        }
+
         for (modulePath in importedTargets) {
             val canonicalQualifier =
                 canonicalQualifierForImportedModule(
@@ -397,7 +409,7 @@ object AikenReferenceVariants {
         allowBareTypes: Boolean,
         rankingCategory: AikenOrdinaryCompletionCategory
     ) {
-        if (lookupName.isBlank() || lookupName.length < 2 || !seen.add(lookupName)) return
+        if (lookupName.isBlank() || !seen.add(lookupName)) return
         createVariantLookup(anchor, lookupName, symbolName, kind, modulePath, allowBareTypes, rankingCategory)
             ?.let(variants::add)
     }
@@ -414,7 +426,7 @@ object AikenReferenceVariants {
         canonicalQualifier: String,
         needsQualifierRewrite: Boolean
     ) {
-        if (lookupName.isBlank() || lookupName.length < 2 || !seen.add(lookupName)) return
+        if (lookupName.isBlank() || !seen.add(lookupName)) return
         val baseLookup =
             createVariantLookup(
                 anchor = anchor,

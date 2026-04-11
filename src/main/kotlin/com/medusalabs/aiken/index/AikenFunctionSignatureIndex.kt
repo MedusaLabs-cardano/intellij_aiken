@@ -8,6 +8,7 @@ import com.intellij.util.indexing.ID
 import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.EnumeratorStringDescriptor
 import com.intellij.util.io.KeyDescriptor
+import com.medusalabs.aiken.completion.AikenSyntaxText
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
@@ -56,7 +57,9 @@ fun decodeAikenFunctionReturnTypeIndexValues(value: String): List<AikenFunctionR
         }
 
 fun aikenFunctionSignatureReturnType(signature: String): String? {
-    val closeParenIndex = signature.lastIndexOf(')')
+    val openParenIndex = signature.indexOf('(')
+    if (openParenIndex < 0) return null
+    val closeParenIndex = AikenSyntaxText.findMatchingDelimiter(signature, openParenIndex, '(', ')') ?: return null
     if (closeParenIndex < 0 || closeParenIndex >= signature.lastIndex) return null
     val suffix = signature.substring(closeParenIndex + 1).trim()
     if (!suffix.startsWith("->")) return null

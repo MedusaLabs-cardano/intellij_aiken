@@ -5,6 +5,9 @@ import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.TokenType
+import com.medusalabs.aiken.completion.AikenBindingInitializerScanner
+import com.medusalabs.aiken.completion.AikenParameterBindingScanner
+import com.medusalabs.aiken.completion.AikenPatternBindingText
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.lang.AikenFileType
@@ -161,10 +164,6 @@ object AikenLocalScopeAnalyzer {
         val openBraces = ArrayList<Int>()
         var collectingBindings = false
         var bindingPatternStart = -1
-        var collectingParams = false
-        var afterParams = false
-        var parenDepth = 0
-        var pendingParamNames = ArrayList<Pair<Int, String>>()
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
             val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
@@ -184,42 +183,16 @@ object AikenLocalScopeAnalyzer {
                 }
             }
 
-            if (collectingParams) {
-                when (tokenType) {
-                    AikenTokenTypes.LPAREN -> parenDepth += 1
-                    AikenTokenTypes.RPAREN -> {
-                        parenDepth -= 1
-                        if (parenDepth <= 0) {
-                            collectingParams = false
-                            afterParams = true
-                        }
-                    }
-                    AikenTokenTypes.IDENTIFIER,
-                    AikenTokenTypes.FIELD -> pendingParamNames.add(lexer.tokenStart to tokenText)
-                }
-                lexer.advance()
-                continue
-            }
-
-            if (afterParams) {
-                if (tokenType == AikenTokenTypes.LBRACE && bracePairsByStart.containsKey(lexer.tokenStart)) {
-                    val start = lexer.tokenStart
-                    val end = bracePairsByStart[start] ?: text.length
-                    val scope = TextRange(start, end)
-                    for ((offset, paramName) in pendingParamNames) {
-                        candidates.add(ScopeCandidate(paramName, offset, scope))
-                    }
-                    pendingParamNames = ArrayList()
-                    afterParams = false
-                }
-                lexer.advance()
-                continue
-            }
-
             if (collectingBindings) {
+                val bindingOperator =
+                    if (tokenType == AikenTokenTypes.OPERATOR) {
+                        AikenBindingInitializerScanner.bindingOperatorAt(text, lexer.tokenStart)
+                    } else {
+                        null
+                    }
                 when {
                     tokenType == TokenType.WHITE_SPACE || tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.WHITESPACE -> {}
-                    tokenType == AikenTokenTypes.OPERATOR && tokenText == "=" -> {
+                    bindingOperator != null -> {
                         val scope =
                             openBraces.lastOrNull()?.let { start ->
                                 val end = bracePairsByStart[start] ?: text.length
@@ -234,13 +207,19 @@ object AikenLocalScopeAnalyzer {
                         }
                         collectingBindings = false
                         bindingPatternStart = -1
+                        if (bindingOperator == "<-") {
+                            lexer.start(text, (lexer.tokenStart + 2).coerceAtMost(text.length), text.length, 0)
+                            continue
+                        }
                     }
                 }
                 lexer.advance()
                 continue
             }
 
-            if (tokenType == AikenTokenTypes.KEYWORD && (tokenText == "let" || tokenText == "expect")) {
+            if (tokenType == AikenTokenTypes.KEYWORD &&
+                AikenBindingInitializerScanner.startsBindingPattern(text.toString(), tokenText, lexer.tokenEnd)
+            ) {
                 collectingBindings = true
                 bindingPatternStart = lexer.tokenEnd
                 lexer.advance()
@@ -250,30 +229,7 @@ object AikenLocalScopeAnalyzer {
             if (tokenType == AikenTokenTypes.KEYWORD &&
                 (tokenText == "fn" || tokenText == "test" || tokenText == "bench" || tokenText == "validator")
             ) {
-                pendingParamNames = ArrayList()
-                parenDepth = 0
-                collectingParams = false
-                afterParams = false
-
                 lexer.advance()
-                while (lexer.tokenType != null) {
-                    val nestedType = lexer.tokenType
-                    val nestedText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-                    if (nestedType == TokenType.WHITE_SPACE) {
-                        if (nestedText.contains('\n')) break
-                        lexer.advance()
-                        continue
-                    }
-                    if (nestedType == AikenTokenTypes.LPAREN) {
-                        collectingParams = true
-                        parenDepth = 0
-                        break
-                    }
-                    if (nestedType == AikenTokenTypes.LBRACE) {
-                        break
-                    }
-                    lexer.advance()
-                }
                 continue
             }
 
@@ -281,6 +237,14 @@ object AikenLocalScopeAnalyzer {
         }
 
         candidates += collectWhenPatternCandidates(text)
+        candidates +=
+            AikenParameterBindingScanner.collectBindings(text.toString()).map { binding ->
+                ScopeCandidate(
+                    name = binding.name,
+                    declarationOffset = binding.declarationOffset,
+                    scope = binding.scope
+                )
+            }
 
         return candidates
     }
@@ -571,33 +535,10 @@ object AikenLocalScopeAnalyzer {
     ): List<Pair<String, Int>> {
         if (start >= endExclusive || start !in 0..text.length) return emptyList()
         val safeEnd = endExclusive.coerceIn(start, text.length)
-        val patternText = text.subSequence(start, safeEnd).toString()
-        val lexer = AikenLexing.createLexer()
-        lexer.start(patternText)
-        val bindings = ArrayList<Pair<String, Int>>()
-
-        while (lexer.tokenType != null) {
-            val tokenType = lexer.tokenType
-            if (tokenType != AikenTokenTypes.IDENTIFIER && tokenType != AikenTokenTypes.FIELD) {
-                lexer.advance()
-                continue
-            }
-
-            val name = patternText.substring(lexer.tokenStart, lexer.tokenEnd)
-            if (name == "_" || name.isBlank()) {
-                lexer.advance()
-                continue
-            }
-            val nextIndex = skipWhitespaceForward(patternText, lexer.tokenEnd)
-            if (nextIndex < patternText.length && patternText[nextIndex] == ':') {
-                lexer.advance()
-                continue
-            }
-            bindings += name to (start + lexer.tokenStart)
-            lexer.advance()
-        }
-
-        return bindings
+        return AikenPatternBindingText.extractBindings(
+            patternText = text.subSequence(start, safeEnd).toString(),
+            absoluteStartOffset = start
+        )
     }
 
     private fun topLevelBindingPatternEnd(

@@ -382,6 +382,30 @@ class AikenExpressionTypeInferenceTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun infersReturnTypeFromSameFileFunctionReturningOptionOfTuple() {
+        val anchor =
+            configureAnchor(
+                """
+                fn load_value() -> Option<(Int, ByteArray)> {
+                  Some((1, "abc"))
+                }
+
+                fn main() {
+                  lo<caret>
+                }
+                """.trimIndent()
+            )
+
+        val inferredType =
+            AikenTypeDirectedCompletionSupport.inferExpressionType(
+                anchor = anchor,
+                expressionText = "load_value()"
+            )
+
+        assertEquals("Option<(Int, ByteArray)>", inferredType)
+    }
+
+    @Test
     fun infersFunctionTypeFromQualifiedImportedFunctionValue() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(

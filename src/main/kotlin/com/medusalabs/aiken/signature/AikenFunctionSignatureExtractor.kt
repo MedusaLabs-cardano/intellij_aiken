@@ -2,6 +2,7 @@ package com.medusalabs.aiken.signature
 
 import com.intellij.lexer.Lexer
 import com.intellij.psi.TokenType
+import com.medusalabs.aiken.completion.AikenSyntaxText
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 
@@ -13,6 +14,12 @@ object AikenFunctionSignatureExtractor {
         val name: String,
         val signature: String,
         val exported: Boolean
+    )
+
+    data class ValidatorHandlerEntry(
+        val validatorName: String,
+        val handlerName: String,
+        val signature: String
     )
 
     private data class IndexedSignatureEntry(
@@ -32,6 +39,38 @@ object AikenFunctionSignatureExtractor {
 
     fun extractEntries(text: CharSequence): List<SignatureEntry> {
         return extractIndexedEntries(text).map { entry -> SignatureEntry(entry.name, entry.signature, entry.exported) }
+    }
+
+    fun extractValidatorHandlerEntries(text: CharSequence): List<ValidatorHandlerEntry> {
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        val results = ArrayList<ValidatorHandlerEntry>()
+        var braceDepth = 0
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            if (braceDepth == 0 && tokenType == AikenTokenTypes.KEYWORD && tokenText == "validator") {
+                val parsed = extractValidatorHandlers(text, lexer.tokenStart)
+                if (parsed != null) {
+                    results += parsed.entries
+                    lexer.start(text, parsed.resumeOffset.coerceAtMost(text.length), text.length, 0)
+                    braceDepth = 0
+                    continue
+                }
+            }
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> braceDepth += 1
+                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            lexer.advance()
+        }
+
+        return results
     }
 
     private fun extractIndexedEntries(text: CharSequence): List<IndexedSignatureEntry> {
@@ -148,6 +187,80 @@ object AikenFunctionSignatureExtractor {
         }
 
         return result
+    }
+
+    private data class ParsedValidatorHandlers(
+        val entries: List<ValidatorHandlerEntry>,
+        val resumeOffset: Int
+    )
+
+    private fun extractValidatorHandlers(
+        text: CharSequence,
+        validatorKeywordStart: Int
+    ): ParsedValidatorHandlers? {
+        var index = skipWhitespace(text, validatorKeywordStart + "validator".length)
+        if (index >= text.length || !AikenSyntaxText.isIdentifierChar(text[index])) return null
+
+        val validatorNameStart = index
+        while (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) index++
+        val validatorName = text.subSequence(validatorNameStart, index).toString()
+        if (validatorName.isBlank()) return null
+
+        index = skipWhitespace(text, index)
+
+        val validatorParams =
+            if (index < text.length && text[index] == '(') {
+                val closeParen = findMatchingParen(text, index) ?: return null
+                val params = text.subSequence(index, closeParen + 1).toString()
+                index = closeParen + 1
+                params
+            } else {
+                "()"
+            }
+
+        index = skipWhitespace(text, index)
+        if (index >= text.length || text[index] != '{') return null
+
+        val bodyClose = findMatchingBrace(text, index) ?: return null
+        val entries = ArrayList<ValidatorHandlerEntry>()
+        val bodyLexer = AikenLexing.createLexer()
+        bodyLexer.start(text, index + 1, bodyClose, 0)
+        var relativeBraceDepth = 0
+
+        while (bodyLexer.tokenType != null) {
+            val tokenType = bodyLexer.tokenType
+            val tokenStart = bodyLexer.tokenStart
+            val tokenEnd = bodyLexer.tokenEnd
+
+            if (relativeBraceDepth == 0 &&
+                isAtLogicalLineStart(text, tokenStart) &&
+                (tokenType == AikenTokenTypes.IDENTIFIER || tokenType == AikenTokenTypes.FUNCTION)
+            ) {
+                val handlerName = text.subSequence(tokenStart, tokenEnd).toString()
+                var handlerIndex = skipWhitespace(text, tokenEnd)
+                if (handlerIndex < bodyClose && text[handlerIndex] == '(') {
+                    val handlerCloseParen = findMatchingParen(text, handlerIndex)
+                    if (handlerCloseParen != null && handlerCloseParen < bodyClose) {
+                        val handlerParams = text.subSequence(handlerIndex, handlerCloseParen + 1).toString()
+                        entries +=
+                            ValidatorHandlerEntry(
+                                validatorName = validatorName,
+                                handlerName = handlerName,
+                                signature = normalizeWhitespace(handlerName + mergeParameterLists(validatorParams, handlerParams))
+                            )
+                    }
+                }
+            }
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> relativeBraceDepth += 1
+                AikenTokenTypes.RBRACE -> relativeBraceDepth = (relativeBraceDepth - 1).coerceAtLeast(0)
+            }
+
+            bodyLexer.advance()
+        }
+
+        return ParsedValidatorHandlers(entries, bodyClose + 1)
     }
 
     private fun extractSignature(
@@ -335,6 +448,86 @@ object AikenFunctionSignatureExtractor {
         }
 
         return null
+    }
+
+    private fun findMatchingBrace(text: CharSequence, openIndex: Int): Int? {
+        if (openIndex >= text.length || text[openIndex] != '{') return null
+
+        var inString = false
+        var inLineComment = false
+        var depth = 0
+        var i = openIndex
+        while (i < text.length) {
+            val ch = text[i]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                i++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && i + 1 < text.length) {
+                    i += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                i++
+                continue
+            }
+
+            if (ch == '/' && i + 1 < text.length && text[i + 1] == '/') {
+                inLineComment = true
+                i += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                i++
+                continue
+            }
+
+            when (ch) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return i
+                }
+            }
+            i++
+        }
+
+        return null
+    }
+
+    private fun mergeParameterLists(first: String, second: String): String {
+        val firstInner = first.removePrefix("(").removeSuffix(")").trim()
+        val secondInner = second.removePrefix("(").removeSuffix(")").trim()
+        return buildString {
+            append('(')
+            when {
+                firstInner.isNotEmpty() && secondInner.isNotEmpty() -> {
+                    append(firstInner)
+                    append(", ")
+                    append(secondInner)
+                }
+                firstInner.isNotEmpty() -> append(firstInner)
+                secondInner.isNotEmpty() -> append(secondInner)
+            }
+            append(')')
+        }
+    }
+
+    private fun isAtLogicalLineStart(text: CharSequence, offset: Int): Boolean {
+        var index = offset - 1
+        while (index >= 0) {
+            val ch = text[index]
+            if (ch == '\n' || ch == '\r') return true
+            if (ch != ' ' && ch != '\t') return false
+            index--
+        }
+        return true
     }
 
     private fun normalizeWhitespace(text: String): String {

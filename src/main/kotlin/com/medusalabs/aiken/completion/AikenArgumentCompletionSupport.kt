@@ -83,10 +83,21 @@ object AikenArgumentCompletionSupport {
 
     private fun collectSignatures(anchor: PsiElement, fileText: String, call: CallContext): Set<String> {
         val sameFileSignatures = AikenFunctionSignatureExtractor.extract(fileText)
+        val sameFileValidatorHandlerSignatures =
+            AikenFunctionSignatureExtractor.extractValidatorHandlerEntries(fileText)
+                .asSequence()
+                .filter { entry ->
+                    entry.validatorName == call.qualifier &&
+                        entry.handlerName == call.calleeName
+                }
+                .map { it.signature }
+                .toSet()
         val file = anchor.containingFile ?: return emptySet()
         val scope = AikenSearchScopes.forElement(anchor)
         val index = FileBasedIndex.getInstance()
         val currentModulePath = AikenModulePath.fromFile(file.virtualFile)
+
+        if (sameFileValidatorHandlerSignatures.isNotEmpty()) return sameFileValidatorHandlerSignatures
 
         if (call.qualifier == null) {
             val currentModuleIndexed =

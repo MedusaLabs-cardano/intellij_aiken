@@ -26,6 +26,24 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsSingleCharacterLocalBindingInOrdinaryCompletion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main() {
+              let a = 1
+              <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a"))
+    }
+
+    @Test
     fun suggestsImportedAliasesForSingleCharacterPrefix() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -54,6 +72,44 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         val suggestions = completionVariants()
 
         assertTrue(suggestions.toString(), suggestions.contains("sum"))
+    }
+
+    @Test
+    fun suggestsModuleAndItemAliasesFromMixedImportForm() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/aiken/collection/list.ak",
+            """
+            pub fn count(items: List<a>) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/collection/list.{count as my_count} as native_list
+
+            fn main() {
+              native_<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("native_list", "native_list")
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/collection/list.{count as my_count} as native_list
+
+            fn main() {
+              my_<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("my_count", "my_count")
     }
 
     @Test
@@ -1407,6 +1463,399 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsBindingsFromDestructuredFunctionHeadParametersInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              Foo {
+                a1: Int,
+                a2: ByteArray,
+              }
+            }
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            fn main(Foo { a1, .. }: Foo) -> Int {
+              consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a1"))
+    }
+
+    @Test
+    fun suggestsBindingsFromDestructuredLambdaHeadParametersInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              Foo {
+                a1: Int,
+                a2: ByteArray,
+              }
+            }
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            fn apply(value: Foo, mapper: fn(Foo) -> Int) -> Int {
+              mapper(value)
+            }
+
+            fn main(value: Foo) -> Int {
+              apply(value, fn(Foo { a1, .. }) { consume_int(<caret>) })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a1"))
+    }
+
+    @Test
+    fun suggestsBindingsFromViaFuzzerTestParametersInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/fuzz.ak",
+            """
+            pub fn int() -> Fuzzer<Int> {
+              todo
+            }
+
+            pub fn bytearray() -> Fuzzer<ByteArray> {
+              todo
+            }
+
+            pub fn both(left: Fuzzer<Int>, right: Fuzzer<ByteArray>) -> Fuzzer<(Int, ByteArray)> {
+              todo
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use fuzz
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            test example_5((a, b) via fuzz.both(fuzz.int(), fuzz.bytearray())) {
+              consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a"))
+        assertFalse(suggestions.toString(), suggestions.contains("b"))
+    }
+
+    @Test
+    fun suggestsBindingsFromDestructuredValidatorHeadParametersInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              Foo {
+                a0: Int,
+                a1: ByteArray,
+              }
+            }
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            validator foo_3(Foo { a0, .. }: Foo) {
+              mint(_redeemer: Data, _policy_id: PolicyId, _self: Transaction) {
+                consume_int(<caret>)
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a0"))
+    }
+
+    @Test
+    fun suggestsLambdaParameterInsideBareExpectAssertion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/collection/list
+            use cardano/transaction.{Input}
+
+            fn consume_input(value: Input) -> Bool {
+              True
+            }
+
+            fn main(inputs: List<Input>) -> Bool {
+              expect list.any(inputs, fn(input) {
+                consume_input(<caret>)
+              })
+
+              True
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("input"))
+    }
+
+    @Test
+    fun doesNotLeakBindingsAfterBareExpectAssertion() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/list.ak",
+            """
+            pub fn any(values: List<Int>, predicate: fn(Int) -> Bool) -> Bool {
+              True
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use list
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            fn main(values: List<Int>) -> Int {
+              expect list.any(values, fn(value) { value > 0 })
+
+              let answer = 1
+              consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("answer"))
+        assertFalse("Bare expect lambda binding leaked into outer scope: $suggestions", suggestions.contains("value"))
+    }
+
+    @Test
+    fun suggestsOrdinaryCompletionOnRightHandSideOfMonadicLetBind() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            test example_0() {
+              let roll <- make_<caret>
+              True
+            }
+
+            fn make_roll() -> Fuzzer<Int> {
+              todo
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("make_roll", "let roll <- make_roll")
+    }
+
+    @Test
+    fun suggestsBoundNameAfterMonadicLetBindInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/fuzz.ak",
+            """
+            pub fn byte() -> Fuzzer<Int> {
+              todo
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use fuzz
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            test example_1() {
+              let roll <- fuzz.byte()
+              consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("roll"))
+    }
+
+    @Test
+    fun suggestsTupleBindingsAfterMonadicLetBindInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/fuzz.ak",
+            """
+            pub fn int() -> Fuzzer<Int> {
+              todo
+            }
+
+            pub fn bytearray() -> Fuzzer<ByteArray> {
+              todo
+            }
+
+            pub fn both(left: Fuzzer<Int>, right: Fuzzer<ByteArray>) -> Fuzzer<(Int, ByteArray)> {
+              todo
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use fuzz
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            test example_2() {
+              let a, b <- fuzz.both(fuzz.int(), fuzz.bytearray())
+              consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a"))
+        assertFalse("Expected tuple-style monadic bind to preserve element types: $suggestions", suggestions.contains("b"))
+    }
+
+    @Test
+    fun suggestsDestructuredAndCapturedBindingsFromRecordAsPatternInExpect() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              Foo {
+                a0: Int,
+                a1: Int,
+              }
+            }
+
+            fn load_foo() -> Foo {
+              Foo { a0: 1, a1: 2 }
+            }
+
+            fn consume_int(value: Int) -> Int {
+              value
+            }
+
+            fn main() {
+              expect Foo { a0, a1 } as foo = load_foo()
+              let q = consume_int(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a0"))
+        assertTrue(suggestions.toString(), suggestions.contains("a1"))
+        assertFalse(suggestions.toString(), suggestions.contains("foo"))
+    }
+
+    @Test
+    fun suggestsCapturedBindingFromListAsPatternInWhenArm() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MaybeInt {
+              Some(Int)
+              None
+            }
+
+            fn load_values() -> List<MaybeInt> {
+              [Some(1)]
+            }
+
+            fn consume_maybe(value: MaybeInt) -> Int {
+              0
+            }
+
+            fn main() {
+              when load_values() is {
+                [Some(_) as result, ..] -> {
+                  let q = consume_maybe(<caret>)
+                  q
+                }
+                _ -> 0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("result"))
+    }
+
+    @Test
+    fun suggestsDestructuredAndCapturedBindingsFromConstructorAsPatternInWhenArm() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type PairBox {
+              PairBox(Int, Int)
+            }
+
+            fn load_pair() -> PairBox {
+              PairBox(1, 2)
+            }
+
+            fn consume_pair(value: PairBox) -> Int {
+              0
+            }
+
+            fn main() {
+              when load_pair() is {
+                PairBox(x1, _) as e -> {
+                  let q = consume_pair(<caret>)
+                  q
+                }
+                _ -> 0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("e"))
+        assertFalse(suggestions.toString(), suggestions.contains("x1"))
+    }
+
+    @Test
     fun suggestsBindingsFromWhenPatternInTypedArguments() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -1472,6 +1921,104 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
 
         assertTrue(suggestions.toString(), suggestions.contains("right"))
         assertFalse(suggestions.toString(), suggestions.contains("left"))
+    }
+
+    @Test
+    fun suggestsListSpreadBindingsFromWhenPatternInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn load_values() -> List<Int> {
+              [1, 2, 3]
+            }
+
+            fn consume_list(values: List<Int>) -> Int {
+              0
+            }
+
+            fn main() {
+              when load_values() is {
+                [head, ..tail] -> {
+                  let q = consume_list(<caret>)
+                  q
+                }
+                _ -> 0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("tail"))
+        assertFalse(suggestions.toString(), suggestions.contains("head"))
+    }
+
+    @Test
+    fun suggestsTupleBindingsNestedInsideWhenPatternInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn load_value() -> Option<(Int, ByteArray)> {
+              Some((1, "abc"))
+            }
+
+            fn consume_bytes(value: ByteArray) -> Int {
+              0
+            }
+
+            fn main() {
+              when load_value() is {
+                Some((s1, a)) -> {
+                  let q = consume_bytes(<caret>)
+                  q
+                }
+                _ -> 0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("a"))
+        assertFalse(suggestions.toString(), suggestions.contains("s1"))
+    }
+
+    @Test
+    fun suggestsNamedRecordBindingsNestedInsideWhenPatternInTypedArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type VoteAction {
+              CreateVoteBatch { id: ByteArray, count: Int }
+            }
+
+            fn load_action() -> VoteAction {
+              CreateVoteBatch { id: "abc", count: 1 }
+            }
+
+            fn consume_bytes(value: ByteArray) -> Int {
+              0
+            }
+
+            fn main() {
+              when load_action() is {
+                CreateVoteBatch { id } -> {
+                  let q = consume_bytes(<caret>)
+                  q
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("id"))
     }
 
     @Test
@@ -1987,6 +2534,50 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun narrowsVisibleBindingTypeInsideSoftCastIfThenBranch() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main(value: Data) -> Int {
+              if value is ByteArray {
+                let narrowed: ByteArray = <caret>
+                0
+              } else {
+                0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected narrowed soft-cast binding, got: $suggestions", suggestions.contains("value"))
+    }
+
+    @Test
+    fun doesNotNarrowVisibleBindingTypeInsideSoftCastIfElseBranch() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main(value: Data) -> Int {
+              if value is ByteArray {
+                0
+              } else {
+                let narrowed: ByteArray = <caret>
+                0
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertFalse("Unexpected else-branch soft-cast narrowing: $suggestions", suggestions.contains("value"))
+    }
+
+    @Test
     fun completesCallableLocalBindingInCallPosition() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -2086,6 +2677,309 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         myFixture.editor.caretModel.moveToOffset(myFixture.file.text.indexOf("math_utils.a") + "math_utils.a".length)
 
         assertCompletionContainsOrAutoInserted("add", "math_utils.add")
+    }
+
+    @Test
+    fun suggestsQualifiedMembersThroughMixedImportModuleAlias() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/aiken/collection/list.ak",
+            """
+            pub fn count(items: List<a>) -> Int {
+              0
+            }
+
+            pub fn map(items: List<a>, with: fn(a) -> b) -> List<b> {
+              []
+            }
+            """.trimIndent()
+        )
+        val mainFile =
+            myFixture.addFileToProject(
+                "lib/main.ak",
+                """
+                use aiken/collection/list.{count as my_count} as native_list
+
+                fn main() {
+                  native_list.co
+                }
+                """.trimIndent()
+            )
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+        myFixture.editor.caretModel.moveToOffset(
+            myFixture.file.text.indexOf("native_list.co") + "native_list.co".length
+        )
+
+        assertCompletionContainsOrAutoInserted("count", "native_list.count")
+    }
+
+    @Test
+    fun suggestsQualifiedTypesThroughMixedImportModuleAliasInTypePosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/transaction.ak",
+            """
+            pub type OutputReference {
+              OutputReference
+            }
+
+            pub type Input {
+              output_reference: OutputReference,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+            """.trimIndent()
+        )
+        val mainFile =
+            myFixture.addFileToProject(
+                "lib/main.ak",
+                """
+                use cardano/transaction.{Input, OutputReference, Transaction} as tx
+
+                fn main(value: tx.Tr) {
+                  value
+                }
+                """.trimIndent()
+            )
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+        myFixture.editor.caretModel.moveToOffset(
+            myFixture.file.text.indexOf("tx.Tr") + "tx.Tr".length
+        )
+
+        assertCompletionContainsOrAutoInserted("Transaction", "fn main(value: tx.Transaction)")
+    }
+
+    @Test
+    fun suggestsConstructorAliasImportInValuePosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/address.ak",
+            """
+            pub type Credential {
+              VerificationKey(ByteArray)
+              Script(ByteArray)
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/address.{VerificationKey as VerificationKeyConstructor}
+
+            fn main() {
+              let credential = VerificationKeyC<caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        if (!suggestions.contains("VerificationKeyConstructor")) {
+            val fileText = myFixture.file.text
+            assertTrue(fileText, fileText.contains("VerificationKeyConstructor"))
+            return
+        }
+
+        assertTrue(suggestions.toString(), suggestions.contains("VerificationKeyConstructor"))
+    }
+
+    @Test
+    fun suggestsConstructorAliasImportInPatternPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/address.ak",
+            """
+            pub type Credential {
+              VerificationKey(ByteArray)
+              Script(ByteArray)
+            }
+
+            pub type Address {
+              payment_credential: Credential,
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/address.{Address, VerificationKey as VerificationKeyConstructor}
+
+            fn main(address: Address) {
+              when address.payment_credential is {
+                VerificationKeyC<caret>(thing) -> thing
+                _ -> ""
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        if (!suggestions.contains("VerificationKeyConstructor")) {
+            val fileText = myFixture.file.text
+            assertTrue(fileText, fileText.contains("VerificationKeyConstructor"))
+            return
+        }
+
+        assertTrue(suggestions.toString(), suggestions.contains("VerificationKeyConstructor"))
+    }
+
+    @Test
+    fun suggestsValidatorHandlerNamesForValidatorNamespaceQualifier() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            validator foo_3 {
+              mint(redeemer: Int, policy_id: ByteArray, self: ByteArray) {
+                True
+              }
+
+              else(_) {
+                fail
+              }
+            }
+
+            fn main() {
+              foo_3.mi<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("mint", "foo_3.mint")
+    }
+
+    @Test
+    fun suggestsTypedArgumentsForValidatorNamespaceCallFromCombinedValidatorAndHandlerSignature() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type OutputReference {
+              OutputReference
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+
+            validator simple_oneshot(utxo_ref: OutputReference) {
+              mint(_redeemer: Int, _policy_id: ByteArray, self: Transaction) {
+                True
+              }
+            }
+
+            fn main(utxo: OutputReference, tx: Transaction) {
+              simple_oneshot.mint(<caret>, 0, "", tx)
+            }
+            """.trimIndent()
+        )
+
+        val firstArgSuggestions = completionVariants()
+
+        assertTrue(firstArgSuggestions.toString(), firstArgSuggestions.contains("utxo"))
+        assertFalse(firstArgSuggestions.toString(), firstArgSuggestions.contains("tx"))
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type OutputReference {
+              OutputReference
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+
+            validator simple_oneshot(utxo_ref: OutputReference) {
+              mint(_redeemer: Int, _policy_id: ByteArray, self: Transaction) {
+                True
+              }
+            }
+
+            fn main(utxo: OutputReference, tx: Transaction) {
+              simple_oneshot.mint(utxo, 0, "", <caret>)
+            }
+            """.trimIndent()
+        )
+
+        val lastArgSuggestions = completionVariants()
+
+        assertTrue(lastArgSuggestions.toString(), lastArgSuggestions.contains("tx"))
+        assertFalse(lastArgSuggestions.toString(), lastArgSuggestions.contains("utxo"))
+    }
+
+    @Test
+    fun keepsRecordFieldValueCompletionWorkingWhenSiblingFieldUsesHoleSyntax() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              i: Int,
+              b: Bool,
+            }
+
+            fn main() {
+              let builder = Foo { i: _, b: Tr<caret> }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("True"))
+        assertFalse(suggestions.toString(), suggestions.contains("0"))
+    }
+
+    @Test
+    fun keepsPositionalConstructorArgumentCompletionWorkingAfterHoleSyntax() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              Foo(Int, Bool)
+            }
+
+            fn main() {
+              let builder = Foo(_, Tr<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("True"))
+        assertFalse(suggestions.toString(), suggestions.contains("0"))
+    }
+
+    @Test
+    fun suggestsCallableConstBuiltFromHoleConstructorByAnnotatedFunctionType() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Foo {
+              i: Int,
+              b: Bool,
+            }
+
+            const give_i: fn(Int) -> Foo = Foo { i: _, b: True }
+
+            fn apply(builder: fn(Int) -> Foo) -> Foo {
+              builder(1)
+            }
+
+            fn main() -> Foo {
+              apply(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("give_i"))
     }
 
     @Test

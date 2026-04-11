@@ -53,11 +53,15 @@ class IdentifierCompletionProvider(
             }
 
             if (collectingBindings) {
+                val tokenText = text.substring(lexer.tokenStart, lexer.tokenEnd)
+                val isMonadicBindOperator =
+                    tokenText == "<" && lexer.tokenStart + 1 < text.length && text[lexer.tokenStart + 1] == '-'
                 when {
                     tokenType == TokenType.WHITE_SPACE -> {}
-                    text.substring(lexer.tokenStart, lexer.tokenEnd) == "=" -> collectingBindings = false
+                    tokenText == "=" -> collectingBindings = false
+                    isMonadicBindOperator -> collectingBindings = false
                     tokenType != null && kindByTokenType[tokenType] == CompletionSymbolKind.IDENTIFIER -> {
-                        val word = text.substring(lexer.tokenStart, lexer.tokenEnd)
+                        val word = tokenText
                         if (word.length >= 2 && seen.add(word) && prefixMatcher.prefixMatches(word)) {
                             result.addElement(
                                 CompletionItemFactory.create(
@@ -69,7 +73,11 @@ class IdentifierCompletionProvider(
                         }
                     }
                 }
-                lexer.advance()
+                if (isMonadicBindOperator) {
+                    lexer.start(text, (lexer.tokenStart + 2).coerceAtMost(text.length), text.length, 0)
+                } else {
+                    lexer.advance()
+                }
                 continue
             }
 
