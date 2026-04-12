@@ -57,7 +57,7 @@ internal object CompletionItemFactory {
                 .withTypeText(typeText, true)
                 .withBoldness(kind == CompletionSymbolKind.KEYWORD)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
                 }
 
         val lookup =

@@ -3,7 +3,6 @@ package com.medusalabs.aiken.completion
 import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.medusalabs.aiken.AikenPlatformTestCase
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
-import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AikenReferenceCompletionTest : AikenPlatformTestCase() {
@@ -300,6 +299,50 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
 
         assertFalse(suggestions.toString(), suggestions.contains("{}"))
         assertFalse(suggestions.toString(), suggestions.contains("()"))
+    }
+
+    @Test
+    fun ignoresCompletionInsideMalformedCallableReturnConstructibleBlock() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              output: Output,
+              output_reference: OutputReference,
+            }
+
+            pub type Output {
+              value: Int,
+            }
+
+            pub type OutputReference {
+              OutputReference
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use models.{Input, Output}
+
+            fn foo(
+              bar: Input,
+              Input { output: Output { value, .. }, output_reference },
+            ) -> Output{<caret>}{
+              let b = True
+              foo(bar)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Malformed callable return constructible gap should suppress completion, got: $suggestions", suggestions.isEmpty())
     }
 
     @Test

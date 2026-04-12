@@ -878,7 +878,7 @@ object AikenReferenceVariants {
                 .withTypeText("module", true)
                 .withTailText(" from $modulePath", true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
                     val replacementText = "$canonicalQualifier."
                     val insertedOffset = replaceCurrentQualifiedPrefix(insertionContext, replacementText)
                     if (imported) {
@@ -959,7 +959,7 @@ object AikenReferenceVariants {
                 .withTypeText(spec.typeText, true)
                 .withTailText(spec.tailText, true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
         return AikenCompletionSorting.annotate(
@@ -1102,7 +1102,7 @@ object AikenReferenceVariants {
     }
 
     private fun insertStandaloneUseImport(
-        document: com.intellij.openapi.editor.Document,
+        document: Document,
         modulePath: String,
         symbolName: String
     ) {
@@ -1111,7 +1111,7 @@ object AikenReferenceVariants {
 
     private fun insertStandaloneModuleUseImport(
         currentText: String,
-        document: com.intellij.openapi.editor.Document,
+        document: Document,
         modulePath: String
     ) {
         val alreadyImported =

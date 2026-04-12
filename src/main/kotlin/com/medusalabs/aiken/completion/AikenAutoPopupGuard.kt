@@ -13,8 +13,7 @@ internal object AikenAutoPopupGuard {
     private val suppressedExactPrefixKey = Key.create<String>("aiken.autopopup.suppressed.exact.prefix")
 
     fun cancelPendingRequests(
-        project: Project,
-        editor: Editor
+        project: Project
     ) {
         AutoPopupController.getInstance(project).cancelAllRequests()
     }
@@ -33,7 +32,7 @@ internal object AikenAutoPopupGuard {
             }
         if (!hasExactMatch) return false
 
-        cancelPendingRequests(project, editor)
+        cancelPendingRequests(project)
         hideActiveLookupNow(project, editor)
         return true
     }
@@ -81,7 +80,7 @@ internal object AikenAutoPopupGuard {
         if (!matches) return false
 
         editor.putUserData(suppressedExactPrefixKey, prefix)
-        cancelPendingRequests(project, editor)
+        cancelPendingRequests(project)
         hideActiveLookupNow(project, editor)
         return true
     }

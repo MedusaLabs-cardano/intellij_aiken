@@ -32,6 +32,11 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         val prefix = resolution.prefix
         val text = file.text
 
+        if (AikenCompletionContexts.isInsideMalformedCallableReturnConstructibleContext(text, offset)) {
+            result.stopHere()
+            return
+        }
+
         val constructibleInvocationSuggestions =
             if (resolution.policy.typeOnlySuggestions) {
                 emptyList()
@@ -315,17 +320,6 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             AikenCompletionScenario.UseModule,
             AikenCompletionScenario.UseSymbol,
             AikenCompletionScenario.TypeReference -> return
-        }
-    }
-
-    private fun addSupplementalSuggestions(
-        result: CompletionResultSet,
-        suggestions: List<LookupElement>
-    ) {
-        if (suggestions.isEmpty()) return
-        val specialResult = result.withPrefixMatcher("")
-        for (lookupElement in suggestions) {
-            specialResult.addElement(lookupElement)
         }
     }
 

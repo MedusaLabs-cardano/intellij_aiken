@@ -73,7 +73,7 @@ object AikenConstructibleCompletionSupport {
             if (pending != null && pending.caretOffset == offset) {
                 pending.constructible
             } else {
-                if (pending != null && pending.caretOffset != offset) {
+                if (pending != null) {
                     editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
                 }
                 detectConstructibleAtCaret(anchor, offset)
@@ -83,9 +83,9 @@ object AikenConstructibleCompletionSupport {
 
         val result = ArrayList<LookupElement>(2)
         if (pendingInfo.supportsNamedSyntax) {
-            result += createNamedFormLookup(pendingInfo)
+            result += createNamedFormLookup()
         }
-        result += createPositionalFormLookup(pendingInfo)
+        result += createPositionalFormLookup()
         return result
     }
 
@@ -132,7 +132,6 @@ object AikenConstructibleCompletionSupport {
     }
 
     private fun createNamedFormLookup(
-        constructible: AikenConstructibleCompletionInfo
     ): LookupElement =
         createLookup(
             ConstructibleLookupSpec(
@@ -145,7 +144,6 @@ object AikenConstructibleCompletionSupport {
         )
 
     private fun createPositionalFormLookup(
-        constructible: AikenConstructibleCompletionInfo
     ): LookupElement =
         createLookup(
             ConstructibleLookupSpec(
@@ -164,7 +162,7 @@ object AikenConstructibleCompletionSupport {
                 .withIcon(spec.icon)
                 .withTypeText(spec.typeText, true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
 
@@ -210,7 +208,6 @@ object AikenConstructibleCompletionSupport {
                         previousLaterRunnable?.run()
                         WriteCommandAction.runWriteCommandAction(insertionContext.project) {
                             insertStandaloneUseImport(
-                                insertionContext.document.charsSequence.toString(),
                                 insertionContext.document,
                                 insertionFamily.autoImportTarget.modulePath,
                                 insertionFamily.autoImportTarget.symbolName
@@ -440,7 +437,6 @@ object AikenConstructibleCompletionSupport {
     }
 
     private fun insertStandaloneUseImport(
-        currentText: String,
         document: com.intellij.openapi.editor.Document,
         modulePath: String,
         symbolName: String

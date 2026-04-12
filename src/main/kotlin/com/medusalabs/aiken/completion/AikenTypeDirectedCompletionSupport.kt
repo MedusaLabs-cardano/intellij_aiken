@@ -21,7 +21,6 @@ import com.medusalabs.aiken.index.AikenConstructibleEntry
 import com.medusalabs.aiken.index.AikenConstructibleExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.aikenConstructibleResultTypeKey
-import com.medusalabs.aiken.index.aikenFunctionSignatureReturnTypeKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureReturnType
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey
@@ -781,8 +780,7 @@ object AikenTypeDirectedCompletionSupport {
             text = text,
             declarationOffset = declarationOffset,
             bindingName = bindingName,
-            anchor = anchor,
-            visitedDeclarationOffsets = visitedDeclarationOffsets
+            anchor = anchor
         )?.let { return it }
         AikenBindingAnnotationScanner.declaredTypeAt(text, declarationOffset, bindingName)?.let { return it }
 
@@ -876,8 +874,7 @@ object AikenTypeDirectedCompletionSupport {
         text: String,
         declarationOffset: Int,
         bindingName: String,
-        anchor: PsiElement,
-        visitedDeclarationOffsets: MutableSet<Int>
+        anchor: PsiElement
     ): String? {
         val context = AikenParameterBindingScanner.findBindingContext(text, declarationOffset, bindingName) ?: return null
         val parameterType =
@@ -893,7 +890,7 @@ object AikenTypeDirectedCompletionSupport {
                         )
                     }
                     ?.let(::unwrapFuzzerType)
-                ?: inferParameterPatternRootType(anchor, context.patternText, visitedDeclarationOffsets)
+                ?: inferParameterPatternRootType(anchor, context.patternText)
                 ?: return null
         return inferPatternBindingType(
             patternText = context.patternText,
@@ -905,8 +902,7 @@ object AikenTypeDirectedCompletionSupport {
 
     private fun inferParameterPatternRootType(
         anchor: PsiElement,
-        patternText: String,
-        visitedDeclarationOffsets: MutableSet<Int>
+        patternText: String
     ): String? {
         val constructorName =
             AikenPatternBindingText.topLevelConstructorName(patternText)
@@ -1906,20 +1902,6 @@ object AikenTypeDirectedCompletionSupport {
     }
 
     private fun inferListElementTypeFromSegment(
-        segmentText: String,
-        anchor: PsiElement,
-        declarationOffset: Int,
-        visitedDeclarationOffsets: MutableSet<Int>
-    ): String? {
-        return inferListElementTypeFromSegment(
-            segment = AikenCurrentExpressionSegment(segmentText),
-            anchor = anchor,
-            declarationOffset = declarationOffset,
-            visitedDeclarationOffsets = visitedDeclarationOffsets
-        )
-    }
-
-    private fun inferListElementTypeFromSegment(
         segment: AikenCurrentExpressionSegment,
         anchor: PsiElement,
         declarationOffset: Int,
@@ -1995,7 +1977,7 @@ object AikenTypeDirectedCompletionSupport {
                 ) {
                     val subject = text.substring(context.subjectStart, context.subjectEnd).trim()
                     if (subject == symbolText &&
-                        (bestMatch == null || context.thenOpenBrace >= bestMatch!!.thenOpenBrace)
+                        (bestMatch == null || context.thenOpenBrace >= bestMatch.thenOpenBrace)
                     ) {
                         bestMatch = context
                     }

@@ -140,6 +140,65 @@ object AikenCompletionContexts {
         return false
     }
 
+    fun isInsideMalformedCallableReturnConstructibleContext(
+        text: String,
+        offset: Int
+    ): Boolean {
+        if (text.isEmpty()) return false
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        var braceDepth = 0
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            if (braceDepth == 0 &&
+                tokenType == AikenTokenTypes.KEYWORD &&
+                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
+            ) {
+                val callable =
+                    parseCallableReturnTypeRegion(
+                        text = text,
+                        declarationKeywordStart = lexer.tokenStart,
+                        declarationKeyword = tokenText
+                    )
+                if (callable != null) {
+                    val malformedOpen = callable.returnTypeEndExclusive
+                    if (malformedOpen != null &&
+                        malformedOpen < text.length &&
+                        text[malformedOpen] == '{'
+                    ) {
+                        val malformedClose = AikenSyntaxText.findMatchingDelimiter(text, malformedOpen, '{', '}')
+                        if (malformedClose != null) {
+                            val nextTokenOffset = skipWhitespaceForward(text, malformedClose + 1)
+                            if (nextTokenOffset < text.length &&
+                                text[nextTokenOffset] == '{' &&
+                                safeOffset in (malformedOpen + 1)..malformedClose
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                    lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
+                    braceDepth = 0
+                    continue
+                }
+            }
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> braceDepth += 1
+                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            lexer.advance()
+        }
+
+        return false
+    }
+
     private data class ParsedCallableHeaderRegions(
         val paramsOpen: Int,
         val paramsClose: Int,

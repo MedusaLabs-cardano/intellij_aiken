@@ -29,168 +29,6 @@ internal object AikenTypedLookupFactory {
         val bold: Boolean = false
     )
 
-    fun createListLiteralLookup(expectedType: String): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = "[]",
-                kind = CompletionSymbolKind.TYPE,
-                typeText = expectedType,
-                insertionFamily = AikenTypedInsertionFamily.ListLiteral,
-                rankingCategory = AikenTypedCompletionCategory.LIST_LITERAL
-            )
-        )
-
-    fun createOptionSomeLookup(expectedType: String): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = "Some()",
-                kind = CompletionSymbolKind.TYPE,
-                typeText = expectedType,
-                insertionFamily = AikenTypedInsertionFamily.OptionSome,
-                rankingCategory = AikenTypedCompletionCategory.OPTION_SOME
-            )
-        )
-
-    fun createAutoImportedFunctionLookup(
-        name: String,
-        modulePath: String,
-        signature: String,
-        expectedType: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = name,
-                kind = CompletionSymbolKind.FUNCTION,
-                typeText = functionPresentationType(signature, expectedType),
-                insertionFamily =
-                    AikenTypedInsertionFamily.FunctionCall(
-                        name = name,
-                        signature = signature,
-                        autoImportTarget = AikenTypedAutoImportTarget(modulePath, name)
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.UNIMPORTED_FUNCTION,
-                tailText = " from $modulePath"
-            )
-        )
-
-    fun createAutoImportedPipeFunctionLookup(
-        name: String,
-        modulePath: String,
-        signature: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = name,
-                kind = CompletionSymbolKind.FUNCTION,
-                typeText = functionPresentationType(signature),
-                insertionFamily =
-                    AikenTypedInsertionFamily.PipeCall(
-                        lookupText = name,
-                        signature = signature,
-                        autoImportTarget = AikenTypedAutoImportTarget(modulePath, name)
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.UNIMPORTED_FUNCTION,
-                tailText = " from $modulePath"
-            )
-        )
-
-    fun createFunctionLookup(
-        name: String,
-        signature: String,
-        expectedType: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = name,
-                kind = CompletionSymbolKind.FUNCTION,
-                typeText = functionPresentationType(signature, expectedType),
-                insertionFamily =
-                    AikenTypedInsertionFamily.FunctionCall(
-                        name = name,
-                        signature = signature
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.LOCAL_FUNCTION
-            )
-        )
-
-    fun createVisiblePipeFunctionLookup(
-        lookupText: String,
-        signature: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = lookupText,
-                kind = CompletionSymbolKind.FUNCTION,
-                typeText = functionPresentationType(signature),
-                insertionFamily =
-                    AikenTypedInsertionFamily.PipeCall(
-                        lookupText = lookupText,
-                        signature = signature
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.LOCAL_FUNCTION
-            )
-        )
-
-    fun createQualifiedPipeVisibleFunctionLookup(
-        lookupText: String,
-        matchingName: String,
-        signature: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = lookupText,
-                kind = CompletionSymbolKind.FUNCTION,
-                typeText = functionPresentationType(signature),
-                insertionFamily =
-                    AikenTypedInsertionFamily.PipeCall(
-                        lookupText = lookupText,
-                        signature = signature
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.QUALIFIED_FUNCTION,
-                lookupStrings = setOf(matchingName)
-            )
-        )
-
-    fun createAutoImportedConstLookup(
-        name: String,
-        modulePath: String,
-        expectedType: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = name,
-                kind = CompletionSymbolKind.IDENTIFIER,
-                typeText = expectedType,
-                insertionFamily =
-                    AikenTypedInsertionFamily.ReplaceIdentifier(
-                        text = name,
-                        autoImportTarget = AikenTypedAutoImportTarget(modulePath, name)
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.UNIMPORTED_CONST,
-                tailText = " from $modulePath"
-            )
-        )
-
-    fun createAutoImportedSpreadConstLookup(
-        name: String,
-        modulePath: String,
-        expectedType: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = name,
-                kind = CompletionSymbolKind.IDENTIFIER,
-                typeText = expectedType,
-                insertionFamily =
-                    AikenTypedInsertionFamily.SpreadIdentifier(
-                        text = name,
-                        autoImportTarget = AikenTypedAutoImportTarget(modulePath, name)
-                    ),
-                rankingCategory = AikenTypedCompletionCategory.UNIMPORTED_CONST,
-                tailText = " from $modulePath"
-            )
-        )
-
     fun createTypeDirectedLookup(
         text: String,
         kind: CompletionSymbolKind,
@@ -202,21 +40,6 @@ internal object AikenTypedLookupFactory {
                 kind = kind,
                 typeText = typeText,
                 insertionFamily = AikenTypedInsertionFamily.ReplaceIdentifier(text),
-                bold = kind == CompletionSymbolKind.KEYWORD
-            )
-        )
-
-    fun createSpreadLookup(
-        text: String,
-        kind: CompletionSymbolKind,
-        typeText: String
-    ): LookupElement =
-        createStandardLookup(
-            StandardLookupSpec(
-                text = text,
-                kind = kind,
-                typeText = typeText,
-                insertionFamily = AikenTypedInsertionFamily.SpreadIdentifier(text),
                 bold = kind == CompletionSymbolKind.KEYWORD
             )
         )
@@ -507,7 +330,7 @@ internal object AikenTypedLookupFactory {
         insertionContext: InsertionContext,
         insertionFamily: AikenTypedInsertionFamily
     ) {
-        AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+        AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
         when (insertionFamily) {
             is AikenTypedInsertionFamily.ReplaceIdentifier -> {
                 replaceCurrentIdentifierPrefix(insertionContext, insertionFamily.text)

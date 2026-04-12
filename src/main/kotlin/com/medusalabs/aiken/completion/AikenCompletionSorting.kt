@@ -164,18 +164,6 @@ internal object AikenCompletionSorting {
         return lookup
     }
 
-    fun annotateTyped(
-        lookup: LookupElement,
-        category: AikenTypedCompletionCategory,
-        matchDistance: Int
-    ): LookupElement =
-        annotateTyped(
-            lookup = lookup,
-            category = category,
-            matchDistance = matchDistance,
-            scopeDistance = Int.MAX_VALUE
-        )
-
     fun withTypedSorter(
         parameters: CompletionParameters,
         result: CompletionResultSet
