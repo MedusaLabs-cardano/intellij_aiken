@@ -44,6 +44,334 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsOnlyTypesInFunctionParameterAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn foo(bar: <caret>) {
+              Void
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+        assertFalse(suggestions.toString(), suggestions.contains("placeholder"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesAtFunctionParameterDeclarationStart() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              Input
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn foo(<caret>) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+        assertFalse(suggestions.toString(), suggestions.contains("foo"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesAfterCommaInFunctionParameterDeclaration() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              Input
+            }
+
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn foo(bar: Input, <caret>) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Input"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+        assertFalse(suggestions.toString(), suggestions.contains("bar"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInConstAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            const always: <caret> = True
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Bool"))
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+        assertFalse(suggestions.toString(), suggestions.contains("always"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInsideGenericLetAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main(seed: Int) {
+              let items: List<<caret>> = []
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("seed"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInFunctionReturnAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn foo(bar: Int) -> <caret> {
+              Void
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("bar"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInsideGenericFunctionReturnAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn foo(bar: Int) -> List<<caret>> {
+              []
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("bar"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+    }
+
+    @Test
+    fun doesNotOfferConstructibleInvocationFormsInTypeAnnotationContext() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              Input
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use models.{Input}
+
+            fn foo(bar: Input) -> Input<caret> {
+              bar
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertFalse(suggestions.toString(), suggestions.contains("{}"))
+        assertFalse(suggestions.toString(), suggestions.contains("()"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInTypeConstructorFieldAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Example {
+              Example(value: <caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInsideCustomGenericTypeArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+
+            pub type Wrapper<t> {
+              Wrapper(inner: t)
+            }
+
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use models.{Wrapper}
+
+            fn foo(value: Wrapper<<caret>>) {
+              Void
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("Int"))
+        assertTrue(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("value"))
+        assertFalse(suggestions.toString(), suggestions.contains("reduce"))
+    }
+
+    @Test
     fun suggestsImportedAliasesForSingleCharacterPrefix() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -72,6 +400,40 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         val suggestions = completionVariants()
 
         assertTrue(suggestions.toString(), suggestions.contains("sum"))
+    }
+
+    @Test
+    fun suggestsOnlyReturnTypeCompatibleValuesInExplicitFunctionTailExpression() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Transaction {
+              Transaction
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn before() -> Bool {
+              True
+            }
+
+            fn foo(bar: Int) -> Bool {
+              let b = True
+              <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("b"))
+        assertTrue(suggestions.toString(), suggestions.contains("before"))
+        assertTrue(suggestions.toString(), suggestions.contains("True"))
+        assertFalse(suggestions.toString(), suggestions.contains("Transaction"))
+        assertFalse(suggestions.toString(), suggestions.contains("Int"))
     }
 
     @Test
@@ -122,15 +484,13 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
               seed
             }
 
-            fn main(seed: Int) -> Int {
+            fn main(seed: Int) {
               h<caret>
             }
             """.trimIndent()
         )
 
-        val suggestions = completionVariants()
-
-        assertTrue(suggestions.contains("helper"))
+        assertCompletionContainsOrAutoInserted("helper", "\n  helper")
     }
 
     @Test
@@ -253,7 +613,7 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
 
             const from_file: Int = 0
 
-            fn main(seed: Int) -> Int {
+            fn main(seed: Int) {
               let from_scope = seed
               fro<caret>
             }
@@ -276,6 +636,72 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         assertTrue("Expected imported symbol above same-file declaration, got: $suggestions", importedIndex < sameFileIndex)
         assertTrue("Expected same-file declaration above unimported symbol, got: $suggestions", sameFileIndex < unimportedIndex)
         assertTrue("Expected unimported symbol above bare module qualifier, got: $suggestions", unimportedIndex < moduleIndex)
+    }
+
+    @Test
+    fun explicitFunctionTailCompletionStaysValueOnlyAndTypeCompatible() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/time.ak",
+            """
+            pub fn from_now() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/frame.ak",
+            """
+            pub fn from_remote() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/frost.ak",
+            """
+            pub fn chill() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type FromBucket {
+              FromBucket
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use time.{from_now}
+
+            const from_file: Int = 0
+
+            fn main(seed: Int) -> Int {
+              let from_scope = seed
+              fro<caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val localIndex = suggestions.indexOf("from_scope")
+        val sameFileIndex = suggestions.indexOf("from_file")
+        val importedIndex = suggestions.indexOf("from_now")
+        val unimportedIndex = suggestions.indexOf("from_remote")
+
+        assertTrue("Expected local binding in suggestions, got: $suggestions", localIndex >= 0)
+        assertTrue("Expected same-file const in suggestions, got: $suggestions", sameFileIndex >= 0)
+        assertTrue("Expected imported function in suggestions, got: $suggestions", importedIndex >= 0)
+        assertTrue("Expected unimported function in suggestions, got: $suggestions", unimportedIndex >= 0)
+        assertFalse("Did not expect bare module qualifier in explicit return context, got: $suggestions", suggestions.contains("frost"))
+        assertFalse("Did not expect type names in explicit return context, got: $suggestions", suggestions.contains("FromBucket"))
+        assertTrue("Expected local binding above same-file const, got: $suggestions", localIndex < sameFileIndex)
+        assertTrue("Expected same-file const above imported function, got: $suggestions", sameFileIndex < importedIndex)
+        assertTrue("Expected imported function above unimported function, got: $suggestions", importedIndex < unimportedIndex)
     }
 
     @Test
@@ -3264,6 +3690,79 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         assertFalse("Unexpected non-matching Int binding leakage: $suggestions", suggestions.contains("inp"))
         assertFalse("Unexpected non-matching ByteArray binding leakage: $suggestions", suggestions.contains("rat"))
         assertFalse("Unexpected non-matching Int binding leakage: $suggestions", suggestions.contains("fsr"))
+    }
+
+    @Test
+    fun doesNotLeakValueSuggestionsIntoFunctionParameterRecordDestructuringPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/std.ak",
+            """
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              Output
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            fn foo(bar: Input, Input { output: h<caret> }) -> Output {
+              bar.output
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Unexpected suggestions in destructuring prefix: $suggestions", suggestions.isEmpty())
+    }
+
+    @Test
+    fun suggestsOnlyMatchingConstructorsInFunctionParameterRecordDestructuringPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/std.ak",
+            """
+            pub fn reduce() -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              Output
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            fn helper() -> Output {
+              Output
+            }
+
+            fn foo(bar: Input, Input { output: Ou<caret> }) -> Output {
+              bar.output
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected matching constructor in destructuring prefix, got: $suggestions", suggestions.contains("Output"))
+        assertFalse("Unexpected function leakage in destructuring prefix: $suggestions", suggestions.contains("foo"))
+        assertFalse("Unexpected helper leakage in destructuring prefix: $suggestions", suggestions.contains("helper"))
+        assertFalse("Unexpected stdlib leakage in destructuring prefix: $suggestions", suggestions.contains("reduce"))
     }
 
     @Test

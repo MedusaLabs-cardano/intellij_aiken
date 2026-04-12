@@ -33,7 +33,11 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         val text = file.text
 
         val constructibleInvocationSuggestions =
-            AikenConstructibleCompletionSupport.invocationFormVariants(parameters, anchor, offset)
+            if (resolution.policy.typeOnlySuggestions) {
+                emptyList()
+            } else {
+                AikenConstructibleCompletionSupport.invocationFormVariants(parameters, anchor, offset)
+            }
 
         if (constructibleInvocationSuggestions.isNotEmpty()) {
             val invocationResult = AikenCompletionSorting.withConstructibleFormSorter(parameters, result.withPrefixMatcher(""))
@@ -68,7 +72,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         offset = offset,
                         prefix = prefix,
                         qualifier = resolution.qualifiedAccessQualifier,
-                        allowBareTypes = resolution.policy.bareTypesAllowed
+                        allowBareTypes = resolution.policy.bareTypesAllowed,
+                        typeOnly = resolution.policy.typeOnlySuggestions
                     )
                 }
                 result.stopHere()
@@ -117,7 +122,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         offset = offset,
                         prefix = prefix,
                         qualifier = resolution.qualifiedAccessQualifier,
-                        allowBareTypes = resolution.policy.bareTypesAllowed
+                        allowBareTypes = resolution.policy.bareTypesAllowed,
+                        typeOnly = resolution.policy.typeOnlySuggestions
                     )
                     result.stopHere()
                     return
@@ -132,6 +138,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
+                        allowBareTypes = resolution.policy.bareTypesAllowed,
+                        typeOnly = resolution.policy.typeOnlySuggestions,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
                         excludedLookups = argumentSuggestions
                     )
@@ -145,6 +153,36 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 val pipeResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(prefix))
                 for (lookupElement in pipeSuggestions) {
                     pipeResult.addElement(lookupElement)
+                }
+                result.stopHere()
+                return
+            }
+            AikenCompletionScenario.TypeReference -> {
+                if (resolution.qualifiedAccessQualifier != null) {
+                    addQualifiedSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        anchor = anchor,
+                        offset = offset,
+                        prefix = prefix,
+                        qualifier = resolution.qualifiedAccessQualifier,
+                        allowBareTypes = true,
+                        typeOnly = true
+                    )
+                } else {
+                    addOrdinarySemanticSuggestions(
+                        parameters = parameters,
+                        result = result,
+                        file = file,
+                        anchor = anchor,
+                        fallbackAnchor = parameters.position,
+                        offset = offset,
+                        prefix = prefix,
+                        allowBareTypes = true,
+                        typeOnly = true,
+                        stopAfter = true,
+                        excludedLookups = emptyList()
+                    )
                 }
                 result.stopHere()
                 return
@@ -164,7 +202,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                     offset = offset,
                     prefix = prefix,
                     qualifier = scenario.qualifier,
-                    allowBareTypes = resolution.policy.bareTypesAllowed
+                    allowBareTypes = resolution.policy.bareTypesAllowed,
+                    typeOnly = resolution.policy.typeOnlySuggestions
                 )
                 result.stopHere()
                 return
@@ -211,6 +250,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
+                        allowBareTypes = resolution.policy.bareTypesAllowed,
+                        typeOnly = resolution.policy.typeOnlySuggestions,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
                         excludedLookups = argumentSuggestions
                     )
@@ -218,6 +259,24 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 return
             }
             AikenCompletionScenario.OrdinaryExpression -> {
+                val hasCallableReturnContext =
+                    anchor != null &&
+                        !resolution.policy.typeOnlySuggestions &&
+                        AikenTypeDirectedCompletionSupport.hasCallableReturnExpectedTypeContext(text, offset)
+                val callableReturnSuggestions =
+                    if (hasCallableReturnContext) {
+                        AikenTypeDirectedCompletionSupport.callableReturnLookups(anchor, text, offset)
+                    } else {
+                        emptyList()
+                    }
+                if (hasCallableReturnContext) {
+                    if (shouldShowTypedSuggestions(callableReturnSuggestions, prefix)) {
+                        addTypedSupplementalSuggestions(parameters, result, callableReturnSuggestions, prefix)
+                    }
+                    result.stopHere()
+                    return
+                }
+
                 val bindingInitializerSuggestions =
                     if (anchor != null) {
                         AikenTypeDirectedCompletionSupport.bindingInitializerLookups(anchor, text, offset)
@@ -245,6 +304,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                         fallbackAnchor = parameters.position,
                         offset = offset,
                         prefix = prefix,
+                        allowBareTypes = resolution.policy.bareTypesAllowed,
+                        typeOnly = resolution.policy.typeOnlySuggestions,
                         stopAfter = resolution.policy.typedCompletionStopsFurtherMerging,
                         excludedLookups = emptyList()
                     )
@@ -252,7 +313,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 return
             }
             AikenCompletionScenario.UseModule,
-            AikenCompletionScenario.UseSymbol -> return
+            AikenCompletionScenario.UseSymbol,
+            AikenCompletionScenario.TypeReference -> return
         }
     }
 
@@ -340,7 +402,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         offset: Int,
         prefix: String,
         qualifier: String,
-        allowBareTypes: Boolean
+        allowBareTypes: Boolean,
+        typeOnly: Boolean
     ) {
         val semanticVariants =
             anchor
@@ -353,6 +416,17 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                     )
                 }
                 .orEmpty()
+                .let { lookups ->
+                    if (typeOnly) {
+                        lookups.filter { AikenCompletionSorting.ordinaryKind(it) == CompletionSymbolKind.TYPE }
+                    } else {
+                        lookups
+                    }
+                }
+        if (shouldSuppressAutoPopupForExactMatch(parameters, prefix, semanticVariants)) {
+            result.stopHere()
+            return
+        }
         val semanticResult = AikenCompletionSorting.withOrdinarySorter(parameters, result.withPrefixMatcher(prefix))
         for (lookupElement in semanticVariants) {
             semanticResult.addElement(lookupElement)
@@ -367,12 +441,25 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         fallbackAnchor: PsiElement,
         offset: Int,
         prefix: String,
+        allowBareTypes: Boolean,
+        typeOnly: Boolean,
         stopAfter: Boolean,
         excludedLookups: List<LookupElement>
     ) {
         val effectiveAnchor = anchor ?: fallbackAnchor
         val semanticVariants =
-            variantsForAnchor(effectiveAnchor, offset)
+            variantsForAnchor(
+                anchor = effectiveAnchor,
+                offset = offset,
+                allowBareTypes = if (typeOnly) true else allowBareTypes
+            )
+                .let { lookups ->
+                    if (typeOnly) {
+                        lookups.filter { AikenCompletionSorting.ordinaryKind(it) == CompletionSymbolKind.TYPE }
+                    } else {
+                        lookups
+                    }
+                }
                 .filterNot { lookup ->
                     excludedLookups.any { lookupCollisionKey(it) == lookupCollisionKey(lookup) }
                 }
@@ -381,16 +468,35 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
         val unimportedSemanticVariants =
             AikenReferenceVariants.unimportedExportsMatching(
                 effectiveAnchor,
-                nameMatches = { AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix) }
+                nameMatches = {
+                    if (typeOnly && prefix.isBlank()) {
+                        true
+                    } else {
+                        AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix)
+                    }
+                }
             )
+                .let { lookups ->
+                    if (typeOnly) {
+                        lookups.filter { AikenCompletionSorting.ordinaryKind(it) == CompletionSymbolKind.TYPE }
+                    } else {
+                        lookups
+                    }
+                }
         val unimportedModuleVariants =
-            if (prefix.isBlank()) {
+            if (typeOnly || prefix.isBlank()) {
                 emptyList()
             } else {
                 AikenReferenceVariants.unimportedModulesMatching(effectiveAnchor) {
                     AikenCompletionPrefixMatching.matches(it, semanticResult.prefixMatcher, prefix)
                 }
             }
+
+        val allVariants = semanticVariants + unimportedSemanticVariants + unimportedModuleVariants
+        if (shouldSuppressAutoPopupForExactMatch(parameters, prefix, allVariants)) {
+            result.stopHere()
+            return
+        }
 
         if (semanticVariants.isEmpty() && unimportedSemanticVariants.isEmpty() && unimportedModuleVariants.isEmpty()) {
             if (stopAfter) {
@@ -416,7 +522,8 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
 
     private fun variantsForAnchor(
         anchor: PsiElement,
-        offset: Int
+        offset: Int,
+        allowBareTypes: Boolean
     ): List<LookupElement> {
         val referenceVariants =
             anchor.references
@@ -426,7 +533,11 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 .distinctBy(::lookupDedupKey)
                 .toList()
         val fallbackVariants =
-            AikenReferenceVariants.forElement(anchor, offset)
+            AikenReferenceVariants.forElement(
+                element = anchor,
+                caretOffsetOverride = offset,
+                allowBareTypesOverride = allowBareTypes
+            )
                 .mapNotNull { it as? LookupElement }
         return (referenceVariants + fallbackVariants)
             .distinctBy(::lookupDedupKey)
@@ -451,6 +562,18 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             append(lookup.lookupString)
             append('\u0000')
             append(presentation.tailText.orEmpty())
+        }
+    }
+
+    private fun shouldSuppressAutoPopupForExactMatch(
+        parameters: CompletionParameters,
+        prefix: String,
+        suggestions: List<LookupElement>
+    ): Boolean {
+        if (parameters.invocationCount > 0 || prefix.isBlank() || suggestions.isEmpty()) return false
+        return AikenAutoPopupGuard.consumeSuppressedExactPrefix(parameters.editor, prefix) ||
+            suggestions.any { lookup ->
+            lookup.allLookupStrings.any { candidate -> candidate == prefix }
         }
     }
 }

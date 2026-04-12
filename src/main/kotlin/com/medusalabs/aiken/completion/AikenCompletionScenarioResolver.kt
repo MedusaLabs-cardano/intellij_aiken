@@ -6,6 +6,7 @@ import com.intellij.psi.PsiFile
 internal sealed interface AikenCompletionScenario {
     data object UseModule : AikenCompletionScenario
     data object UseSymbol : AikenCompletionScenario
+    data object TypeReference : AikenCompletionScenario
     data object RecordFieldName : AikenCompletionScenario
     data class RecordFieldValue(
         val currentValueText: String
@@ -36,6 +37,7 @@ internal object AikenCompletionScenarioResolver {
         AikenCompletionScenarioPolicy(
             keywordVisibility = AikenKeywordVisibility.NONE,
             bareTypesAllowed = false,
+            typeOnlySuggestions = false,
             lexicalFallbackAllowed = false,
             typedCompletionStopsFurtherMerging = false
         )
@@ -89,6 +91,8 @@ internal object AikenCompletionScenarioResolver {
         val hasArgumentContext = AikenArgumentCompletionSupport.hasArgumentContext(anchor, safeOffset)
         val insidePipeContext = AikenArgumentCompletionSupport.hasPipeContext(anchor, safeOffset)
         val qualifiedAccessQualifier = qualifiedAccessContext(text, safeOffset)?.qualifier
+        val likelyTypeContext = AikenCompletionContexts.isLikelyTypeReferenceContext(text, safeOffset)
+        val likelyValueContext = AikenCompletionContexts.isLikelyValueExpressionContext(text, safeOffset)
 
         val scenario =
             when {
@@ -99,6 +103,7 @@ internal object AikenCompletionScenarioResolver {
                 insideListLiteral -> AikenCompletionScenario.ListItem
                 insidePipeContext && !hasArgumentContext -> AikenCompletionScenario.PipeTarget
                 qualifiedAccessQualifier != null -> AikenCompletionScenario.QualifiedAccess(qualifiedAccessQualifier)
+                likelyTypeContext && !likelyValueContext -> AikenCompletionScenario.TypeReference
                 hasArgumentContext -> AikenCompletionScenario.FunctionArgument
                 else -> AikenCompletionScenario.OrdinaryExpression
             }

@@ -13,6 +13,7 @@ enum class AikenKeywordVisibility {
 internal data class AikenCompletionScenarioPolicy(
     val keywordVisibility: AikenKeywordVisibility,
     val bareTypesAllowed: Boolean,
+    val typeOnlySuggestions: Boolean,
     val lexicalFallbackAllowed: Boolean,
     val typedCompletionStopsFurtherMerging: Boolean
 )
@@ -56,7 +57,17 @@ internal object AikenCompletionScenarioPolicies {
                 AikenCompletionScenarioPolicy(
                     keywordVisibility = AikenKeywordVisibility.NONE,
                     bareTypesAllowed = false,
+                    typeOnlySuggestions = false,
                     lexicalFallbackAllowed = false,
+                    typedCompletionStopsFurtherMerging = true
+                )
+
+            AikenCompletionScenario.TypeReference ->
+                AikenCompletionScenarioPolicy(
+                    keywordVisibility = AikenKeywordVisibility.NONE,
+                    bareTypesAllowed = true,
+                    typeOnlySuggestions = true,
+                    lexicalFallbackAllowed = true,
                     typedCompletionStopsFurtherMerging = true
                 )
 
@@ -66,6 +77,7 @@ internal object AikenCompletionScenarioPolicies {
                 AikenCompletionScenarioPolicy(
                     keywordVisibility = AikenKeywordVisibility.NONE,
                     bareTypesAllowed = false,
+                    typeOnlySuggestions = false,
                     lexicalFallbackAllowed = false,
                     typedCompletionStopsFurtherMerging = true
                 )
@@ -74,6 +86,7 @@ internal object AikenCompletionScenarioPolicies {
                 AikenCompletionScenarioPolicy(
                     keywordVisibility = AikenKeywordVisibility.NONE,
                     bareTypesAllowed = false,
+                    typeOnlySuggestions = false,
                     lexicalFallbackAllowed = true,
                     typedCompletionStopsFurtherMerging = true
                 )
@@ -82,6 +95,7 @@ internal object AikenCompletionScenarioPolicies {
                 AikenCompletionScenarioPolicy(
                     keywordVisibility = AikenKeywordVisibility.NONE,
                     bareTypesAllowed = false,
+                    typeOnlySuggestions = false,
                     lexicalFallbackAllowed = false,
                     typedCompletionStopsFurtherMerging = true
                 )
@@ -90,6 +104,7 @@ internal object AikenCompletionScenarioPolicies {
                 AikenCompletionScenarioPolicy(
                     keywordVisibility = AikenKeywordVisibility.NONE,
                     bareTypesAllowed = likelyTypeContext || !likelyValueContext,
+                    typeOnlySuggestions = likelyTypeContext && !likelyValueContext,
                     lexicalFallbackAllowed = false,
                     typedCompletionStopsFurtherMerging = true
                 )
@@ -103,6 +118,7 @@ internal object AikenCompletionScenarioPolicies {
                             AikenKeywordVisibility.ALL
                         },
                     bareTypesAllowed = likelyTypeContext || !likelyValueContext,
+                    typeOnlySuggestions = likelyTypeContext && !likelyValueContext,
                     lexicalFallbackAllowed = true,
                     typedCompletionStopsFurtherMerging = false
                 )
@@ -116,6 +132,7 @@ internal object AikenCompletionScenarioPolicies {
                             AikenKeywordVisibility.ALL
                         },
                     bareTypesAllowed = likelyTypeContext || !likelyValueContext,
+                    typeOnlySuggestions = likelyTypeContext && !likelyValueContext,
                     lexicalFallbackAllowed = true,
                     typedCompletionStopsFurtherMerging = false
                 )
@@ -135,6 +152,7 @@ internal object AikenCompletionScenarioPolicies {
                     AikenKeywordVisibility.ALL
                 },
             bareTypesAllowed = !likelyValueContext,
+            typeOnlySuggestions = !likelyValueContext && AikenCompletionContexts.isLikelyTypeReferenceContext(text, offset),
             lexicalFallbackAllowed = true,
             typedCompletionStopsFurtherMerging = false
         )

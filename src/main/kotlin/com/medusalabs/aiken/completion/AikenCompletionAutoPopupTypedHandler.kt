@@ -30,6 +30,12 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
             return Result.CONTINUE
         }
 
+        if (AikenAutoPopupGuard.suppressActiveLookupOnExactMatch(project, editor) ||
+            AikenAutoPopupGuard.suppressSemanticAutoPopupOnExactMatch(project, editor, file)
+        ) {
+            return Result.STOP
+        }
+
         if (shouldForceContextualRefresh(charTyped, editor)) return Result.CONTINUE
 
         AutoPopupController.getInstance(project).scheduleAutoPopup(editor)
@@ -49,6 +55,12 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         val tokenType = file.findElementAt((offset - 1).coerceAtLeast(0))?.node?.elementType
         if (tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.STRING) {
             return Result.CONTINUE
+        }
+
+        if (AikenAutoPopupGuard.suppressActiveLookupOnExactMatch(project, editor) ||
+            AikenAutoPopupGuard.suppressSemanticAutoPopupOnExactMatch(project, editor, file)
+        ) {
+            return Result.STOP
         }
 
         PsiDocumentManager.getInstance(project).commitDocument(editor.document)

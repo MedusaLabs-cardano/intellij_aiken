@@ -71,6 +71,11 @@ object AikenTypeDirectedCompletionSupport {
         val currentValueText: String
     )
 
+    private data class CallableReturnExpectedTypeContext(
+        val expectedType: String,
+        val currentValueText: String
+    )
+
     private val inferredFunctionReturnGuard =
         ThreadLocal.withInitial<LinkedHashSet<String>> { linkedSetOf() }
     private val expressionTypeResolver =
@@ -209,6 +214,25 @@ object AikenTypeDirectedCompletionSupport {
             pruneByPrefix = true
         )
     }
+
+    fun callableReturnLookups(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): List<LookupElement> {
+        val context = inferCallableReturnExpectedTypeContext(text, offset) ?: return emptyList()
+        return lookupsForExpectedType(
+            anchor = anchor,
+            expectedType = context.expectedType,
+            currentValueText = context.currentValueText,
+            pruneByPrefix = true
+        )
+    }
+
+    fun hasCallableReturnExpectedTypeContext(
+        text: String,
+        offset: Int
+    ): Boolean = inferCallableReturnExpectedTypeContext(text, offset) != null
 
     fun spreadLookupsForExpectedType(
         anchor: PsiElement,
@@ -409,6 +433,173 @@ object AikenTypeDirectedCompletionSupport {
             lexer.advance()
         }
 
+        return null
+    }
+
+    private fun inferCallableReturnExpectedTypeContext(
+        text: String,
+        offset: Int
+    ): CallableReturnExpectedTypeContext? {
+        if (text.isEmpty()) return null
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        var braceDepth = 0
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            if (braceDepth == 0 &&
+                tokenType == AikenTokenTypes.KEYWORD &&
+                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
+            ) {
+                val callable =
+                    parseCallableBodyContext(
+                        text = text,
+                        declarationKeywordStart = lexer.tokenStart,
+                        declarationKeyword = tokenText
+                    )
+                if (callable != null) {
+                    if (safeOffset in (callable.bodyOpen + 1)..callable.bodyClose) {
+                        if (!isStandaloneCallableReturnSlot(text, safeOffset, callable.bodyOpen, callable.bodyClose)) {
+                            return null
+                        }
+                        val lineStart = findCurrentLineStart(text, safeOffset, callable.bodyOpen + 1)
+                        val currentValueText = text.substring(lineStart.coerceAtMost(safeOffset), safeOffset)
+                        return CallableReturnExpectedTypeContext(
+                            expectedType = callable.returnType,
+                            currentValueText = currentValueText
+                        )
+                    }
+                    lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
+                    braceDepth = 0
+                    continue
+                }
+            }
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> braceDepth += 1
+                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            lexer.advance()
+        }
+
+        return null
+    }
+
+    private data class ParsedCallableBodyContext(
+        val returnType: String,
+        val bodyOpen: Int,
+        val bodyClose: Int,
+        val resumeOffset: Int
+    )
+
+    private fun parseCallableBodyContext(
+        text: String,
+        declarationKeywordStart: Int,
+        declarationKeyword: String
+    ): ParsedCallableBodyContext? {
+        var index = skipWhitespaceForward(text, declarationKeywordStart + declarationKeyword.length)
+        if (index >= text.length || !isIdentifierChar(text[index])) return null
+
+        while (index < text.length && isIdentifierChar(text[index])) index++
+        index = skipWhitespaceForward(text, index)
+
+        if (index < text.length && text[index] == '<') {
+            index = skipTopLevelAngles(text, index) ?: return null
+            index = skipWhitespaceForward(text, index)
+        }
+
+        if (index >= text.length || text[index] != '(') return null
+        val paramsClose = AikenSyntaxText.findMatchingDelimiter(text, index, '(', ')') ?: return null
+        index = skipWhitespaceForward(text, paramsClose + 1)
+
+        if (index + 1 >= text.length || text[index] != '-' || text[index + 1] != '>') return null
+        index = skipWhitespaceForward(text, index + 2)
+        val returnTypeStart = index
+        while (index < text.length && text[index] != '{' && text[index] != '\n' && text[index] != '\r') {
+            index++
+        }
+        val returnType = normalizeTypeText(text.substring(returnTypeStart, index))
+        if (returnType.isBlank()) return null
+
+        index = skipWhitespaceForward(text, index)
+        if (index >= text.length || text[index] != '{') return null
+        val bodyOpen = index
+        val bodyClose = AikenSyntaxText.findMatchingDelimiter(text, bodyOpen, '{', '}') ?: return null
+
+        return ParsedCallableBodyContext(
+            returnType = returnType,
+            bodyOpen = bodyOpen,
+            bodyClose = bodyClose,
+            resumeOffset = bodyClose + 1
+        )
+    }
+
+    private fun isStandaloneCallableReturnSlot(
+        text: String,
+        offset: Int,
+        bodyStartInclusive: Int,
+        bodyEndInclusive: Int
+    ): Boolean {
+        val lineStart = findCurrentLineStart(text, offset, bodyStartInclusive)
+        val linePrefix = text.substring(lineStart.coerceIn(bodyStartInclusive, offset), offset.coerceAtMost(text.length))
+        val trimmed = linePrefix.trimStart()
+        if (trimmed.isEmpty()) return true
+
+        val forbiddenStarts =
+            listOf(
+                "let ",
+                "expect ",
+                "const ",
+                "use ",
+                "type ",
+                "if ",
+                "when ",
+                "trace ",
+                "fn ",
+                "validator ",
+                "test ",
+                "bench "
+            )
+        if (forbiddenStarts.any { trimmed.startsWith(it) }) return false
+
+        val previousLineEnd = (lineStart - 1).coerceAtLeast(bodyStartInclusive - 1)
+        if (previousLineEnd < bodyStartInclusive) return true
+        return previousLineEnd <= bodyEndInclusive
+    }
+
+    private fun findCurrentLineStart(
+        text: String,
+        offset: Int,
+        floor: Int
+    ): Int {
+        var index = offset.coerceIn(0, text.length) - 1
+        while (index >= floor) {
+            val ch = text[index]
+            if (ch == '\n' || ch == '\r') return index + 1
+            index--
+        }
+        return floor
+    }
+
+    private fun skipTopLevelAngles(text: String, start: Int): Int? {
+        var index = start
+        var depth = 0
+        while (index < text.length) {
+            when (text[index]) {
+                '<' -> depth++
+                '>' -> {
+                    depth--
+                    if (depth == 0) return index + 1
+                }
+                '\n', '\r', '{', '}' -> return null
+            }
+            index++
+        }
         return null
     }
 

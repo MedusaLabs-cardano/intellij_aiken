@@ -2,6 +2,7 @@ package com.medusalabs.aiken.completion
 
 import com.intellij.codeInsight.AutoPopupController
 import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.codeInsight.completion.PlainPrefixMatcher
 import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.openapi.project.DumbService
@@ -159,26 +160,33 @@ object AikenRecordCompletionSupport {
                 ?: return emptyList()
 
         val prefix = AikenSyntaxText.identifierPrefix(currentValueText, currentValueText.length).trim()
-        if (prefix.isNotBlank()) {
-            // Once user starts typing, switch back to full typed matching flow.
-            return AikenTypeDirectedCompletionSupport.lookupsForExpectedType(
+        val result = ArrayList<LookupElement>()
+        val prefixMatcher = prefix.takeIf { it.isNotBlank() }?.let(::PlainPrefixMatcher)
+        if (
+            prefixMatcher == null ||
+            AikenCompletionPrefixMatching.matches(currentFieldName, prefixMatcher, prefix)
+        ) {
+            result +=
+                AikenCompletionSorting.annotateTyped(
+                    AikenTypedLookupFactory.createTypeDirectedLookup(
+                        text = currentFieldName,
+                        kind = CompletionSymbolKind.IDENTIFIER,
+                        typeText = AikenTypeText.normalizeWhitespace(expectedType)
+                    ),
+                    AikenTypedCompletionCategory.LOCAL_BINDING
+                )
+        }
+        result +=
+            AikenTypeDirectedCompletionSupport.constructibleLookupsForExpectedType(
                 anchor = anchor,
                 expectedType = expectedType,
                 currentValueText = currentValueText
-            )
-        }
-
-        val result = ArrayList<LookupElement>()
-        result +=
-            AikenCompletionSorting.annotateTyped(
-                AikenTypedLookupFactory.createTypeDirectedLookup(
-                    text = currentFieldName,
-                    kind = CompletionSymbolKind.IDENTIFIER,
-                    typeText = AikenTypeText.normalizeWhitespace(expectedType)
-                ),
-                AikenTypedCompletionCategory.LOCAL_BINDING
-            )
-        result += AikenTypeDirectedCompletionSupport.constructibleLookupsForExpectedType(anchor, expectedType)
+            ).filter { lookup ->
+                prefixMatcher == null ||
+                    lookup.allLookupStrings.any { candidate ->
+                        AikenCompletionPrefixMatching.matches(candidate, prefixMatcher, prefix)
+                    }
+            }
         return result.distinctBy { it.lookupString }
     }
 
@@ -431,6 +439,7 @@ object AikenRecordCompletionSupport {
                 val precedingWord = readIdentifierEndingAt(text, ownerStart - 1).orEmpty()
                 if (precedingWord == "let" || precedingWord == "expect") return RecordSiteKind.PATTERN
                 if (isInsideWhenArmPattern(text, ownerStart)) return RecordSiteKind.PATTERN
+                if (AikenParameterBindingScanner.isInsideParameterPattern(text, ownerStart)) return RecordSiteKind.PATTERN
                 return RecordSiteKind.VALUE
             }
 

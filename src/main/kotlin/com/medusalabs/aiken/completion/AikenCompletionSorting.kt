@@ -4,6 +4,7 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionSorter
 import com.intellij.codeInsight.lookup.LookupElement
+import com.intellij.codeInsight.lookup.LookupElementPresentation
 import com.intellij.codeInsight.lookup.LookupElementWeigher
 import com.intellij.codeInsight.lookup.WeighingContext
 import com.intellij.openapi.util.Key
@@ -144,6 +145,9 @@ internal object AikenCompletionSorting {
         return lookup
     }
 
+    fun ordinaryKind(lookup: LookupElement): CompletionSymbolKind =
+        lookup.getUserData(rankingKey)?.kind ?: inferKindFromPresentation(lookup) ?: fallbackRanking.kind
+
     fun withOrdinarySorter(
         parameters: CompletionParameters,
         result: CompletionResultSet
@@ -215,6 +219,19 @@ internal object AikenCompletionSorting {
             defaultSorter.weighBefore("priority", OrdinaryLookupWeigher)
         } catch (_: IllegalArgumentException) {
             defaultSorter.weigh(OrdinaryLookupWeigher)
+        }
+    }
+
+    private fun inferKindFromPresentation(lookup: LookupElement): CompletionSymbolKind? {
+        val presentation = LookupElementPresentation()
+        lookup.renderElement(presentation)
+        return when (presentation.typeText?.trim()) {
+            "type" -> CompletionSymbolKind.TYPE
+            "fn" -> CompletionSymbolKind.FUNCTION
+            "field" -> CompletionSymbolKind.FIELD
+            "var" -> CompletionSymbolKind.IDENTIFIER
+            "keyword" -> CompletionSymbolKind.KEYWORD
+            else -> null
         }
     }
 

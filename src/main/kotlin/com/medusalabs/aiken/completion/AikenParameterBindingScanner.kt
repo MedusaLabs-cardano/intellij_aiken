@@ -84,6 +84,61 @@ internal object AikenParameterBindingScanner {
             binding.name == bindingName && binding.declarationOffset == declarationOffset
         }
 
+    fun isInsideParameterPattern(
+        text: String,
+        offset: Int
+    ): Boolean {
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+            if (tokenType != AikenTokenTypes.KEYWORD ||
+                (tokenText != "fn" && tokenText != "test" && tokenText != "bench" && tokenText != "validator")
+            ) {
+                lexer.advance()
+                continue
+            }
+
+            val paramsOpen = findHeadParamsOpenParen(text, lexer.tokenEnd)
+            if (paramsOpen == null) {
+                lexer.advance()
+                continue
+            }
+            val paramsClose = AikenSyntaxText.findMatchingDelimiter(text, paramsOpen, '(', ')')
+            if (paramsClose == null) {
+                lexer.advance()
+                continue
+            }
+            val bodyOpen = findHeadBodyOpenBrace(text, paramsClose + 1)
+            if (bodyOpen == null) {
+                lexer.advance()
+                continue
+            }
+            val bodyClose = AikenSyntaxText.findMatchingDelimiter(text, bodyOpen, '{', '}')
+            if (bodyClose == null) {
+                lexer.advance()
+                continue
+            }
+
+            if (safeOffset in (paramsOpen + 1) until paramsClose) {
+                for (range in AikenTopLevelText.splitRanges(text, ',', paramsOpen + 1, paramsClose, trackAngles = true)) {
+                    val segment = parseParameterSegment(text, range.startOffset, range.endOffset) ?: continue
+                    val patternEnd = segment.patternStart + segment.patternText.length
+                    if (safeOffset in segment.patternStart..patternEnd) {
+                        return true
+                    }
+                }
+            }
+
+            lexer.start(text, (bodyClose + 1).coerceAtMost(text.length), text.length, 0)
+        }
+
+        return false
+    }
+
     private data class ParameterSegment(
         val patternText: String,
         val patternStart: Int,

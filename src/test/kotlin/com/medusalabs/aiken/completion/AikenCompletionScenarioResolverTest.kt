@@ -133,6 +133,34 @@ class AikenCompletionScenarioResolverTest : AikenPlatformTestCase() {
         assertEquals("reduc", resolution.prefix)
     }
 
+    @Test
+    fun resolvesTypeReferenceAtFunctionParameterDeclarationStart() {
+        val resolution =
+            resolveScenario(
+                """
+                fn main(<caret>) -> Int {
+                  0
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenCompletionScenario.TypeReference, resolution.scenario)
+    }
+
+    @Test
+    fun resolvesTypeReferenceAfterCommaInFunctionParameterDeclaration() {
+        val resolution =
+            resolveScenario(
+                """
+                fn main(seed: Int, <caret>) -> Int {
+                  seed
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenCompletionScenario.TypeReference, resolution.scenario)
+    }
+
     private fun resolveScenario(source: String): AikenCompletionResolution {
         val file = myFixture.configureByText("main.ak", source)
         return AikenCompletionScenarioResolver.resolve(file, myFixture.caretOffset)

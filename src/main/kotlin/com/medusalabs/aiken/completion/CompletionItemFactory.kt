@@ -56,6 +56,9 @@ internal object CompletionItemFactory {
                 .withIcon(iconFor(kind))
                 .withTypeText(typeText, true)
                 .withBoldness(kind == CompletionSymbolKind.KEYWORD)
+                .withInsertHandler { insertionContext, _ ->
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
+                }
 
         val lookup =
             priority?.let { explicitPriority ->

@@ -164,6 +164,7 @@ object AikenConstructibleCompletionSupport {
                 .withIcon(spec.icon)
                 .withTypeText(spec.typeText, true)
                 .withInsertHandler { insertionContext, _ ->
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
 

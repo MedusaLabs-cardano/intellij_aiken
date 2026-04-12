@@ -68,11 +68,12 @@ object AikenReferenceVariants {
             "Void"
         )
 
-    fun forElement(element: PsiElement): Array<Any> = forElement(element, null)
+    fun forElement(element: PsiElement): Array<Any> = forElement(element, null, null)
 
     fun forElement(
         element: PsiElement,
-        caretOffsetOverride: Int? = null
+        caretOffsetOverride: Int? = null,
+        allowBareTypesOverride: Boolean? = null
     ): Array<Any> {
         val file = element.containingFile ?: return emptyArray()
         if (file.fileType != AikenFileType) return emptyArray()
@@ -86,7 +87,7 @@ object AikenReferenceVariants {
                 (element.textRange.endOffset + 1).coerceIn(0, text.length)
             )
         if (candidateOffsets.any { AikenRecordCompletionSupport.isRecordFieldNameContext(text, it) }) return emptyArray()
-        val allowBareTypes = AikenCompletionScenarioPolicies.forFile(file, offset).bareTypesAllowed
+        val allowBareTypes = allowBareTypesOverride ?: AikenCompletionScenarioPolicies.forFile(file, offset).bareTypesAllowed
         val useModel = AikenUseStatementParser.parseModel(text)
         val currentModulePath = AikenModulePath.fromFile(file.virtualFile)
         val qualifier = AikenSyntaxText.qualifierBeforeOffset(text, offset)
@@ -877,6 +878,7 @@ object AikenReferenceVariants {
                 .withTypeText("module", true)
                 .withTailText(" from $modulePath", true)
                 .withInsertHandler { insertionContext, _ ->
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
                     val replacementText = "$canonicalQualifier."
                     val insertedOffset = replaceCurrentQualifiedPrefix(insertionContext, replacementText)
                     if (imported) {
@@ -957,6 +959,7 @@ object AikenReferenceVariants {
                 .withTypeText(spec.typeText, true)
                 .withTailText(spec.tailText, true)
                 .withInsertHandler { insertionContext, _ ->
+                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
         return AikenCompletionSorting.annotate(

@@ -17,12 +17,13 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
 
         assertEquals(AikenKeywordVisibility.EXPRESSION_ONLY, policy.keywordVisibility)
         assertFalse(policy.bareTypesAllowed)
+        assertFalse(policy.typeOnlySuggestions)
         assertTrue(policy.lexicalFallbackAllowed)
         assertFalse(policy.typedCompletionStopsFurtherMerging)
     }
 
     @Test
-    fun allowsAllKeywordsAndBareTypesInTypeAnnotationPosition() {
+    fun usesTypeOnlyPolicyInTypeAnnotationPosition() {
         val policy =
             scenarioPolicy(
                 """
@@ -34,9 +35,81 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
                 """.trimIndent()
             )
 
-        assertEquals(AikenKeywordVisibility.ALL, policy.keywordVisibility)
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
         assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
         assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
+    fun usesTypeOnlyPolicyAtFunctionParameterDeclarationStart() {
+        val policy =
+            scenarioPolicy(
+                """
+                fn main(<caret>) -> Int {
+                  0
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
+    fun usesTypeOnlyPolicyAfterCommaInFunctionParameterDeclaration() {
+        val policy =
+            scenarioPolicy(
+                """
+                fn main(seed: Int, <caret>) -> Int {
+                  seed
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
+    fun usesTypeOnlyPolicyInFunctionReturnAnnotationPosition() {
+        val policy =
+            scenarioPolicy(
+                """
+                fn main(key: Int) -> <caret> {
+                  key
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
+    fun usesTypeOnlyPolicyInConstAnnotationPosition() {
+        val policy =
+            scenarioPolicy(
+                """
+                const always: <caret> = True
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
     }
 
     @Test
@@ -52,6 +125,7 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
 
         assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
         assertFalse(policy.bareTypesAllowed)
+        assertFalse(policy.typeOnlySuggestions)
         assertTrue(policy.lexicalFallbackAllowed)
         assertTrue(policy.typedCompletionStopsFurtherMerging)
     }
@@ -68,6 +142,7 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
             )
 
         assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertFalse(policy.typeOnlySuggestions)
         assertFalse(policy.lexicalFallbackAllowed)
         assertTrue(policy.typedCompletionStopsFurtherMerging)
     }
@@ -78,6 +153,7 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
 
         assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
         assertFalse(policy.bareTypesAllowed)
+        assertFalse(policy.typeOnlySuggestions)
         assertFalse(policy.lexicalFallbackAllowed)
         assertTrue(policy.typedCompletionStopsFurtherMerging)
     }

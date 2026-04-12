@@ -507,6 +507,7 @@ internal object AikenTypedLookupFactory {
         insertionContext: InsertionContext,
         insertionFamily: AikenTypedInsertionFamily
     ) {
+        AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project, insertionContext.editor)
         when (insertionFamily) {
             is AikenTypedInsertionFamily.ReplaceIdentifier -> {
                 replaceCurrentIdentifierPrefix(insertionContext, insertionFamily.text)
