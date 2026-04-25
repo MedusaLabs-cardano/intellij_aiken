@@ -13,7 +13,7 @@ class KeywordCompletionProvider(
     private val visibilityResolver: ((CompletionParameters) -> AikenKeywordVisibility)? = null
 ) : CompletionProvider<CompletionParameters>() {
     private val distinctKeywords: List<String> = keywords.toSortedSet().toList()
-    private val expressionKeywords: Set<String> = setOf("if", "when", "fn", "todo", "fail", "True", "False")
+    private val expressionKeywords: Set<String> = setOf("if", "when", "fn", "todo", "fail")
 
     override fun addCompletions(
         parameters: CompletionParameters,

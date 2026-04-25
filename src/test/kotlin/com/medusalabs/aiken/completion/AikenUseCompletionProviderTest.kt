@@ -173,6 +173,31 @@ class AikenUseCompletionProviderTest : AikenPlatformTestCase() {
         assertTrue("Expected reverse export suggestions for wrong-layout prefix, got: $suggestions", suggestions.contains("placeholder.{Qwe}"))
     }
 
+    @Test
+    fun doesNotSuggestImportsForKeywordLikeTopLevelConstName() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/placeholder.ak",
+            """
+            pub fn user_value() {
+              1
+            }
+            """.trimIndent()
+        )
+
+        val file = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            const user<caret>
+            """.trimIndent()
+        )
+        myFixture.configureFromExistingVirtualFile(file.virtualFile)
+
+        val suggestions = completionVariants()
+
+        assertTrue("Did not expect completion in const declaration name, got: $suggestions", suggestions.isEmpty())
+    }
+
     private fun completionVariants(): List<String> =
         myFixture.completeBasic()
             ?.map { it.lookupString }

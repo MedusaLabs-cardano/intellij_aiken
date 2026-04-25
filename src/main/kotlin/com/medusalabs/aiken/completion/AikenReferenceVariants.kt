@@ -16,6 +16,7 @@ import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
+import com.medusalabs.aiken.index.AikenConstTypeExtractor
 import com.medusalabs.aiken.index.AikenPublicExportExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolEntry
 import com.medusalabs.aiken.index.AikenTopLevelSymbolExtractor
@@ -69,6 +70,47 @@ object AikenReferenceVariants {
         )
 
     fun forElement(element: PsiElement): Array<Any> = forElement(element, null, null)
+
+    internal fun isTypeDefinitionName(
+        element: PsiElement,
+        lookupName: String
+    ): Boolean {
+        val file = element.containingFile ?: return false
+        if (file.fileType != AikenFileType) return false
+        val name = lookupName.substringAfterLast('.').trim()
+        if (name.isBlank()) return false
+        if (name in builtInTypeNames) return true
+
+        if (AikenTopLevelSymbolExtractor.extract(file.text).any { it.name == name && it.kind == AikenTopLevelSymbolKind.TYPE }) {
+            return true
+        }
+
+        val useModel = AikenUseStatementParser.parseModel(file.text)
+        for (statement in useModel.statements) {
+            val modulePath = statement.modulePath.trim()
+            if (modulePath.isBlank()) continue
+            for (item in statement.items) {
+                val exposedName = item.alias?.trim().takeUnless { it.isNullOrBlank() } ?: item.name.trim()
+                if (exposedName != name) continue
+                if (moduleDefinesType(element, modulePath, item.name.trim())) return true
+                if (name.firstOrNull()?.isUpperCase() == true) return true
+            }
+        }
+
+        val root = AikenProjectRoots.findRootForFile(file.virtualFile) ?: return false
+        for (moduleFile in collectModuleFiles(root)) {
+            val modulePath = AikenModulePath.fromFile(moduleFile) ?: continue
+            if (modulePath == AikenModulePath.fromFile(file.virtualFile)) continue
+            val text = moduleFile.contentsToByteArray().toString(Charsets.UTF_8)
+            val exportedNames = AikenPublicExportExtractor.extract(text).toSet()
+            if (name !in exportedNames) continue
+            if (AikenTopLevelSymbolExtractor.extract(text).any { it.name == name && it.kind == AikenTopLevelSymbolKind.TYPE }) {
+                return true
+            }
+        }
+
+        return false
+    }
 
     fun forElement(
         element: PsiElement,
@@ -146,7 +188,7 @@ object AikenReferenceVariants {
 
         for (statement in useModel.statements) {
             val modulePath = statement.modulePath.trim()
-            if (modulePath.isBlank() || statement.items.isNotEmpty() || !statement.moduleAlias.isNullOrBlank()) continue
+            if (modulePath.isBlank() || !statement.moduleAlias.isNullOrBlank()) continue
             val exposedModuleName = modulePath.substringAfterLast('/').trim()
             if (exposedModuleName.length < 2 || !seen.add(exposedModuleName)) continue
             variants +=
@@ -272,6 +314,9 @@ object AikenReferenceVariants {
         val importedChainTargets = importedModulePathsForQualifierChain(useModel, qualifierChain)
         val importedTargets = (resolvedTargets + importedChainTargets).toList()
         val importedTargetSet = importedTargets.toCollection(LinkedHashSet())
+        val importedModuleTargets = AikenValidatorNamespaceSupport.resolveImportedModuleTargets(useModel, qualifierChain)
+        val importedValidatorTargets =
+            AikenValidatorNamespaceSupport.resolveImportedValidatorNamespaceTargets(element, useModel, qualifierChain)
 
         for (handler in AikenFunctionSignatureExtractor.extractValidatorHandlerEntries(file.text)) {
             if (handler.validatorName != qualifierChain || !seen.add(handler.handlerName)) continue
@@ -279,9 +324,39 @@ object AikenReferenceVariants {
                 CompletionItemFactory.create(
                     text = handler.handlerName,
                     kind = CompletionSymbolKind.FUNCTION,
-                    typeText = "fn",
+                    typeText = ordinaryFunctionTypeTextForSignature(handler.signature),
                     rankingCategory = AikenOrdinaryCompletionCategory.LOCAL
                 )
+        }
+
+        for (moduleTarget in importedModuleTargets) {
+            for (validatorName in AikenValidatorNamespaceSupport.validatorNamesInModule(element, moduleTarget.modulePath)) {
+                if (!seen.add(validatorName)) continue
+                variants +=
+                    createValidatorNamespaceRootLookup(
+                        validatorName = validatorName,
+                        rankingCategory = AikenOrdinaryCompletionCategory.IMPORTED_SYMBOL
+                    )
+            }
+        }
+
+        for (validatorTarget in importedValidatorTargets) {
+            for (moduleFile in AikenModuleFiles.findFilesForModulePath(file.virtualFile, validatorTarget.modulePath)) {
+                val moduleText = moduleFile.contentsToByteArray().toString(Charsets.UTF_8)
+                for (handler in AikenFunctionSignatureExtractor.extractValidatorHandlerEntries(moduleText)) {
+                    if (handler.validatorName != validatorTarget.validatorName || !seen.add(handler.handlerName)) continue
+                    variants +=
+                        CompletionItemFactory.create(
+                            text = handler.handlerName,
+                            kind = CompletionSymbolKind.FUNCTION,
+                            typeText = ordinaryFunctionTypeTextForSignature(handler.signature),
+                            rankingCategory = AikenOrdinaryCompletionCategory.IMPORTED_SYMBOL
+                        )
+                }
+            }
+        }
+        if (importedValidatorTargets.isNotEmpty()) {
+            return variants.mapNotNull { it as? LookupElement }
         }
 
         for (modulePath in importedTargets) {
@@ -461,15 +536,24 @@ object AikenReferenceVariants {
         allowBareTypes: Boolean,
         rankingCategory: AikenOrdinaryCompletionCategory
     ): LookupElement? {
+        val typeText =
+            displayTypeTextForVariant(
+                anchor = anchor,
+                lookupName = lookupName,
+                symbolName = symbolName,
+                kind = kind,
+                modulePath = modulePath,
+                rankingCategory = rankingCategory
+            )
         if (kind != CompletionSymbolKind.TYPE) {
-            return CompletionItemFactory.create(lookupName, kind, rankingCategory = rankingCategory)
+            return CompletionItemFactory.create(lookupName, kind, typeText, rankingCategory)
         }
 
         val constructible =
             AikenConstructibleCompletionSupport.findVisibleConstructible(anchor, symbolName, modulePath)
         if (constructible == null) {
             return if (allowBareTypes) {
-                CompletionItemFactory.create(lookupName, kind, rankingCategory = rankingCategory)
+                CompletionItemFactory.create(lookupName, kind, typeText, rankingCategory)
             } else {
                 null
             }
@@ -478,7 +562,7 @@ object AikenReferenceVariants {
         return AikenCompletionSorting.annotate(
             AikenConstructibleCompletionSupport.createVisibleLookup(
                 constructible = constructible,
-                typeText = "type",
+                typeText = typeText,
                 lookupName = lookupName
             ),
             rankingCategory,
@@ -513,6 +597,17 @@ object AikenReferenceVariants {
 
     private fun heuristicKind(symbolName: String): CompletionSymbolKind =
         if (symbolName.firstOrNull()?.isUpperCase() == true) CompletionSymbolKind.TYPE else CompletionSymbolKind.FUNCTION
+
+    private fun moduleDefinesType(
+        anchor: PsiElement,
+        modulePath: String,
+        symbolName: String
+    ): Boolean =
+        AikenModuleFiles.findFilesForModulePath(anchor.containingFile?.virtualFile, modulePath)
+            .any { moduleFile ->
+                val text = moduleFile.contentsToByteArray().toString(Charsets.UTF_8)
+                AikenTopLevelSymbolExtractor.extract(text).any { it.name == symbolName && it.kind == AikenTopLevelSymbolKind.TYPE }
+            }
 
     private fun isInsideOwnBindingInitializer(
         text: String,
@@ -584,13 +679,14 @@ object AikenReferenceVariants {
         kind: CompletionSymbolKind,
         allowBareTypes: Boolean
     ): LookupElement? {
+        val typeText = displayTypeTextForModuleSymbol(modulePath, moduleText, symbolName, kind)
         if (kind == CompletionSymbolKind.TYPE) {
             val constructible =
                 AikenConstructibleCompletionSupport.findConstructibleInModuleText(modulePath, moduleText, symbolName)
             if (constructible != null) {
                 return AikenConstructibleCompletionSupport.createAutoImportedLookup(
                     constructible = constructible,
-                    typeText = "type"
+                    typeText = typeText
                 ).let {
                     AikenCompletionSorting.annotate(
                         it,
@@ -615,13 +711,7 @@ object AikenReferenceVariants {
                     },
                 kind = kind,
                 typeText =
-                    when (kind) {
-                        CompletionSymbolKind.TYPE -> "type"
-                        CompletionSymbolKind.FUNCTION -> "fn"
-                        CompletionSymbolKind.FIELD -> "field"
-                        CompletionSymbolKind.IDENTIFIER -> "var"
-                        CompletionSymbolKind.KEYWORD -> "keyword"
-                    },
+                    typeText,
                 tailText = " from $modulePath",
                 insertionFamily = autoImportedExportInsertionFamily(modulePath, symbolName),
                 rankingCategory = AikenOrdinaryCompletionCategory.UNIMPORTED_SYMBOL
@@ -636,6 +726,7 @@ object AikenReferenceVariants {
         kind: CompletionSymbolKind,
         allowBareTypes: Boolean
     ): LookupElement? {
+        val typeText = displayTypeTextForModuleSymbol(modulePath, moduleText, symbolName, kind)
         if (kind == CompletionSymbolKind.TYPE) {
             val constructible =
                 AikenConstructibleCompletionSupport.findConstructibleInModuleText(modulePath, moduleText, symbolName)
@@ -645,7 +736,7 @@ object AikenReferenceVariants {
                         text = symbolName,
                         icon = com.intellij.icons.AllIcons.Nodes.Class,
                         kind = CompletionSymbolKind.TYPE,
-                        typeText = "type",
+                        typeText = typeText,
                         tailText = " from $modulePath",
                         insertionFamily =
                             autoImportedQualifiedMemberInsertionFamily(
@@ -674,13 +765,7 @@ object AikenReferenceVariants {
                     },
                 kind = kind,
                 typeText =
-                    when (kind) {
-                        CompletionSymbolKind.TYPE -> "type"
-                        CompletionSymbolKind.FUNCTION -> "fn"
-                        CompletionSymbolKind.FIELD -> "field"
-                        CompletionSymbolKind.IDENTIFIER -> "var"
-                        CompletionSymbolKind.KEYWORD -> "keyword"
-                    },
+                    typeText,
                 tailText = " from $modulePath",
                 insertionFamily =
                     autoImportedQualifiedMemberInsertionFamily(
@@ -931,6 +1016,19 @@ object AikenReferenceVariants {
         )
     }
 
+    private fun createValidatorNamespaceRootLookup(
+        validatorName: String,
+        rankingCategory: AikenOrdinaryCompletionCategory
+    ): LookupElement =
+        AikenCompletionSorting.annotate(
+            com.intellij.codeInsight.lookup.LookupElementBuilder
+                .create(validatorName)
+                .withIcon(com.intellij.icons.AllIcons.Nodes.Package)
+                .withTypeText("validator", true),
+            rankingCategory,
+            CompletionSymbolKind.IDENTIFIER
+        )
+
     private fun moduleQualifierForms(modulePath: String): Set<String> {
         val segments = modulePath.split('/').filter { it.isNotBlank() }
         if (segments.isEmpty()) return emptySet()
@@ -941,6 +1039,108 @@ object AikenReferenceVariants {
         }
         return result
     }
+
+    private fun displayTypeTextForVariant(
+        anchor: PsiElement,
+        lookupName: String,
+        symbolName: String,
+        kind: CompletionSymbolKind,
+        modulePath: String?,
+        rankingCategory: AikenOrdinaryCompletionCategory
+    ): String =
+        when {
+            rankingCategory == AikenOrdinaryCompletionCategory.IMPORTED_MODULE ||
+                rankingCategory == AikenOrdinaryCompletionCategory.UNIMPORTED_MODULE -> "module"
+            kind == CompletionSymbolKind.KEYWORD -> "keyword"
+            kind == CompletionSymbolKind.FIELD -> "field"
+            kind == CompletionSymbolKind.IDENTIFIER ->
+                AikenTypeDirectedCompletionSupport.ordinaryBindingDisplayType(anchor, lookupName)
+                    ?: AikenTypeDirectedCompletionSupport.ordinaryConstDisplayType(anchor, lookupName)
+                    ?: modulePath?.let { moduleDisplayConstType(anchor, it, symbolName) }
+                    ?: "var"
+            kind == CompletionSymbolKind.FUNCTION ->
+                modulePath?.let { moduleDisplayFunctionType(anchor, it, symbolName) }
+                    ?: AikenTypeDirectedCompletionSupport.ordinaryFunctionDisplayType(anchor, lookupName)
+                    ?: "fn"
+            kind == CompletionSymbolKind.TYPE ->
+                modulePath?.let { moduleDisplayConstructibleType(anchor, it, symbolName) }
+                    ?: AikenTypeDirectedCompletionSupport.ordinaryConstructibleDisplayType(anchor, symbolName)
+                    ?: lookupName
+            else -> lookupName
+        }
+
+    private fun displayTypeTextForModuleSymbol(
+        modulePath: String,
+        moduleText: String,
+        symbolName: String,
+        kind: CompletionSymbolKind
+    ): String =
+        when (kind) {
+            CompletionSymbolKind.IDENTIFIER ->
+                AikenConstTypeExtractor.extract(moduleText)
+                    .firstOrNull { entry -> entry.name == symbolName }
+                    ?.type
+                    ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+                    ?: "var"
+            CompletionSymbolKind.FUNCTION ->
+                ordinaryFunctionTypeTextForSignature(
+                    AikenFunctionSignatureExtractor.extract(moduleText)[symbolName].orEmpty()
+                )
+            CompletionSymbolKind.TYPE ->
+                AikenConstructibleCompletionSupport.findConstructibleInModuleText(modulePath, moduleText, symbolName)
+                    ?.resultType
+                    ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+                    ?: symbolName
+            CompletionSymbolKind.FIELD -> "field"
+            CompletionSymbolKind.KEYWORD -> "keyword"
+        }
+
+    private fun moduleDisplayConstType(
+        anchor: PsiElement,
+        modulePath: String,
+        symbolName: String
+    ): String? =
+        AikenModuleFiles.findFilesForModulePath(anchor.containingFile?.virtualFile, modulePath)
+            .asSequence()
+            .map { file -> file.contentsToByteArray().toString(Charsets.UTF_8) }
+            .flatMap { moduleText -> AikenConstTypeExtractor.extract(moduleText).asSequence() }
+            .firstOrNull { entry -> entry.name == symbolName }
+            ?.type
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+
+    private fun moduleDisplayFunctionType(
+        anchor: PsiElement,
+        modulePath: String,
+        symbolName: String
+    ): String? =
+        AikenModuleFiles.findFilesForModulePath(anchor.containingFile?.virtualFile, modulePath)
+            .asSequence()
+            .map { file -> file.contentsToByteArray().toString(Charsets.UTF_8) }
+            .mapNotNull { moduleText ->
+                AikenFunctionSignatureExtractor.extract(moduleText)[symbolName]
+            }
+            .map(::ordinaryFunctionTypeTextForSignature)
+            .firstOrNull()
+
+    private fun moduleDisplayConstructibleType(
+        anchor: PsiElement,
+        modulePath: String,
+        symbolName: String
+    ): String? =
+        AikenModuleFiles.findFilesForModulePath(anchor.containingFile?.virtualFile, modulePath)
+            .asSequence()
+            .map { file -> file.contentsToByteArray().toString(Charsets.UTF_8) }
+            .mapNotNull { moduleText ->
+                AikenConstructibleCompletionSupport.findConstructibleInModuleText(modulePath, moduleText, symbolName)
+                    ?.resultType
+            }
+            .map(AikenTypeText::normalizeGenericVariablesForDisplay)
+            .firstOrNull()
+
+    private fun ordinaryFunctionTypeTextForSignature(signature: String): String =
+        AikenFunctionSignatureText.functionType(signature)
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+            ?: "fn"
 
     private fun createAutoImportedLookup(spec: AutoImportedLookupSpec): LookupElement {
         val lookupIdentity =

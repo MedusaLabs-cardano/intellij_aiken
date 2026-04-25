@@ -65,6 +65,30 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("helper"))
     }
 
+    fun testAutoPopupDoesNotOpenInsideLineComment() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/models.ak",
+            """
+            pub type Input {
+              Input
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn main() {
+              // <caret>
+            }
+            """.trimIndent()
+        )
+
+        type("Inp")
+
+        assertNull("Auto-popup should stay suppressed inside comments", myFixture.lookupElements)
+    }
+
     fun testAutoPopupWorksForUnimportedTypeInOrdinaryExpressionPosition() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -762,6 +786,40 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("zero"))
     }
 
+    fun testAutoPopupWorksForTypedBindingInitializerAfterEqualsSpace() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Datum {
+              Datum
+            }
+
+            pub type Output {
+              Output {
+                datum: Datum,
+              }
+            }
+
+            pub type Input {
+              Input {
+                output: Output,
+              }
+            }
+
+            pub fn qwer(Input { output, .. }, redeemerq: Int) -> Bool {
+              let Output { datum: datum, .. } =<caret>
+            }
+            """.trimIndent()
+        )
+
+        type(" ")
+
+        val suggestions = myFixture.lookupElements?.map { it.lookupString }.orEmpty()
+        assertTrue(suggestions.toString(), suggestions.contains("output"))
+        assertFalse(suggestions.toString(), suggestions.contains("redeemerq"))
+    }
+
     fun testAutoPopupWorksForTypedFunctionArgumentSuggestions() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -788,6 +846,125 @@ class AikenCompletionAutoPopupTest : CompletionAutoPopupTestCase() {
         assertTrue(suggestions.toString(), suggestions.contains("backup"))
         assertTrue(suggestions.toString(), suggestions.contains("VerificationKey"))
         assertTrue(suggestions.toString(), suggestions.contains("Script"))
+    }
+
+    fun testAutoPopupDoesNotOpenForBlankUnconstrainedGenericFunctionArgument() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn keep(first: Int, second: b) -> b {
+              second
+            }
+
+            fn main(seed: Int) {
+              keep(seed,<caret>)
+            }
+            """.trimIndent()
+        )
+
+        type(" ")
+
+        assertNull("Auto-popup should stay suppressed for blank unconstrained generic argument", myFixture.lookupElements)
+    }
+
+    fun testAutoPopupDoesNotOpenInsideEmptyAndBlockAfterOpenBrace() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature] } = tx
+                and<caret>
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        type("{")
+
+        assertNull("Auto-popup should stay suppressed at empty logical block start", myFixture.lookupElements)
+
+        val explicitSuggestions = myFixture.completeBasic()?.map { it.lookupString }.orEmpty()
+        assertTrue(explicitSuggestions.toString(), explicitSuggestions.contains("tx"))
+        assertTrue(explicitSuggestions.toString(), explicitSuggestions.contains("signature"))
+    }
+
+    fun testAutoPopupDoesNotOpenInsideEmptyAndBlockAfterComma() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature] } = tx
+                and {
+                  signature == expected_pubkey<caret>
+                }
+
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        type(",")
+
+        assertNull("Auto-popup should stay suppressed after comma in logical block", myFixture.lookupElements)
+
+        val explicitSuggestions = myFixture.completeBasic()?.map { it.lookupString }.orEmpty()
+        assertTrue(explicitSuggestions.toString(), explicitSuggestions.contains("tx"))
+        assertTrue(explicitSuggestions.toString(), explicitSuggestions.contains("signature"))
+    }
+
+    fun testAutoPopupDoesNotOpenInsideEmptyOrBlockAfterOpenBrace() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction}
+
+            validator contract {
+              mint(_, _, tx: Transaction) {
+                or<caret>
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        type("{")
+
+        assertNull("Auto-popup should stay suppressed at empty `or` block start", myFixture.lookupElements)
     }
 
     fun testAutoPopupWorksInsideListLiteralForTypedSuggestions() {

@@ -614,7 +614,7 @@ class AikenRunConfiguration(
                     val prepared = prepareIdeApplyContext(handler)
                     val context = prepared.context
 
-                    if (context.parameters.isEmpty()) {
+                    if (context.totalParameterCount == 0) {
                         console.showStatus("Blueprint has no parameters left to apply")
                         if (prepared.hiddenApplied.isNotEmpty()) {
                             console.showAppliedParameters(prepared.hiddenApplied, includeHint = false)
@@ -624,17 +624,29 @@ class AikenRunConfiguration(
                         return@task
                     }
 
-                    val sections = context.parameters.mapIndexed { index, parameter ->
-                        val label = parameter.title.ifBlank { "Parameter ${index + 1}" }
-                        ApplyParameterSection(
-                            title = label,
-                            rootNode = createApplyNode(parameter.schema, label)
-                        )
-                    }.toMutableList()
+                    val multipleValidators = context.targets.size > 1
+                    val sections = context.targets
+                        .flatMap { target ->
+                            target.parameters.mapIndexed { index, parameter ->
+                                val parameterLabel = parameter.title.ifBlank { "Parameter ${index + 1}" }
+                                val sectionLabel =
+                                    if (multipleValidators) {
+                                        "${target.module}.${target.validator} / $parameterLabel"
+                                    } else {
+                                        parameterLabel
+                                    }
+                                ApplyParameterSection(
+                                    title = sectionLabel,
+                                    rootNode = createApplyNode(parameter.schema, sectionLabel),
+                                    module = target.module,
+                                    validator = target.validator
+                                )
+                            }
+                        }
+                        .toMutableList()
 
                     console.showForm(
-                        module = context.module,
-                        validator = context.validator,
+                        targetLabel = context.displayTarget,
                         blueprintPath = context.blueprintFile.absolutePath,
                         sections = sections
                     )
@@ -703,45 +715,47 @@ class AikenRunConfiguration(
                 )
             }
 
-            if (grouped.size > 1) {
-                val candidates = grouped.keys.joinToString(", ")
-                throw ExecutionException("More than one validator matches filters: $candidates")
-            }
-
-            val selectedKey = grouped.keys.first()
-            val selected = grouped.values.first()
-            val parsed = parseValidatorTargetFromTitle(selected.getString("title").orEmpty())
-                ?: throw ExecutionException("Unable to resolve validator target from blueprint.")
-
-            val definitions = LinkedHashMap<String, JsonObject>()
+            val rootDefinitions = LinkedHashMap<String, JsonObject>()
             root["definitions"]?.asJsonObjectOrNull()?.entrySet()?.forEach { (name, value) ->
-                value.asJsonObjectOrNull()?.let { definitions[name] = it }
-            }
-            selected["definitions"]?.asJsonObjectOrNull()?.entrySet()?.forEach { (name, value) ->
-                value.asJsonObjectOrNull()?.let { definitions[name] = it }
+                value.asJsonObjectOrNull()?.let { rootDefinitions[name] = it }
             }
 
-            val parametersArray = selected["parameters"]?.asJsonArray ?: JsonArray()
-            val parameters = ArrayList<ApplyResolvedParameter>(parametersArray.size())
-            for ((index, parameterElement) in parametersArray.withIndex()) {
-                val parameterObject = parameterElement.asJsonObjectOrNull() ?: continue
-                val declaration = parameterObject["schema"]?.asJsonObjectOrNull()
-                    ?: throw ExecutionException("Parameter #${index + 1} has no schema.")
-                val title = parameterObject.getString("title").orEmpty()
-                val schema = resolveSchemaFromDeclaration(declaration, definitions, LinkedHashSet())
-                    ?: throw ExecutionException("Unable to resolve schema for parameter #${index + 1}.")
-                parameters += ApplyResolvedParameter(
-                    title = title,
-                    schema = schema
+            val targets = ArrayList<ApplyValidatorParameters>(grouped.size)
+            for ((selectedKey, selected) in grouped) {
+                val parsed = parseValidatorTargetFromTitle(selected.getString("title").orEmpty())
+                    ?: throw ExecutionException("Unable to resolve validator target from blueprint.")
+
+                val definitions = LinkedHashMap(rootDefinitions)
+                selected["definitions"]?.asJsonObjectOrNull()?.entrySet()?.forEach { (name, value) ->
+                    value.asJsonObjectOrNull()?.let { definitions[name] = it }
+                }
+
+                val parametersArray = selected["parameters"]?.asJsonArray ?: JsonArray()
+                val parameters = ArrayList<ApplyResolvedParameter>(parametersArray.size())
+                for ((index, parameterElement) in parametersArray.withIndex()) {
+                    val parameterObject = parameterElement.asJsonObjectOrNull() ?: continue
+                    val declaration = parameterObject["schema"]?.asJsonObjectOrNull()
+                        ?: throw ExecutionException("Parameter #${index + 1} for $selectedKey has no schema.")
+                    val title = parameterObject.getString("title").orEmpty()
+                    val schema = resolveSchemaFromDeclaration(declaration, definitions, LinkedHashSet())
+                        ?: throw ExecutionException("Unable to resolve schema for parameter #${index + 1} of $selectedKey.")
+                    parameters += ApplyResolvedParameter(
+                        title = title,
+                        schema = schema
+                    )
+                }
+
+                targets += ApplyValidatorParameters(
+                    module = parsed.first,
+                    validator = parsed.second,
+                    selectedValidator = selectedKey,
+                    parameters = parameters
                 )
             }
 
             return ApplyContext(
                 blueprintFile = inspectionFile,
-                module = parsed.first,
-                validator = parsed.second,
-                selectedValidator = selectedKey,
-                parameters = parameters
+                targets = targets
             )
         }
 
@@ -754,15 +768,21 @@ class AikenRunConfiguration(
                 throw ExecutionException("Blueprint file does not exist: ${inspectionFile.absolutePath}")
             }
 
+            val initialContext = loadApplyContext(inspectionFile)
             val hiddenApplied = ArrayList<String>()
+            val defaultTarget = initialContext.targets.singleOrNull()
             val defaultsQueue =
-                alignedConfiguredApplyCborParameters(
-                    executable,
-                    workDir,
-                    inspectionFile,
-                    configuration.applyModule.trim().ifEmpty { null },
-                    configuration.applyValidator.trim().ifEmpty { null }
-                )
+                if (defaultTarget == null) {
+                    ArrayDeque()
+                } else {
+                    alignedConfiguredApplyCborParameters(
+                        executable,
+                        workDir,
+                        inspectionFile,
+                        defaultTarget.module,
+                        defaultTarget.validator
+                    )
+                }
 
             val targetOutput = resolveApplyOutputFile(workDir) ?: inspectionFile
             var currentInput = inspectionFile
@@ -773,8 +793,8 @@ class AikenRunConfiguration(
                     buildApplyCommandParametersForPaths(
                         blueprintInput = currentInput.absolutePath,
                         blueprintOutput = targetOutput.absolutePath,
-                        moduleName = configuration.applyModule.trim().ifEmpty { null },
-                        validatorName = configuration.applyValidator.trim().ifEmpty { null },
+                        moduleName = defaultTarget?.module,
+                        validatorName = defaultTarget?.validator,
                         singleCborParameter = cborHex,
                         includeExtraArgs = true
                     )
@@ -801,7 +821,7 @@ class AikenRunConfiguration(
                 currentInput = targetOutput
             }
 
-            val context = loadApplyContext(currentInput)
+            val context = if (hiddenApplied.isEmpty()) initialContext else loadApplyContext(currentInput)
             return PreparedApplyContext(context, hiddenApplied)
         }
 
@@ -846,8 +866,8 @@ class AikenRunConfiguration(
                         buildApplyCommandParametersForPaths(
                             blueprintInput = currentInput.absolutePath,
                             blueprintOutput = targetOutput.absolutePath,
-                            moduleName = configuration.applyModule.trim().ifEmpty { null },
-                            validatorName = configuration.applyValidator.trim().ifEmpty { null },
+                            moduleName = section.module,
+                            validatorName = section.validator,
                             singleCborParameter = cborHex,
                             includeExtraArgs = true
                         )
@@ -1406,8 +1426,7 @@ class AikenRunConfiguration(
             private val sections = ArrayList<ApplyParameterSection>()
             private var onApply: (() -> Unit)? = null
             private var initialSectionCount = 0
-            private var currentModule = ""
-            private var currentValidator = ""
+            private var currentTargetLabel = ""
             private var currentBlueprintPath = ""
             private var baseTreeCellRenderer: TreeCellRenderer? = null
 
@@ -2098,8 +2117,7 @@ class AikenRunConfiguration(
             }
 
             fun showForm(
-                module: String,
-                validator: String,
+                targetLabel: String,
                 blueprintPath: String,
                 sections: MutableList<ApplyParameterSection>
             ) {
@@ -2107,8 +2125,7 @@ class AikenRunConfiguration(
                     clearError()
                     messagesArea.text = ""
                     appendMessage("Blueprint: $blueprintPath")
-                    currentModule = module
-                    currentValidator = validator
+                    currentTargetLabel = targetLabel
                     currentBlueprintPath = blueprintPath
                     synchronized(this.sections) {
                         this.sections.clear()
@@ -2177,8 +2194,8 @@ class AikenRunConfiguration(
                     configureTreeTableView()
                     parameterTreeTable.setRootVisible(false)
                     configureTreeTableColumns()
-                    statusArea.text = if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
-                        "Blueprint has no parameters left to apply for $currentModule.$currentValidator"
+                    statusArea.text = if (currentTargetLabel.isNotBlank()) {
+                        "Blueprint has no parameters left to apply for $currentTargetLabel"
                     } else {
                         "Blueprint has no parameters left to apply"
                     }
@@ -2190,8 +2207,8 @@ class AikenRunConfiguration(
                 treeScroll.isVisible = true
                 controlsPanel.isVisible = true
                 parameterTreeTable.setRootVisible(true)
-                val rootLabel = if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
-                    "$currentModule.$currentValidator parameters"
+                val rootLabel = if (currentTargetLabel.isNotBlank()) {
+                    "$currentTargetLabel parameters"
                 } else {
                     "Remaining parameters"
                 }
@@ -2216,8 +2233,8 @@ class AikenRunConfiguration(
                     append("Ready to apply ")
                     append(remaining)
                     append(if (remaining == 1) " parameter" else " parameters")
-                    if (currentModule.isNotBlank() && currentValidator.isNotBlank()) {
-                        append(" for '$currentModule.$currentValidator'")
+                    if (currentTargetLabel.isNotBlank()) {
+                        append(" for '$currentTargetLabel'")
                     }
                 }
             }
@@ -3722,6 +3739,18 @@ class AikenRunConfiguration(
 
         private data class ApplyContext(
             val blueprintFile: File,
+            val targets: List<ApplyValidatorParameters>
+        ) {
+            val totalParameterCount: Int = targets.sumOf { it.parameters.size }
+            val displayTarget: String =
+                when (targets.size) {
+                    0 -> ""
+                    1 -> targets.single().selectedValidator
+                    else -> "${targets.size} validators"
+                }
+        }
+
+        private data class ApplyValidatorParameters(
             val module: String,
             val validator: String,
             val selectedValidator: String,
@@ -3745,7 +3774,9 @@ class AikenRunConfiguration(
 
         private data class ApplyParameterSection(
             val title: String,
-            val rootNode: ApplyUiNode
+            val rootNode: ApplyUiNode,
+            val module: String,
+            val validator: String
         )
 
         private data class ApplyNamedSchema(
@@ -6937,15 +6968,6 @@ class AikenRunConfiguration(
             if (rendered.isNotBlank()) {
                 details += "counterexample: $rendered"
             }
-        }
-
-        val onFailure = test.getString("on_failure")
-        if (!onFailure.isNullOrBlank()) {
-            details += "on_failure: $onFailure"
-        }
-
-        if (traces.isNotEmpty()) {
-            details += "traces:\n" + traces.joinToString("\n")
         }
 
         if (details.isEmpty()) return null

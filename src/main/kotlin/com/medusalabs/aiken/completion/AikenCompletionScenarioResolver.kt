@@ -2,8 +2,10 @@ package com.medusalabs.aiken.completion
 
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
+import com.intellij.codeInsight.completion.CompletionUtilCore
 
 internal sealed interface AikenCompletionScenario {
+    data object NoSuggestions : AikenCompletionScenario
     data object UseModule : AikenCompletionScenario
     data object UseSymbol : AikenCompletionScenario
     data object TypeReference : AikenCompletionScenario
@@ -46,14 +48,21 @@ internal object AikenCompletionScenarioResolver {
         val safeOffset = offset.coerceIn(0, file.textLength)
         val text = file.text
         val anchor = findAnchorElement(file, safeOffset)
-        val prefixOffset =
-            anchor
-                ?.takeIf(::isIdentifierLikeElement)
-                ?.textRange
-                ?.endOffset
-                ?.coerceAtLeast(safeOffset)
-                ?: safeOffset
-        val prefix = completionPrefix(text, prefixOffset)
+        val prefix = completionPrefix(text, safeOffset)
+        if (AikenCompletionContexts.isDeclarationNameContext(text, safeOffset)) {
+            val scenario = AikenCompletionScenario.NoSuggestions
+            return AikenCompletionResolution(
+                scenario = scenario,
+                anchor = anchor,
+                prefix = prefix,
+                insideListLiteral = false,
+                hasArgumentContext = false,
+                qualifiedAccessQualifier = null,
+                stopAfterArgumentSuggestions = false,
+                policy = AikenCompletionScenarioPolicies.forScenario(text, safeOffset, scenario)
+            )
+        }
+
         val useContext = AikenUseCompletionContext.detect(text, safeOffset)
         if (useContext != null) {
             val useScenario =
@@ -140,6 +149,8 @@ internal object AikenCompletionScenarioResolver {
 
     private fun completionPrefix(text: String, offset: Int): String {
         return AikenSyntaxText.identifierPrefix(text, offset)
+            .replace(CompletionUtilCore.DUMMY_IDENTIFIER_TRIMMED, "")
+            .replace(CompletionUtilCore.DUMMY_IDENTIFIER, "")
     }
 
     private fun qualifiedAccessContext(text: String, offset: Int): QualifiedAccessContext? {

@@ -7,8 +7,12 @@ import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileSystem
+import java.nio.file.FileSystemNotFoundException
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
+import java.net.URI
 
 @Suppress("SameParameterValue")
 internal object AikenProjectScaffolder {
@@ -22,8 +26,13 @@ internal object AikenProjectScaffolder {
         )
     private val VALIDATOR_TEMPLATE_FILES =
         listOf(
-            TemplateFile("validators/placeholder.ak", "validators/placeholder.ak"),
+            TemplateFile("validators/contract.ak", "validators/contract.ak"),
             TemplateFile("validators/tests/test_module.ak", "validators/tests/test_module.ak")
+        )
+    private val OPTIONAL_TEMPLATE_DIRECTORIES =
+        listOf(
+            ".idea/runConfigurations",
+            ".run"
         )
 
     private data class TemplateFile(
@@ -146,6 +155,13 @@ internal object AikenProjectScaffolder {
                 )
             }
         }
+        OPTIONAL_TEMPLATE_DIRECTORIES.forEach { templateDirectory ->
+            copyTemplateDirectoryIfPresent(
+                templateRelativePath = templateDirectory,
+                destinationRoot = targetDir.toPath().resolve(templateDirectory),
+                replacements = templateValues
+            )
+        }
     }
 
     private fun copyTemplateFile(
@@ -166,6 +182,77 @@ internal object AikenProjectScaffolder {
             }
         destination.parent?.let(Files::createDirectories)
         Files.writeString(destination, content, StandardCharsets.UTF_8)
+    }
+
+    private fun copyTemplateDirectoryIfPresent(
+        templateRelativePath: String,
+        destinationRoot: Path,
+        replacements: Map<String, String>
+    ) {
+        val resourcePath = "/$TEMPLATE_ROOT/$templateRelativePath"
+        val resourceUrl = AikenProjectScaffolder::class.java.getResource(resourcePath) ?: return
+        openTemplateDirectory(resourceUrl.toURI()).use { templateDirectory ->
+            val templateRoot = templateDirectory.root
+            val paths = templateDirectory.paths
+            paths
+                .filter(Files::isRegularFile)
+                .forEach { templateFile ->
+                    val relativePath = templateRoot.relativize(templateFile).toString().replace(File.separatorChar, '/')
+                    copyTemplateFile(
+                        templateRelativePath = "$templateRelativePath/$relativePath",
+                        destination = destinationRoot.resolve(relativePath),
+                        replacements = replacements
+                    )
+                }
+        }
+    }
+
+    private data class OpenTemplateDirectory(
+        val root: Path,
+        val paths: java.util.stream.Stream<Path>,
+        private val fileSystemToClose: FileSystem? = null
+    ) : AutoCloseable {
+        override fun close() {
+            try {
+                paths.close()
+            } finally {
+                fileSystemToClose?.close()
+            }
+        }
+    }
+
+    private fun openTemplateDirectory(resourceUri: URI): OpenTemplateDirectory {
+        if (resourceUri.scheme != "jar") {
+            val root = Path.of(resourceUri)
+            return OpenTemplateDirectory(root = root, paths = Files.walk(root))
+        }
+
+        val (templateRoot, fileSystem, created) = resolveJarTemplateRoot(resourceUri)
+        return OpenTemplateDirectory(
+            root = templateRoot,
+            paths = Files.walk(templateRoot),
+            fileSystemToClose = fileSystem.takeIf { created }
+        )
+    }
+
+    private fun openJarFileSystem(jarFileUri: URI): Pair<FileSystem, Boolean> =
+        try {
+            FileSystems.getFileSystem(jarFileUri) to false
+        } catch (_: FileSystemNotFoundException) {
+            FileSystems.newFileSystem(jarFileUri, emptyMap<String, Any>()) to true
+        }
+
+    private fun resolveJarTemplateRoot(resourceUri: URI): Triple<Path, FileSystem, Boolean> {
+        val raw = resourceUri.toString()
+        val separatorIndex = raw.indexOf("!/")
+        if (separatorIndex < 0) {
+            throw IOException("Unsupported jar resource URI: $resourceUri")
+        }
+
+        val jarFileUri = URI.create(raw.substring(0, separatorIndex))
+        val entryPath = raw.substring(separatorIndex + 2)
+        val (fileSystem, created) = openJarFileSystem(jarFileUri)
+        return Triple(fileSystem.getPath("/$entryPath"), fileSystem, created)
     }
 
     private fun applyTemplateReplacements(
@@ -329,7 +416,7 @@ internal object AikenProjectScaffolder {
         }
 
         val content = """
-            use placeholder
+            use contract
             
             test example() {
               2 + 2 == 4
@@ -343,7 +430,7 @@ internal object AikenProjectScaffolder {
         val validatorsDir = targetDir.toPath().resolve("validators")
         Files.createDirectories(validatorsDir)
 
-        val validatorFile = validatorsDir.resolve("placeholder.ak")
+        val validatorFile = validatorsDir.resolve("contract.ak")
         if (Files.exists(validatorFile)) {
             return
         }
@@ -355,7 +442,7 @@ internal object AikenProjectScaffolder {
             use cardano/governance.{ProposalProcedure, Voter}
             use cardano/transaction.{Transaction, OutputReference}
             
-            validator placeholder {
+            validator contract {
               mint(_redeemer: Data, _policy_id: PolicyId, _self: Transaction) {
                 todo @"mint logic goes here"
               }

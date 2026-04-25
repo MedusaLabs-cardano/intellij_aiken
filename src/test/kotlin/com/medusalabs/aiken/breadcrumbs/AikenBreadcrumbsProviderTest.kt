@@ -52,6 +52,65 @@ class AikenBreadcrumbsProviderTest : AikenPlatformTestCase() {
         assertTrue(labels.toString(), labels.any { it.trim().startsWith("0") })
     }
 
+    @Test
+    fun breadcrumbsDoNotCreateParentCycleThroughPsiFile() {
+        val file =
+            myFixture.configureByText(
+                AikenFileType,
+                """
+                use cardano/transaction.{Transaction}
+                
+                validator contract {
+                  mint(redeemer: Int, tx: Transaction) {
+                    when redeemer is {
+                      0 -> {
+                        let ins<caret>ide = tx
+                        inside
+                      }
+                      _ -> tx
+                    }
+                  }
+                }
+                """.trimIndent()
+            )
+
+        val provider = AikenBreadcrumbsProvider()
+        val leaf = findElementAtCaret(file) ?: error("Element at caret not found")
+        val visited = HashSet<PsiElement>()
+        var current: PsiElement? = leaf
+        var steps = 0
+
+        while (current != null) {
+            assertTrue("Breadcrumb parent chain contains a cycle at $current", visited.add(current))
+            assertTrue("Breadcrumb parent chain is unexpectedly deep", steps++ < 20)
+            current = provider.getParent(current)
+        }
+    }
+
+    @Test
+    fun breadcrumbsDoNotBuildSyntheticParentForValidatorFileWithoutLeadingImports() {
+        val file =
+            myFixture.configureByText(
+                AikenFileType,
+                """
+                validator forever_false {
+                  spend(_d, _r, _u, _t) {
+                    Fal<caret>se
+                  }
+                
+                  else(_) {
+                    fail
+                  }
+                }
+                """.trimIndent()
+            )
+
+        val provider = AikenBreadcrumbsProvider()
+
+        assertFalse(provider.acceptElement(file))
+        assertNull(provider.getParent(file))
+    }
+
     private fun breadcrumbLabelsAtCaret(file: PsiFile): List<String> {
         val provider = AikenBreadcrumbsProvider()
         val leaf = findElementAtCaret(file) ?: error("Element at caret not found")

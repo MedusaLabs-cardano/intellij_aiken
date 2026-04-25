@@ -1,5 +1,6 @@
 package com.medusalabs.aiken.lsp
 
+import com.intellij.codeInsight.intention.PriorityAction
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -28,7 +29,7 @@ class AikenLspCodeActionsSupportTest {
     private val server = FakeLspServer()
 
     @Test
-    fun renamesAtomicUnusedImportQuickFixToSingularTitle() {
+    fun promotesAtomicUnusedImportQuickFixToRemoveAllByDefault() {
         val action =
             CodeAction("Remove redundant imports").apply {
                 kind = "quickfix"
@@ -37,7 +38,8 @@ class AikenLspCodeActionsSupportTest {
 
         val quickFix = support.createQuickFix(server, action)
 
-        assertEquals(AikenUnusedImportsQuickFixSupport.REMOVE_ONE_UNUSED_IMPORT, quickFix.text)
+        assertEquals(AikenUnusedImportsQuickFixSupport.REMOVE_ALL_UNUSED_IMPORTS, quickFix.text)
+        assertEquals(PriorityAction.Priority.TOP, (quickFix as PriorityAction).priority)
         assertTrue(quickFix is AikenPreparedLspIntentionAction)
     }
 
@@ -52,6 +54,7 @@ class AikenLspCodeActionsSupportTest {
         val quickFix = support.createQuickFix(server, action)
 
         assertEquals("Remove redundant imports", quickFix.text)
+        assertEquals(PriorityAction.Priority.NORMAL, (quickFix as PriorityAction).priority)
         assertTrue(quickFix is AikenPreparedLspIntentionAction)
     }
 

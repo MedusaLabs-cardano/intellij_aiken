@@ -7,6 +7,7 @@ import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureNameKey
+import com.medusalabs.aiken.project.AikenModuleFiles
 import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
@@ -36,6 +37,17 @@ object AikenArgumentCompletionSupport {
             return AikenTypeDirectedCompletionSupport.lookupsForExpectedType(anchor, expectedType, call.currentArgument.text)
         }
         return emptyList()
+    }
+
+    fun hasBlankArgumentWithUnconstrainedExpectedType(anchor: PsiElement?, offset: Int): Boolean {
+        val file = anchor?.containingFile ?: return false
+        val text = file.text
+        for (call in findCallContexts(text, offset)) {
+            if (call.currentArgument.text.isNotBlank()) continue
+            val expectedType = expectedArgumentType(anchor, call) ?: continue
+            return AikenTypedLookupFactory.isBareGenericTypeParameter(expectedType)
+        }
+        return false
     }
 
     fun pipeSpecificVariants(anchor: PsiElement?, offset: Int): List<LookupElement> {
@@ -96,8 +108,23 @@ object AikenArgumentCompletionSupport {
         val scope = AikenSearchScopes.forElement(anchor)
         val index = FileBasedIndex.getInstance()
         val currentModulePath = AikenModulePath.fromFile(file.virtualFile)
+        val useModel = AikenUseStatementParser.parseModel(fileText)
 
         if (sameFileValidatorHandlerSignatures.isNotEmpty()) return sameFileValidatorHandlerSignatures
+
+        val importedValidatorHandlerSignatures =
+            call.qualifier
+                ?.let { qualifierChain ->
+                    AikenValidatorNamespaceSupport.importedValidatorHandlerSignatures(
+                        anchorFile = file.virtualFile,
+                        useModel = useModel,
+                        qualifierChain = qualifierChain,
+                        handlerName = call.calleeName
+                    )
+                }
+                .orEmpty()
+                .toSet()
+        if (importedValidatorHandlerSignatures.isNotEmpty()) return importedValidatorHandlerSignatures
 
         if (call.qualifier == null) {
             val currentModuleIndexed =
@@ -119,7 +146,7 @@ object AikenArgumentCompletionSupport {
         }
 
         val importedTargets =
-            AikenUseStatementParser.parseModel(fileText)
+            useModel
                 .resolveCallableTargets(call.calleeName, call.qualifier)
         for (target in importedTargets) {
             val indexed =
@@ -182,21 +209,13 @@ object AikenArgumentCompletionSupport {
         if (start >= end) return null
 
         val name = text.subSequence(start, end).toString()
-        var qualifier: String? = null
-        while (index >= 0 && text[index].isWhitespace()) index--
-        if (index >= 0 && text[index] == '.') {
-            index--
-            while (index >= 0 && text[index].isWhitespace()) index--
-            val qualifierEnd = index + 1
-            while (index >= 0 && AikenSyntaxText.isIdentifierChar(text[index])) index--
-            val qualifierStart = index + 1
-            if (qualifierStart < qualifierEnd) {
-                qualifier = text.subSequence(qualifierStart, qualifierEnd).toString()
-                return Callee(name, qualifier, qualifierStart)
-            }
+        val qualifier = AikenSyntaxText.qualifiedChainBeforeOffset(text, start)
+        if (qualifier != null) {
+            val qualifierStart = (start - qualifier.length - 1).coerceAtLeast(0)
+            return Callee(name, qualifier, qualifierStart)
         }
 
-        return Callee(name, qualifier, start)
+        return Callee(name, null, start)
     }
 
     private fun detectPipeImplicitArgumentCount(text: CharSequence, callableStartOffset: Int): Int {
@@ -208,7 +227,16 @@ object AikenArgumentCompletionSupport {
 
     private fun findPipeContext(text: String, offset: Int): PipeContext? {
         if (text.isEmpty() || offset <= 0) return null
+        val currentExpressionStart =
+            AikenTopLevelText.findExpressionStartBefore(
+                text = text,
+                endExclusive = offset,
+                stopAtPipeOperator = false
+            )
+                ?: return null
         val pipeOffset = AikenSyntaxText.findLastTopLevelPipeOffset(text, offset, trackNesting = false) ?: return null
+        if (pipeOffset < currentExpressionStart) return null
+
         val leftExpression = extractPipeLeftExpression(text, pipeOffset)?.trim().orEmpty()
         if (leftExpression.isEmpty()) return null
 

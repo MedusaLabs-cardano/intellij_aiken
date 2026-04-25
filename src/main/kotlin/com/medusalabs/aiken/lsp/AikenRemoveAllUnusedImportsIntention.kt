@@ -1,6 +1,7 @@
 package com.medusalabs.aiken.lsp
 
 import com.intellij.codeInsight.intention.HighPriorityAction
+import com.intellij.codeInsight.intention.PriorityAction
 import com.intellij.codeInsight.intention.PsiElementBaseIntentionAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
@@ -17,6 +18,8 @@ class AikenRemoveAllUnusedImportsIntention :
     }
 
     override fun getFamilyName(): String = AikenUnusedImportsQuickFixSupport.REMOVE_ALL_UNUSED_IMPORTS
+
+    override fun getPriority(): PriorityAction.Priority = PriorityAction.Priority.TOP
 
     override fun checkFile(file: PsiFile?): Boolean = file?.fileType == AikenFileType
 
@@ -39,28 +42,6 @@ class AikenRemoveAllUnusedImportsIntention :
 
     override fun invoke(project: Project, editor: Editor, element: PsiElement) {
         val file = element.containingFile ?: return
-        val virtualFile = file.virtualFile ?: return
-        val service = project.getService(AikenLspDiagnosticsProjectViewService::class.java) ?: return
-        val unusedDiagnostics =
-            AikenUnusedImportsQuickFixSupport.collectUnusedImportDiagnostics(
-                service.getDiagnostics(virtualFile)
-            )
-        if (unusedDiagnostics.size < 2) return
-        val anchor =
-            AikenUnusedImportsQuickFixSupport.findUnusedImportDiagnosticAtOffset(
-                editor.document,
-                unusedDiagnostics,
-                editor.caretModel.offset
-            )
-                ?: return
-        val action =
-            AikenUnusedImportsQuickFixSupport.requestRemoveAllUnusedImportsAction(
-                project,
-                virtualFile,
-                unusedDiagnostics,
-                anchor
-            )
-                ?: return
-        AikenUnusedImportsQuickFixSupport.applyResolvedAction(action, project, editor, file)
+        AikenUnusedImportsQuickFixSupport.applyRemoveAllUnusedImportsIfAvailable(project, editor, file)
     }
 }

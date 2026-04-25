@@ -81,6 +81,28 @@ object AikenUnusedImportsQuickFixSupport {
         return AikenPreparedLspIntentionAction(server, codeAction, REMOVE_ALL_UNUSED_IMPORTS)
     }
 
+    fun applyRemoveAllUnusedImportsIfAvailable(
+        project: Project,
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        val virtualFile = file.virtualFile ?: return false
+        val service = project.getService(AikenLspDiagnosticsProjectViewService::class.java) ?: return false
+        val unusedDiagnostics = collectUnusedImportDiagnostics(service.getDiagnostics(virtualFile))
+        if (unusedDiagnostics.size < 2) return false
+        val anchor =
+            findUnusedImportDiagnosticAtOffset(
+                editor.document,
+                unusedDiagnostics,
+                editor.caretModel.offset
+            )
+                ?: return false
+        val action =
+            requestRemoveAllUnusedImportsAction(project, virtualFile, unusedDiagnostics, anchor)
+                ?: return false
+        return applyResolvedAction(action, project, editor, file)
+    }
+
     fun applyResolvedAction(
         action: IntentionAction,
         project: Project,

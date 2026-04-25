@@ -28,7 +28,7 @@ class AikenCompletionContributor : CompletionContributor(), DumbAware {
             CompletionType.BASIC,
             inAikenFile,
             KeywordCompletionProvider(
-                keywords = AikenLexing.keywords + setOf("True", "False"),
+                keywords = AikenLexing.keywords,
                 stopTokenTypes = setOf(AikenTokenTypes.COMMENT, AikenTokenTypes.STRING),
                 priority = null,
                 visibilityResolver = { parameters ->

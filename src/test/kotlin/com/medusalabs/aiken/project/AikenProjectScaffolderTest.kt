@@ -26,10 +26,11 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
         val manifest = Files.readString(projectDir.resolve("aiken.toml"))
         assertTrue(Files.isDirectory(projectDir.resolve("lib")))
         assertTrue(Files.isDirectory(projectDir.resolve("env")))
-        assertTrue(Files.isRegularFile(projectDir.resolve("validators").resolve("placeholder.ak")))
+        assertTrue(Files.isRegularFile(projectDir.resolve("validators").resolve("contract.ak")))
         assertTrue(Files.isRegularFile(projectDir.resolve("validators").resolve("tests").resolve("test_module.ak")))
         assertTrue(Files.isRegularFile(projectDir.resolve("README.md")))
         assertTrue(Files.isRegularFile(projectDir.resolve(".github").resolve("workflows").resolve("continuous-integration.yml")))
+        assertTrue(Files.isRegularFile(projectDir.resolve(".idea").resolve("runConfigurations").resolve("Run_checks.xml")))
         assertEquals(false, Files.isRegularFile(projectDir.resolve("package.json")))
         assertTrue(manifest.contains("""name = "acme/demo""""))
         assertTrue(manifest.contains("""compiler = "1.1.21""""))
@@ -70,11 +71,11 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
 
         applyDefaultsForTest(projectDir.toString())
 
-        val validatorFile = projectDir.resolve("validators").resolve("placeholder.ak")
+        val validatorFile = projectDir.resolve("validators").resolve("contract.ak")
         val testFile = projectDir.resolve("validators").resolve("tests").resolve("test_module.ak")
         assertTrue(Files.isRegularFile(validatorFile))
         assertTrue(Files.isRegularFile(testFile))
-        assertTrue(Files.readString(testFile).contains("use placeholder"))
+        assertTrue(Files.readString(testFile).contains("use contract"))
     }
 
     @Suppress("SameParameterValue")

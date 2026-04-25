@@ -13,6 +13,7 @@ internal enum class AikenOrdinaryCompletionCategory {
     OTHER,
     UNIMPORTED_MODULE,
     UNIMPORTED_SYMBOL,
+    BUILTIN_VALUE,
     KEYWORD,
     SAME_FILE,
     IMPORTED_MODULE,
@@ -23,9 +24,14 @@ internal enum class AikenOrdinaryCompletionCategory {
 internal enum class AikenTypedCompletionCategory {
     OTHER,
     EXTRA,
+    PATTERN_PRIMARY,
+    PATTERN_TEMPLATE,
+    PATTERN_VALUE,
+    PATTERN_FUNCTION,
     LOCAL_BINDING,
     LOCAL_CONST,
     IMPORTED_CONST,
+    FALLBACK_IDENTIFIER,
     LOCAL_FUNCTION,
     IMPORTED_FUNCTION,
     QUALIFIED_FUNCTION,
@@ -34,20 +40,34 @@ internal enum class AikenTypedCompletionCategory {
     LIST_LITERAL,
     OPTION_SOME,
     BUILTIN_INVARIANT,
-    CONSTRUCTIBLE
+    CONSTRUCTIBLE,
+    FALLBACK_KEYWORD
 }
 
 private data class AikenTypedCompletionRanking(
     val category: AikenTypedCompletionCategory,
+    val prefixBucket: Int,
     val scopeDistance: Int,
     val matchDistance: Int
 ) : Comparable<AikenTypedCompletionRanking> {
+    private val scopeFirst: Boolean
+        get() =
+            category == AikenTypedCompletionCategory.LOCAL_BINDING ||
+                category == AikenTypedCompletionCategory.FALLBACK_IDENTIFIER
+
     private val categoryWeight: Int
         get() =
             when (category) {
                 AikenTypedCompletionCategory.EXTRA -> 0
+                AikenTypedCompletionCategory.PATTERN_PRIMARY -> 50
+                AikenTypedCompletionCategory.PATTERN_TEMPLATE -> 75
+                AikenTypedCompletionCategory.PATTERN_VALUE -> 90
+                AikenTypedCompletionCategory.PATTERN_FUNCTION -> 95
                 AikenTypedCompletionCategory.LOCAL_BINDING -> 100
                 AikenTypedCompletionCategory.LOCAL_CONST -> 200
+                AikenTypedCompletionCategory.CONSTRUCTIBLE -> 225
+                AikenTypedCompletionCategory.BUILTIN_INVARIANT -> 225
+                AikenTypedCompletionCategory.FALLBACK_IDENTIFIER -> 250
                 AikenTypedCompletionCategory.LOCAL_FUNCTION -> 300
                 AikenTypedCompletionCategory.IMPORTED_CONST -> 400
                 AikenTypedCompletionCategory.IMPORTED_FUNCTION -> 500
@@ -56,19 +76,32 @@ private data class AikenTypedCompletionRanking(
                 AikenTypedCompletionCategory.UNIMPORTED_FUNCTION -> 700
                 AikenTypedCompletionCategory.LIST_LITERAL -> 900
                 AikenTypedCompletionCategory.OPTION_SOME -> 1000
-                AikenTypedCompletionCategory.BUILTIN_INVARIANT -> 1100
-                AikenTypedCompletionCategory.CONSTRUCTIBLE -> 1200
+                AikenTypedCompletionCategory.FALLBACK_KEYWORD -> 9000
                 AikenTypedCompletionCategory.OTHER -> 10_000
             }
 
-    override fun compareTo(other: AikenTypedCompletionRanking): Int =
-        compareValuesBy(
-            this,
-            other,
-            AikenTypedCompletionRanking::categoryWeight,
-            AikenTypedCompletionRanking::scopeDistance,
-            AikenTypedCompletionRanking::matchDistance
-        )
+    override fun compareTo(other: AikenTypedCompletionRanking): Int {
+        val sharedScopeFirst = scopeFirst && other.scopeFirst
+        return if (sharedScopeFirst) {
+            compareValuesBy(
+                this,
+                other,
+                AikenTypedCompletionRanking::prefixBucket,
+                AikenTypedCompletionRanking::categoryWeight,
+                AikenTypedCompletionRanking::scopeDistance,
+                AikenTypedCompletionRanking::matchDistance
+            )
+        } else {
+            compareValuesBy(
+                this,
+                other,
+                AikenTypedCompletionRanking::prefixBucket,
+                AikenTypedCompletionRanking::matchDistance,
+                AikenTypedCompletionRanking::categoryWeight,
+                AikenTypedCompletionRanking::scopeDistance
+            )
+        }
+    }
 }
 
 internal enum class AikenConstructibleFormCompletionCategory {
@@ -87,7 +120,8 @@ internal enum class AikenUseCompletionCategory {
 
 private data class AikenOrdinaryCompletionRanking(
     val category: AikenOrdinaryCompletionCategory,
-    val kind: CompletionSymbolKind
+    val kind: CompletionSymbolKind,
+    val scopeDistance: Int = Int.MAX_VALUE
 ) : Comparable<AikenOrdinaryCompletionRanking> {
     private val categoryWeight: Int
         get() =
@@ -96,6 +130,7 @@ private data class AikenOrdinaryCompletionRanking(
                 AikenOrdinaryCompletionCategory.IMPORTED_SYMBOL -> 100
                 AikenOrdinaryCompletionCategory.IMPORTED_MODULE -> 150
                 AikenOrdinaryCompletionCategory.SAME_FILE -> 200
+                AikenOrdinaryCompletionCategory.BUILTIN_VALUE -> 250
                 AikenOrdinaryCompletionCategory.KEYWORD -> 300
                 AikenOrdinaryCompletionCategory.UNIMPORTED_SYMBOL -> 400
                 AikenOrdinaryCompletionCategory.UNIMPORTED_MODULE -> 500
@@ -113,7 +148,13 @@ private data class AikenOrdinaryCompletionRanking(
             }
 
     override fun compareTo(other: AikenOrdinaryCompletionRanking): Int =
-        compareValuesBy(this, other, AikenOrdinaryCompletionRanking::categoryWeight, AikenOrdinaryCompletionRanking::kindWeight)
+        compareValuesBy(
+            this,
+            other,
+            AikenOrdinaryCompletionRanking::categoryWeight,
+            AikenOrdinaryCompletionRanking::scopeDistance,
+            AikenOrdinaryCompletionRanking::kindWeight
+        )
 }
 
 internal object AikenCompletionSorting {
@@ -130,6 +171,7 @@ internal object AikenCompletionSorting {
     private val fallbackTypedRanking =
         AikenTypedCompletionRanking(
             category = AikenTypedCompletionCategory.OTHER,
+            prefixBucket = 1,
             scopeDistance = Int.MAX_VALUE,
             matchDistance = Int.MAX_VALUE
         )
@@ -139,9 +181,10 @@ internal object AikenCompletionSorting {
     fun annotate(
         lookup: LookupElement,
         category: AikenOrdinaryCompletionCategory,
-        kind: CompletionSymbolKind
+        kind: CompletionSymbolKind,
+        scopeDistance: Int = Int.MAX_VALUE
     ): LookupElement {
-        lookup.putUserData(rankingKey, AikenOrdinaryCompletionRanking(category, kind))
+        lookup.putUserData(rankingKey, AikenOrdinaryCompletionRanking(category, kind, scopeDistance))
         return lookup
     }
 
@@ -158,9 +201,18 @@ internal object AikenCompletionSorting {
         lookup: LookupElement,
         category: AikenTypedCompletionCategory,
         matchDistance: Int = 0,
-        scopeDistance: Int = Int.MAX_VALUE
+        scopeDistance: Int = Int.MAX_VALUE,
+        prefixMatched: Boolean = true
     ): LookupElement {
-        lookup.putUserData(typedRankingKey, AikenTypedCompletionRanking(category, scopeDistance, matchDistance))
+        lookup.putUserData(
+            typedRankingKey,
+            AikenTypedCompletionRanking(
+                category = category,
+                prefixBucket = if (prefixMatched) 0 else 1,
+                scopeDistance = scopeDistance,
+                matchDistance = matchDistance
+            )
+        )
         return lookup
     }
 
@@ -169,6 +221,18 @@ internal object AikenCompletionSorting {
         result: CompletionResultSet
     ): CompletionResultSet =
         result.withRelevanceSorter(typedSorter(parameters, result))
+
+    fun withPrefixMatchBucket(
+        lookup: LookupElement,
+        matched: Boolean
+    ): LookupElement {
+        val current = lookup.getUserData(typedRankingKey) ?: return lookup
+        lookup.putUserData(
+            typedRankingKey,
+            current.copy(prefixBucket = if (matched) 0 else 1)
+        )
+        return lookup
+    }
 
     fun annotateConstructibleForm(
         lookup: LookupElement,
@@ -213,13 +277,22 @@ internal object AikenCompletionSorting {
     private fun inferKindFromPresentation(lookup: LookupElement): CompletionSymbolKind? {
         val presentation = LookupElementPresentation()
         lookup.renderElement(presentation)
-        return when (presentation.typeText?.trim()) {
+        val typeText = presentation.typeText?.trim()
+        return when (typeText) {
             "type" -> CompletionSymbolKind.TYPE
             "fn" -> CompletionSymbolKind.FUNCTION
             "field" -> CompletionSymbolKind.FIELD
             "var" -> CompletionSymbolKind.IDENTIFIER
             "keyword" -> CompletionSymbolKind.KEYWORD
-            else -> null
+            else ->
+                when {
+                    !typeText.isNullOrBlank() &&
+                        lookup.lookupString.firstOrNull()?.isUpperCase() == true &&
+                        typeText != "module" -> CompletionSymbolKind.TYPE
+                    !typeText.isNullOrBlank() &&
+                        (typeText.startsWith("fn(") || typeText.contains("->")) -> CompletionSymbolKind.FUNCTION
+                    else -> null
+                }
         }
     }
 

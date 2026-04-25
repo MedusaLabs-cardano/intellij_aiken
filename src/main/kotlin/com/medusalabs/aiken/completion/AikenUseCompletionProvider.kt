@@ -36,6 +36,10 @@ class AikenUseCompletionProvider : CompletionProvider<CompletionParameters>() {
 
         val text = file.text
         val offset = parameters.offset.coerceIn(0, text.length)
+        if (AikenCompletionContexts.isDeclarationNameContext(text, offset)) {
+            result.stopHere()
+            return
+        }
         val useContext = AikenUseCompletionContext.detect(text, offset) ?: return
 
         val catalog = AikenImportCatalog.get(file)
@@ -312,12 +316,10 @@ private object UseEditUtils {
     fun moduleSegmentRange(text: String, context: AikenUseCompletionContext): TextRange? {
         if (context.mode != AikenUseCompletionMode.MODULE) return null
         val line = useStatementLineBounds(text, context.statementRange.startOffset) ?: return null
-        val lineText = text.substring(line.startOffset, line.endOffset)
-
-        val useLocal = lineText.indexOf("use").takeIf { it >= 0 } ?: return null
-        var moduleStart = line.startOffset + useLocal + 3
+        var moduleStart = context.statementRange.startOffset.coerceIn(line.startOffset, line.endOffset) + 3
         while (moduleStart < line.endOffset && text[moduleStart].isWhitespace()) moduleStart++
 
+        val lineText = text.substring(line.startOffset, line.endOffset)
         val dotBraceLocal = lineText.indexOf(".{").takeIf { it >= 0 }
         var moduleEnd = if (dotBraceLocal != null) line.startOffset + dotBraceLocal else line.endOffset
         while (moduleEnd > moduleStart && text[moduleEnd - 1].isWhitespace()) moduleEnd--

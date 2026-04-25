@@ -365,6 +365,108 @@ class AikenParameterInfoHandlerTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun showsParameterInfoForImportedValidatorNamespaceHandlerWithValidatorParameters() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature], .. } = tx
+
+                and {
+                  (signature == expected_pubkey)?,
+                  when redeemer is {
+                    Mint -> True
+                    Burn -> False
+                  }?,
+                }?
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+        val mainFile = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/transaction.{Transaction}
+            use contract
+
+            test failed(expected_pubkey: VerificationKeyHash, tx: Transaction) fail {
+              contract.contract.mint(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+
+        assertEquals(
+            "mint(<b>expected_pubkey: VerificationKeyHash</b>, redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction)",
+            myFixture.getParameterInfoAtCaret()
+        )
+    }
+
+    @Test
+    fun highlightsHandlerParameterAfterPrependedValidatorParameterForImportedValidatorNamespaceCall() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                True
+              }
+
+              else(_) {
+                False
+              }
+            }
+            """.trimIndent()
+        )
+        val mainFile = myFixture.addFileToProject(
+            "lib/main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/transaction.{Transaction}
+            use contract
+
+            test failed(expected_pubkey: VerificationKeyHash, tx: Transaction) fail {
+              contract.contract.mint(expected_pubkey, <caret>)
+            }
+            """.trimIndent()
+        )
+
+        myFixture.configureFromExistingVirtualFile(mainFile.virtualFile)
+
+        assertEquals(
+            "mint(expected_pubkey: VerificationKeyHash, <b>redeemer: MyRedeemer</b>, _policy_id: PolicyId, tx: Transaction)",
+            myFixture.getParameterInfoAtCaret()
+        )
+    }
+
+    @Test
     fun showsSignatureForPartialApplicationLocalBinding() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val mainFile = myFixture.addFileToProject(

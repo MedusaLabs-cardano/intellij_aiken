@@ -75,6 +75,8 @@ internal data class AikenUseCompletionContext(
             val line = text.substring(lineStart, lineEnd)
             val trimmedStart = line.indexOfFirst { !it.isWhitespace() }.let { if (it == -1) line.length else it }
             if (!line.regionMatches(trimmedStart, "use", 0, 3)) return null
+            val afterUseInLine = trimmedStart + 3
+            if (afterUseInLine < line.length && !line[afterUseInLine].isWhitespace()) return null
 
             val afterUse = lineStart + trimmedStart + 3
             if (anchor < afterUse) return null

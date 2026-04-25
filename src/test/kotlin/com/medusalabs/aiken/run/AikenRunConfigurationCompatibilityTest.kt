@@ -3,6 +3,7 @@ package com.medusalabs.aiken.run
 import com.medusalabs.aiken.AikenPlatformTestCase
 import com.intellij.execution.testframework.sm.runner.SMTestProxy
 import org.junit.Test
+import java.io.File
 import javax.swing.tree.DefaultMutableTreeNode
 
 class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
@@ -159,6 +160,92 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun structuredCheckFailureDetailsDoNotDuplicateTracesOrOnFailure() {
+        val configuration = buildConfiguration(AikenRunCommand.CHECK)
+        val parseMethod =
+            AikenRunConfiguration::class.java.getDeclaredMethod(
+                "parseCheckReport",
+                String::class.java,
+                String::class.java
+            )
+        parseMethod.isAccessible = true
+
+        val output =
+            """
+            {
+              "seed": 4106286813,
+              "summary": {
+                "total": 1,
+                "passed": 0,
+                "failed": 1,
+                "kind": {
+                  "unit": 1,
+                  "property": 0
+                }
+              },
+              "modules": [
+                {
+                  "name": "tests/test_module",
+                  "summary": {
+                    "total": 1,
+                    "passed": 0,
+                    "failed": 1,
+                    "kind": {
+                      "unit": 1,
+                      "property": 0
+                    }
+                  },
+                  "tests": [
+                    {
+                      "title": "success",
+                      "status": "fail",
+                      "on_failure": "fail_immediately",
+                      "execution_units": {
+                        "mem": 26107,
+                        "cpu": 8271759
+                      },
+                      "traces": [
+                        "when redeemer is {\n  Mint -> True\n  Burn -> False\n} ? False",
+                        "and {\n  (signature == expected_pubkey)?,\n  when redeemer is {\n    Mint -> True\n    Burn -> False\n  }?,\n} ? False"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent()
+
+        val report = parseMethod.invoke(configuration, output, null)
+        check(report != null)
+
+        val reportClass = report.javaClass
+        @Suppress("UNCHECKED_CAST")
+        val modules = reportClass.getMethod("getModules").invoke(report) as List<Any>
+        val module = modules.single()
+        @Suppress("UNCHECKED_CAST")
+        val tests = module.javaClass.getMethod("getTests").invoke(module) as List<Any>
+        val test = tests.single()
+
+        val details = test.javaClass.getMethod("getDetails").invoke(test) as String?
+        val traces = test.javaClass.getMethod("getTraces").invoke(test) as List<*>
+
+        assertNull(details)
+        assertEquals(2, traces.size)
+
+        val stdOutMethod =
+            AikenRunConfiguration::class.java.getDeclaredMethod(
+                "buildTestLeafStdOut",
+                test.javaClass
+            )
+        stdOutMethod.isAccessible = true
+        val stdOut = stdOutMethod.invoke(configuration, test) as String
+
+        assertTrue(stdOut.contains(". with traces"))
+        assertTrue(stdOut.contains("when redeemer is"))
+        assertFalse(stdOut.contains("on_failure:"))
+    }
+
+    @Test
     fun diagnosticTreeSeverityBubblesWarningsToParentNodes() {
         val configuration = buildConfiguration(AikenRunCommand.CHECK)
         val warningLeaf = SMTestProxy("[warning 1] I found a todo left in the code.", false, null)
@@ -200,6 +287,60 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
         assertTrue(newSupport.supportsStructuredCheckJson())
     }
 
+    @Test
+    fun applyGuiContextKeepsMultipleMatchingValidatorsAsIndependentTargets() {
+        val configuration = buildConfiguration(AikenRunCommand.APPLY)
+        val blueprint =
+            File.createTempFile("aiken-apply-multi-validator-", ".json").apply {
+                deleteOnExit()
+                writeText(
+                    """
+                    {
+                      "validators": [
+                        {
+                          "title": "forever_false.forever_false",
+                          "parameters": [
+                            {
+                              "title": "first",
+                              "schema": { "dataType": "integer" }
+                            }
+                          ]
+                        },
+                        {
+                          "title": "nse_housing.exchange",
+                          "parameters": [
+                            {
+                              "title": "second",
+                              "schema": { "dataType": "bytes" }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """.trimIndent()
+                )
+            }
+
+        val stateClass =
+            AikenRunConfiguration::class.java.declaredClasses.first { it.simpleName == "AikenApplyGuiRunState" }
+        val constructor = stateClass.getDeclaredConstructor(AikenRunConfiguration::class.java)
+        constructor.isAccessible = true
+        val state = constructor.newInstance(configuration)
+        val method = stateClass.getDeclaredMethod("loadApplyContext", File::class.java)
+        method.isAccessible = true
+
+        val context = method.invoke(state, blueprint)
+        val targets = context.readPrivateField<List<Any>>("targets")
+
+        assertEquals(2, targets.size)
+        assertEquals("forever_false", targets[0].readPrivateField<String>("module"))
+        assertEquals("forever_false", targets[0].readPrivateField<String>("validator"))
+        assertEquals("nse_housing", targets[1].readPrivateField<String>("module"))
+        assertEquals("exchange", targets[1].readPrivateField<String>("validator"))
+        assertEquals(2, context.readPrivateField<Int>("totalParameterCount"))
+        assertEquals("2 validators", context.readPrivateField<String>("displayTarget"))
+    }
+
     private fun buildConfiguration(command: AikenRunCommand): AikenRunConfiguration {
         val type = AikenRunConfigurationType()
         val factory =
@@ -222,5 +363,11 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         return method.invoke(this, forceSkipTests, support) as List<String>
+    }
+
+    private inline fun <reified T> Any.readPrivateField(name: String): T {
+        val field = javaClass.getDeclaredField(name)
+        field.isAccessible = true
+        return field.get(this) as T
     }
 }

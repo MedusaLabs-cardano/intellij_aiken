@@ -22,17 +22,18 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         file: PsiFile
     ): Result {
         if (file.fileType != AikenFileType) return Result.CONTINUE
-        if (!shouldTriggerAutoPopup(charTyped, editor)) return Result.CONTINUE
-
-        val offset = editor.caretModel.offset
-        val tokenType = file.findElementAt((offset - 1).coerceAtLeast(0))?.node?.elementType
-        if (tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.STRING) {
-            return Result.CONTINUE
+        if (isInsideCommentOrString(editor, file)) {
+            return Result.STOP
         }
+        if (!shouldTriggerAutoPopup(charTyped, editor, file)) return Result.CONTINUE
 
         if (AikenAutoPopupGuard.suppressActiveLookupOnExactMatch(project, editor) ||
             AikenAutoPopupGuard.suppressSemanticAutoPopupOnExactMatch(project, editor, file)
         ) {
+            return Result.STOP
+        }
+
+        if (shouldSuppressDelimiterTriggeredOrdinaryAutoPopup(charTyped, editor, file)) {
             return Result.STOP
         }
 
@@ -49,12 +50,10 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         file: PsiFile
     ): Result {
         if (file.fileType != AikenFileType) return Result.CONTINUE
-        if (!shouldRestartCompletion(charTyped, editor)) return Result.CONTINUE
+        if (!shouldRestartCompletion(charTyped, editor, file)) return Result.CONTINUE
 
-        val offset = editor.caretModel.offset
-        val tokenType = file.findElementAt((offset - 1).coerceAtLeast(0))?.node?.elementType
-        if (tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.STRING) {
-            return Result.CONTINUE
+        if (isInsideCommentOrString(editor, file)) {
+            return Result.STOP
         }
 
         if (AikenAutoPopupGuard.suppressActiveLookupOnExactMatch(project, editor) ||
@@ -63,17 +62,30 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
             return Result.STOP
         }
 
+        if (shouldSuppressDelimiterTriggeredOrdinaryAutoPopup(charTyped, editor, file)) {
+            return Result.STOP
+        }
+
         PsiDocumentManager.getInstance(project).commitDocument(editor.document)
         restartBasicCompletion(project, AutoPopupController.getInstance(project), editor, charTyped)
         return Result.CONTINUE
     }
 
-    private fun shouldRestartCompletion(ch: Char, editor: Editor): Boolean {
+    private fun shouldRestartCompletion(ch: Char, editor: Editor, file: PsiFile): Boolean {
+        if ((ch == '=' || (ch.isWhitespace() && isWhitespaceAfterBindingOperator(editor))) &&
+            hasTypedBindingInitializerContext(editor, file)
+        ) {
+            return true
+        }
         if (shouldForceContextualRefresh(ch, editor)) return true
         return ch.isLetterOrDigit() || ch == '_'
     }
 
-    private fun shouldTriggerAutoPopup(ch: Char, editor: Editor): Boolean {
+    private fun shouldTriggerAutoPopup(ch: Char, editor: Editor, file: PsiFile): Boolean {
+        if (ch == '=' && hasTypedBindingInitializerContext(editor, file)) {
+            return true
+        }
+
         if (ch == ':' || ch == '[' || ch == ',') {
             return true
         }
@@ -83,7 +95,36 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         }
 
         if (!ch.isWhitespace()) return false
+        if (isWhitespaceAfterBindingOperator(editor) && hasTypedBindingInitializerContext(editor, file)) {
+            return true
+        }
         return isWhitespaceContextualRefresh(editor)
+    }
+
+    private fun shouldSuppressDelimiterTriggeredOrdinaryAutoPopup(
+        ch: Char,
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        if (!isDelimiterDrivenAutoPopupTrigger(ch, editor)) return false
+        return AikenAutoPopupGuard.suppressBlankOrdinaryExpressionAutoPopup(editor, file) ||
+            AikenAutoPopupGuard.suppressBlankUnconstrainedArgumentAutoPopup(editor, file)
+    }
+
+    private fun isDelimiterDrivenAutoPopupTrigger(
+        ch: Char,
+        editor: Editor
+    ): Boolean {
+        if (ch == ',' || ch == '{') return true
+        if (!ch.isWhitespace()) return false
+
+        val chars = editor.document.charsSequence
+        var index = (editor.caretModel.offset - 2).coerceAtLeast(0)
+        while (index >= 0 && chars[index].isWhitespace()) {
+            index--
+        }
+        if (index < 0) return false
+        return chars[index] == ',' || chars[index] == '{'
     }
 
     private fun shouldForceContextualRefresh(ch: Char, editor: Editor): Boolean {
@@ -123,6 +164,29 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         }
     }
 
+    private fun isWhitespaceAfterBindingOperator(editor: Editor): Boolean {
+        val chars = editor.document.charsSequence
+        var index = (editor.caretModel.offset - 2).coerceAtLeast(0)
+        while (index >= 0 && chars[index].isWhitespace()) {
+            index--
+        }
+        return index >= 0 && chars[index] == '=' && (index == 0 || chars[index - 1] != '=')
+    }
+
+    private fun hasTypedBindingInitializerContext(editor: Editor, file: PsiFile): Boolean {
+        val project = file.project
+        PsiDocumentManager.getInstance(project).commitDocument(editor.document)
+        val offset = editor.caretModel.offset.coerceIn(0, editor.document.textLength)
+        val anchor =
+            file.findElementAt((offset - 1).coerceAtLeast(0))
+                ?: file.findElementAt(offset.coerceAtMost(file.textLength))
+                ?: return false
+        if (!AikenTypeDirectedCompletionSupport.hasBindingInitializerExpectedTypeContext(anchor, file.text, offset)) {
+            return false
+        }
+        return AikenTypeDirectedCompletionSupport.bindingInitializerLookups(anchor, file.text, offset).isNotEmpty()
+    }
+
     private fun shouldTriggerOnImmediateLeftContext(ch: Char, editor: Editor): Boolean {
         val chars = editor.document.charsSequence
         val index = editor.caretModel.offset - 1
@@ -156,5 +220,29 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
             return
         }
         autoPopupController.autoPopupMemberLookup(editor, CompletionType.BASIC, null)
+    }
+
+    private fun isInsideCommentOrString(
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        val offset = editor.caretModel.offset
+        val tokenType = file.findElementAt((offset - 1).coerceAtLeast(0))?.node?.elementType
+        if (tokenType == AikenTokenTypes.COMMENT || tokenType == AikenTokenTypes.STRING) {
+            return true
+        }
+
+        val text = editor.document.charsSequence
+        if (text.isEmpty()) return false
+        val probeOffset = (offset - 1).coerceAtLeast(0)
+        val lexer = com.medusalabs.aiken.highlight.lexer.AikenLexing.createLexer()
+        lexer.start(text.toString())
+        while (lexer.tokenType != null) {
+            if (probeOffset in lexer.tokenStart until lexer.tokenEnd) {
+                return lexer.tokenType == AikenTokenTypes.COMMENT || lexer.tokenType == AikenTokenTypes.STRING
+            }
+            lexer.advance()
+        }
+        return false
     }
 }

@@ -413,8 +413,8 @@ internal object AikenTypedLookupFactory {
     }
 
     internal fun functionCallTemplate(name: String, signature: String): FunctionCallTemplate {
-        val parameterCount = parseSignatureParameterNames(signature).size
-        if (parameterCount == 0) {
+        val parameters = AikenFunctionSignatureText.parameters(signature)
+        if (parameters.isEmpty()) {
             return FunctionCallTemplate(
                 text = "$name()",
                 caretOffset = null,
@@ -425,13 +425,13 @@ internal object AikenTypedLookupFactory {
         return FunctionCallTemplate(
             text = "$name()",
             caretOffset = name.length + 1,
-            shouldTriggerAutoPopup = true
+            shouldTriggerAutoPopup = !isBareGenericTypeParameter(parameters.firstOrNull()?.type)
         )
     }
 
     internal fun pipeFunctionCallTemplate(lookupText: String, signature: String): FunctionCallTemplate {
-        val remainingParameterCount = (parseSignatureParameterNames(signature).size - 1).coerceAtLeast(0)
-        if (remainingParameterCount == 0) {
+        val remainingParameters = AikenFunctionSignatureText.parameters(signature).drop(1)
+        if (remainingParameters.isEmpty()) {
             return FunctionCallTemplate(
                 text = lookupText,
                 caretOffset = null,
@@ -442,45 +442,14 @@ internal object AikenTypedLookupFactory {
         return FunctionCallTemplate(
             text = "$lookupText()",
             caretOffset = lookupText.length + 1,
-            shouldTriggerAutoPopup = true
+            shouldTriggerAutoPopup = !isBareGenericTypeParameter(remainingParameters.firstOrNull()?.type)
         )
     }
 
-    private fun parseSignatureParameterNames(signature: String): List<String> {
-        val openIndex = signature.indexOf('(')
-        if (openIndex < 0) return emptyList()
-        val closeIndex = signature.indexOf(')', openIndex + 1)
-        if (closeIndex < 0 || closeIndex <= openIndex + 1) return emptyList()
-
-        val parametersText = signature.substring(openIndex + 1, closeIndex)
-        val parameters = ArrayList<String>()
-        var segmentStart = 0
-        var angleDepth = 0
-        var parenDepth = 0
-        var bracketDepth = 0
-        for (index in parametersText.indices) {
-            when (parametersText[index]) {
-                '<' -> angleDepth++
-                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
-                '(' -> parenDepth++
-                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
-                '[' -> bracketDepth++
-                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
-                ',' -> {
-                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0) {
-                        parameters += parametersText.substring(segmentStart, index)
-                        segmentStart = index + 1
-                    }
-                }
-            }
-        }
-        parameters += parametersText.substring(segmentStart)
-
-        return parameters.mapNotNull { rawParameter ->
-            val colonIndex = rawParameter.indexOf(':')
-            if (colonIndex <= 0) return@mapNotNull null
-            rawParameter.substring(0, colonIndex).trim().takeIf { it.isNotEmpty() }
-        }
+    internal fun isBareGenericTypeParameter(typeText: String?): Boolean {
+        val normalized = typeText?.trim().orEmpty()
+        if (normalized.isEmpty()) return false
+        return normalized.matches(Regex("[a-z][A-Za-z0-9_]*"))
     }
 
     private fun AikenTypedExpectedTypeCandidate.autoImportTailText(): String? =

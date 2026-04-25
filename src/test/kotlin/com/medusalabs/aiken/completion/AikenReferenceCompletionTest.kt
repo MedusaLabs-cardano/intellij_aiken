@@ -75,6 +75,44 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun showsSemanticTypeTextInOrdinaryCompletionPresentations() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            fn mk_signature() -> ByteArray {
+              "a"
+            }
+
+            validator contract {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                let signature = mk_signature()
+                and(
+                  signature == <caret>
+                )
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        completionVariants()
+        val presentationByLookup = completionPresentations().associate { (lookup, typeText) -> lookup to typeText }
+
+        assertEquals("ByteArray", presentationByLookup["signature"])
+        assertEquals("ByteArray", presentationByLookup["mk_signature"])
+        assertFalse("Did not expect incompatible constructor in ByteArray comparison suggestions", presentationByLookup.containsKey("Mint"))
+    }
+
+    @Test
     fun suggestsOnlyTypesAtFunctionParameterDeclarationStart() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -1352,6 +1390,610 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsExpressionKeywordsAfterDestructuringBindingStatement() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto
+            use cardano/transaction.{Transaction}
+
+            pub type Output {
+              datum: Int,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(Input { output, .. }, redeemerq: Int) -> Bool {
+              let Output { datum, .. } = output
+              wh<caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected `when` keyword after destructuring binding, got: $suggestions", suggestions.contains("when"))
+    }
+
+    @Test
+    fun suggestsStatementKeywordsInExplicitReturnTailWhileTypingNextLine() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              datum: Int,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(Input { output, .. }) -> Bool {
+              let Output { datum, .. } = output
+              le<caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected `let` keyword while typing next line in explicit return tail, got: $suggestions", suggestions.contains("let"))
+    }
+
+    @Test
+    fun explicitReturnTailKeepsFallbackVariablesAndKeywordsBelowRelevantValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              datum: Int,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            fn ready() -> Bool {
+              True
+            }
+
+            pub fn qwer(flag: Bool, Input { output, .. }, redeemerq: Int, tx: Transaction) -> Bool {
+              <caret>
+              let Output { datum, .. } = output
+              flag
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val outputIndex = suggestions.indexOf("output")
+        val readyIndex = suggestions.indexOf("ready")
+        val letIndex = suggestions.indexOf("let")
+        val expectIndex = suggestions.indexOf("expect")
+
+        assertTrue("Expected relevant local Bool binding, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected irrelevant local binding fallback, got: $suggestions", outputIndex >= 0)
+        assertTrue("Expected compatible local function, got: $suggestions", readyIndex >= 0)
+        assertTrue("Expected `let` keyword fallback, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected `expect` keyword fallback, got: $suggestions", expectIndex >= 0)
+        assertTrue("Expected relevant binding before irrelevant binding, got: $suggestions", flagIndex < outputIndex)
+        assertTrue("Expected irrelevant binding before compatible function, got: $suggestions", outputIndex < readyIndex)
+        assertTrue("Expected compatible function before keywords, got: $suggestions", readyIndex < letIndex)
+        assertFalse("Did not expect imported module namespace on empty last-statement completion, got: $suggestions", suggestions.contains("crypto"))
+        assertFalse("Did not expect imported module namespace on empty last-statement completion, got: $suggestions", suggestions.contains("transaction"))
+    }
+
+    @Test
+    fun nearerScopeBindingOutranksOuterBindingWhenNamesBothMatchPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Data {
+              Data
+            }
+
+            pub type Datum {
+              NoDatum
+              InlineDatum(Data)
+            }
+
+            pub type Output {
+              datum: Datum,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(Input { output, .. }) -> Bool {
+              let Output { datum, .. } = output
+              when datum is {
+                NoDatum -> False
+                InlineDatum(data) -> {
+                  if da<caret>
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val dataIndex = suggestions.indexOf("data")
+        val datumIndex = suggestions.indexOf("datum")
+
+        assertTrue("Expected branch binding `data`, got: $suggestions", dataIndex >= 0)
+        assertTrue("Expected outer binding `datum`, got: $suggestions", datumIndex >= 0)
+        assertTrue("Expected nearer branch binding before outer binding, got: $suggestions", dataIndex < datumIndex)
+    }
+
+    @Test
+    fun nearerScopeBindingOutranksOuterBindingInCompactDestructuringSyntax() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Data {
+              Data
+            }
+
+            pub type Datum {
+              NoDatum
+              InlineDatum(Data)
+            }
+
+            pub type Output {
+              datum: Datum,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(Input { output, .. }, redeemerq: Int) -> Bool {
+              let Output{datum: datum,..} = output
+              when datum is {
+                NoDatum -> False
+                InlineDatum(data) ->{
+                    if da<caret>
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val dataIndex = suggestions.indexOf("data")
+        val datumIndex = suggestions.indexOf("datum")
+
+        assertTrue("Expected branch binding `data`, got: $suggestions", dataIndex >= 0)
+        assertTrue("Expected outer binding `datum`, got: $suggestions", datumIndex >= 0)
+        assertTrue("Expected nearer branch binding before outer binding, got: $suggestions", dataIndex < datumIndex)
+    }
+
+    @Test
+    fun suggestsElseKeywordAfterIfThenBlockInsideTypedWhenArm() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Data {
+              Data
+            }
+
+            pub type Datum {
+              NoDatum
+              InlineDatum(Data)
+            }
+
+            pub type Output {
+              datum: Datum,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(Input { output, .. }, redeemerq: Int) -> Bool {
+              let Output{datum: datum,..} = output
+              when datum is {
+                NoDatum -> False
+                InlineDatum(data) ->{
+                    if data is Int{
+                        True
+                    } el<caret>
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected `else` keyword after if-then block inside typed when arm, got: $suggestions", suggestions.contains("else"))
+    }
+
+    @Test
+    fun typedWhenArmBlockKeepsFallbackVariablesAndKeywordsBelowRelevantValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Data {
+              Data
+            }
+
+            pub type Datum {
+              NoDatum
+              InlineDatum(Data)
+            }
+
+            pub type Output {
+              datum: Datum,
+            }
+
+            pub type Input {
+              output: Output,
+            }
+
+            pub fn qwer(flag: Bool, Input { output, .. }, redeemerq: Int) -> Bool {
+              let Output{datum: datum,..} = output
+              when datum is {
+                NoDatum -> False
+                InlineDatum(data) ->{
+                    <caret>
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val dataIndex = suggestions.indexOf("data")
+        val letIndex = suggestions.indexOf("let")
+        val expectIndex = suggestions.indexOf("expect")
+
+        assertTrue("Expected relevant Bool binding in typed when arm block, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected fallback branch binding in typed when arm block, got: $suggestions", dataIndex >= 0)
+        assertTrue("Expected `let` keyword in typed when arm block, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected `expect` keyword in typed when arm block, got: $suggestions", expectIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < dataIndex)
+        assertTrue("Expected fallback binding before keywords, got: $suggestions", dataIndex < letIndex)
+    }
+
+    @Test
+    fun explicitFunctionTailKeepsFallbackVariablesAndKeywordsInOrdinaryBlock() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              <caret>
+              flag
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected relevant Bool binding in function block, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected fallback Int binding in function block, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected keyword fallback in function block, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback binding before keyword, got: $suggestions", amountIndex < letIndex)
+    }
+
+    @Test
+    fun anonymousFunctionArgumentTailKeepsFallbackVariablesAndKeywordsInOrdinaryBlock() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn apply(predicate: fn(Int) -> Bool) -> Bool {
+              predicate(1)
+            }
+
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              apply(fn(value: Int) -> Bool {
+                <caret>
+                flag
+              })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val valueIndex = suggestions.indexOf("value")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected relevant Bool binding in anonymous function argument, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected outer fallback binding in anonymous function argument, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected anonymous parameter fallback, got: $suggestions", valueIndex >= 0)
+        assertTrue("Expected keyword fallback in anonymous function argument, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback bindings before keyword, got: $suggestions", maxOf(amountIndex, valueIndex) < letIndex)
+    }
+
+    @Test
+    fun assignedAnonymousFunctionTailKeepsFallbackVariablesAndKeywordsInOrdinaryBlock() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              let predicate = fn(value: Int) -> Bool {
+                <caret>
+                flag
+              }
+              predicate(amount)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val valueIndex = suggestions.indexOf("value")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected relevant Bool binding in assigned anonymous function, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected outer fallback binding in assigned anonymous function, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected anonymous parameter fallback, got: $suggestions", valueIndex >= 0)
+        assertTrue("Expected keyword fallback in assigned anonymous function, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback bindings before keyword, got: $suggestions", maxOf(amountIndex, valueIndex) < letIndex)
+    }
+
+    @Test
+    fun suggestsOnlyTypesInAnonymousFunctionArgumentParameterAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn apply(predicate: fn(Int) -> Bool) -> Bool {
+              predicate(1)
+            }
+
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              apply(fn(value: In<caret>) -> Bool {
+                flag
+              })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected builtin type `Int` in anonymous argument parameter annotation, got: $suggestions", suggestions.contains("Int"))
+        assertFalse("Did not expect value binding in anonymous argument parameter annotation, got: $suggestions", suggestions.contains("flag"))
+        assertFalse("Did not expect statement keyword in anonymous argument parameter annotation, got: $suggestions", suggestions.contains("let"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInAnonymousFunctionArgumentReturnAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn apply(predicate: fn(Int) -> Bool) -> Bool {
+              predicate(1)
+            }
+
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              apply(fn(value: Int) -> <caret> {
+                flag
+              })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected builtin type `Bool` in anonymous argument return annotation, got: $suggestions", suggestions.contains("Bool"))
+        assertFalse("Did not expect value binding in anonymous argument return annotation, got: $suggestions", suggestions.contains("flag"))
+        assertFalse("Did not expect statement keyword in anonymous argument return annotation, got: $suggestions", suggestions.contains("let"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInAssignedAnonymousFunctionParameterAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              let predicate = fn(value: In<caret>) -> Bool {
+                flag
+              }
+              predicate(amount)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected builtin type `Int` in assigned anonymous parameter annotation, got: $suggestions", suggestions.contains("Int"))
+        assertFalse("Did not expect value binding in assigned anonymous parameter annotation, got: $suggestions", suggestions.contains("flag"))
+        assertFalse("Did not expect statement keyword in assigned anonymous parameter annotation, got: $suggestions", suggestions.contains("let"))
+    }
+
+    @Test
+    fun suggestsOnlyTypesInAssignedAnonymousFunctionReturnAnnotationPosition() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              let predicate = fn(value: Int) -> <caret> {
+                flag
+              }
+              predicate(amount)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected builtin type `Bool` in assigned anonymous return annotation, got: $suggestions", suggestions.contains("Bool"))
+        assertFalse("Did not expect value binding in assigned anonymous return annotation, got: $suggestions", suggestions.contains("flag"))
+        assertFalse("Did not expect statement keyword in assigned anonymous return annotation, got: $suggestions", suggestions.contains("let"))
+    }
+
+    @Test
+    fun ifBranchBlockKeepsFallbackVariablesAndKeywordsBelowSiblingExpectedTypeValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) {
+              if flag {
+                False
+              } else {
+                <caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected sibling-typed Bool binding in if branch, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected fallback Int binding in if branch, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected keyword fallback in if branch, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback binding before keyword, got: $suggestions", amountIndex < letIndex)
+    }
+
+    @Test
+    fun anonymousFunctionArgumentIfBranchKeepsFallbackVariablesAndKeywordsBelowSiblingExpectedTypeValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn apply(predicate: fn(Int) -> Bool) -> Bool {
+              predicate(1)
+            }
+
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              apply(fn(value: Int) -> Bool {
+                if flag {
+                  False
+                } else {
+                  <caret>
+                }
+              })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val valueIndex = suggestions.indexOf("value")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected sibling-typed Bool binding in anonymous argument if branch, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected outer fallback binding in anonymous argument if branch, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected anonymous parameter fallback in anonymous argument if branch, got: $suggestions", valueIndex >= 0)
+        assertTrue("Expected keyword fallback in anonymous argument if branch, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback bindings before keyword, got: $suggestions", maxOf(amountIndex, valueIndex) < letIndex)
+    }
+
+    @Test
+    fun assignedAnonymousFunctionIfBranchKeepsFallbackVariablesAndKeywordsBelowSiblingExpectedTypeValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(flag: Bool, amount: Int) -> Bool {
+              let predicate = fn(value: Int) -> Bool {
+                if flag {
+                  False
+                } else {
+                  <caret>
+                }
+              }
+              predicate(amount)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val flagIndex = suggestions.indexOf("flag")
+        val amountIndex = suggestions.indexOf("amount")
+        val valueIndex = suggestions.indexOf("value")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected sibling-typed Bool binding in assigned anonymous if branch, got: $suggestions", flagIndex >= 0)
+        assertTrue("Expected outer fallback binding in assigned anonymous if branch, got: $suggestions", amountIndex >= 0)
+        assertTrue("Expected anonymous parameter fallback in assigned anonymous if branch, got: $suggestions", valueIndex >= 0)
+        assertTrue("Expected keyword fallback in assigned anonymous if branch, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected relevant binding before fallback binding, got: $suggestions", flagIndex < amountIndex)
+        assertTrue("Expected fallback bindings before keyword, got: $suggestions", maxOf(amountIndex, valueIndex) < letIndex)
+    }
+
+    @Test
+    fun validatorHandlerTailKeepsFallbackVariablesAndKeywordsBelowBoolValues() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            validator contract(expected: Bool) {
+              mint(redeemer: Int, _policy_id: ByteArray, tx: Transaction) {
+                <caret>
+                expected
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val expectedIndex = suggestions.indexOf("expected")
+        val redeemerIndex = suggestions.indexOf("redeemer")
+        val letIndex = suggestions.indexOf("let")
+
+        assertTrue("Expected Bool validator parameter in handler block, got: $suggestions", expectedIndex >= 0)
+        assertTrue("Expected fallback handler parameter in handler block, got: $suggestions", redeemerIndex >= 0)
+        assertTrue("Expected keyword fallback in handler block, got: $suggestions", letIndex >= 0)
+        assertTrue("Expected Bool binding before fallback binding, got: $suggestions", expectedIndex < redeemerIndex)
+        assertTrue("Expected fallback binding before keyword, got: $suggestions", redeemerIndex < letIndex)
+    }
+
+    @Test
+    fun acceptingWrongKeyboardLayoutKeywordReplacesTypedPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub fn qwer(Input { output, .. }, redeemerq: Int) -> Bool {
+              уч<caret>
+            }
+            """.trimIndent()
+        )
+
+        acceptLookupOrAutoInserted("expect", "expect")
+
+        val fileText = myFixture.file.text
+        assertTrue("Expected accepted keyword to replace wrong-layout prefix, got:\n$fileText", fileText.contains("expect"))
+        assertFalse("Wrong-layout prefix was left before accepted keyword:\n$fileText", fileText.contains("учexpect"))
+    }
+
+    @Test
     fun doesNotSuggestGenericKeywordsInsideEmptyListLiteral() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -1550,6 +2192,57 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun pipeFunctionArgumentCompletionSkipsPipedParameter() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn consume(items: List<Int>, zero: Int) -> Int {
+              zero
+            }
+
+            fn main(q: List<Int>, zero: Int, other: List<Int>) {
+              let r = q |> consume(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected second argument suggestions after pipe, got: $suggestions", suggestions.contains("zero"))
+        assertFalse("Piped List argument must not be requested again, got: $suggestions", suggestions.contains("q"))
+        assertFalse("Piped List argument must not be requested again, got: $suggestions", suggestions.contains("other"))
+    }
+
+    @Test
+    fun chainedPipeFunctionArgumentCompletionSkipsOnlyCurrentPipedParameter() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            fn consume(items: List<Int>, zero: Int) -> Int {
+              zero
+            }
+
+            fn stringify(value: Int, flag: Bool) -> String {
+              ""
+            }
+
+            fn main(q: List<Int>, zero: Int, flag: Bool, other: List<Int>) {
+              let r = q |> consume(zero) |> stringify(<caret>)
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected second argument suggestions for current chained pipe call, got: $suggestions", suggestions.contains("flag"))
+        assertFalse("Previous pipe operand should not leak as current argument, got: $suggestions", suggestions.contains("q"))
+        assertFalse("Previous pipe argument should not leak as current argument, got: $suggestions", suggestions.contains("zero"))
+        assertFalse("List values from previous pipe step should not be requested again, got: $suggestions", suggestions.contains("other"))
+    }
+
+    @Test
     fun doesNotLeakOrdinaryLexicalSuggestionsWhenTypedFunctionArgumentSuggestionsMatchPrefix() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.addFileToProject(
@@ -1668,6 +2361,209 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
         assertTrue(
             "Expected when-branch binding to outrank outer-scope binding. Suggestions were: $suggestions",
             suggestions.indexOf("inp") in 0 until suggestions.indexOf("input")
+        )
+    }
+
+    @Test
+    fun suggestsConstructorsForIncompleteWhenArmPattern() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            fn main(redeemer: MyRedeemer) {
+              when redeemer is {
+                Mint -> True
+                <caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected Mint constructor in when pattern suggestions, got: $suggestions", suggestions.contains("Mint"))
+        assertTrue("Expected Burn constructor in when pattern suggestions, got: $suggestions", suggestions.contains("Burn"))
+    }
+
+    @Test
+    fun prioritizesConstructorsForIncompleteValidatorWhenArmPattern() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                when redeemer is {
+                  Mint -> True
+                  <caret>
+                }
+              }
+
+              else(_) {
+                True
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected Mint constructor in validator when pattern suggestions, got: $suggestions", suggestions.contains("Mint"))
+        assertTrue("Expected Burn constructor in validator when pattern suggestions, got: $suggestions", suggestions.contains("Burn"))
+        assertTrue(
+            "Expected constructors to outrank handler variables in validator when pattern suggestions. Suggestions were: $suggestions",
+            suggestions.indexOf("Mint") in 0 until suggestions.indexOf("redeemer")
+        )
+    }
+
+    @Test
+    fun prioritizesConstructorsThenValuesThenFunctionsInWhenPatterns() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Transaction {
+              Transaction {
+                id: Int,
+              }
+            }
+
+            fn placeholder() -> Transaction {
+              Transaction { id: 1 }
+            }
+
+            fn main(tx: Transaction, tx_value: Transaction) {
+              when tx is {
+                <caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected Transaction constructor in when pattern suggestions, got: $suggestions", suggestions.contains("Transaction"))
+        assertTrue("Expected compatible value in when pattern suggestions, got: $suggestions", suggestions.contains("tx_value"))
+        assertTrue("Expected compatible function in when pattern suggestions, got: $suggestions", suggestions.contains("placeholder"))
+        assertTrue(
+            "Expected constructor to outrank value in when pattern suggestions. Suggestions were: $suggestions",
+            suggestions.indexOf("Transaction") in 0 until suggestions.indexOf("tx_value")
+        )
+        assertTrue(
+            "Expected value to outrank function in when pattern suggestions. Suggestions were: $suggestions",
+            suggestions.indexOf("tx_value") in 0 until suggestions.indexOf("placeholder")
+        )
+    }
+
+    @Test
+    fun prefersTypedValuesInsideWhenArmExpression() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            fn main(redeemer: MyRedeemer) {
+              when redeemer is {
+                Mint -> True
+                Burn -> <caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected typed Bool values in when arm suggestions, got: $suggestions", suggestions.contains("True"))
+        assertTrue("Expected typed Bool values in when arm suggestions, got: $suggestions", suggestions.contains("False"))
+        if (suggestions.contains("if")) {
+            assertTrue(
+                "Expected typed values to outrank expression keywords in when arm. Suggestions were: $suggestions",
+                suggestions.indexOf("True") in 0 until suggestions.indexOf("if")
+            )
+        }
+
+        val presentations = completionPresentations().filter { (lookup, _) -> lookup == "False" }
+        assertEquals("Expected a single built-in invariant suggestion for False", 1, presentations.size)
+        assertEquals("Bool", presentations.single().second)
+
+        val truePresentations = completionPresentations().filter { (lookup, _) -> lookup == "True" }
+        assertEquals("Expected a single built-in invariant suggestion for True", 1, truePresentations.size)
+        assertEquals("Bool", truePresentations.single().second)
+    }
+
+    @Test
+    fun suggestsWhenIsTailAfterSubjectExpression() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              Input {
+                output: Output,
+              }
+            }
+
+            pub type Output {
+              Output
+            }
+
+            pub fn main(Input { output, .. }, redeemerq: Int) -> Bool {
+              when output <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected `is` tail lookup after when subject, got: $suggestions", suggestions.contains("is"))
+        assertFalse("Expected when tail lookup to hide ordinary variables, got: $suggestions", suggestions.contains("redeemerq"))
+    }
+
+    @Test
+    fun insertsWhenIsTailWithRequiredBraces() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              Input {
+                output: Output,
+              }
+            }
+
+            pub type Output {
+              Output
+            }
+
+            pub fn main(Input { output, .. }, redeemerq: Int) -> Bool {
+              when output <caret>
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+        val target = myFixture.lookupElements?.firstOrNull { it.lookupString == "is" }
+            ?: error("Expected is lookup, got $suggestions")
+        myFixture.lookup.currentItem = target
+        myFixture.finishLookup('\n')
+
+        assertTrue(
+            "Expected accepting `is` to insert mandatory when braces. File text was:\n${myFixture.file.text}",
+            myFixture.file.text.contains("when output is {\n    \n  }")
         )
     }
 
@@ -3003,6 +3899,135 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsTypesNotConstructorsInSoftCastIfIsContext() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature], .. } = tx
+                and {
+                  signature == expected_pubkey,
+                  if redeemer is <caret> {
+                    True
+                  } else {
+                    False
+                  },
+                }
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected type suggestions in soft-cast `if ... is` context, got: $suggestions", suggestions.contains("MyRedeemer"))
+        assertTrue("Expected imported type suggestions in soft-cast `if ... is` context, got: $suggestions", suggestions.contains("Transaction"))
+        assertFalse("Did not expect constructor Mint in soft-cast type context, got: $suggestions", suggestions.contains("Mint"))
+        assertFalse("Did not expect constructor Burn in soft-cast type context, got: $suggestions", suggestions.contains("Burn"))
+    }
+
+    @Test
+    fun boostsExpectedOperandTypeSuggestionsAfterComparisonOperator() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature], .. } = tx
+                and {
+                  if redeemer == <caret> {
+                    True
+                  } else {
+                    False
+                  },
+                }
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected same-typed local value after comparison operator, got: $suggestions", suggestions.contains("redeemer"))
+        assertTrue("Expected compatible constructor after comparison operator, got: $suggestions", suggestions.contains("Mint"))
+        assertTrue("Expected same-typed value to outrank unrelated values. Suggestions were: $suggestions", suggestions.indexOf("redeemer") in 0 until suggestions.indexOf("tx"))
+        assertTrue("Expected compatible constructor to outrank unrelated values. Suggestions were: $suggestions", suggestions.indexOf("Mint") in 0 until suggestions.indexOf("tx"))
+    }
+
+    @Test
+    fun suggestsOrdinaryDefinitionsByPrefixInsideLogicalBlockExpression() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "lib/cardano/assets.ak",
+            """
+            pub type Value {
+              Value
+            }
+
+            pub const lovelace_zero: Int = 0
+
+            pub fn lovelace_of(self: Value) -> Int {
+              0
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/assets.{Value}
+
+            validator contract {
+              mint(_redeemer: Int, _policy_id: ByteArray, value: Value) {
+                let lovelace_local = 1
+                and {
+                  value == value,
+                  lovelac<caret>
+                }
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected local value by prefix inside logical block, got: $suggestions", suggestions.contains("lovelace_local"))
+        assertTrue("Expected unimported const by prefix inside logical block, got: $suggestions", suggestions.contains("lovelace_zero"))
+        assertTrue("Expected unimported function by prefix inside logical block, got: $suggestions", suggestions.contains("lovelace_of"))
+    }
+
+    @Test
     fun narrowsVisibleBindingTypeInsideSoftCastIfThenBranch() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -3319,6 +4344,359 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun suggestsValidatorHandlerBindingsInsideBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            pub type Input {
+              amount: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            validator policy(config: Int) {
+              mint(redeemer: MyRedeemer, _policy_id: Int, tx: Transaction) {
+                when rede<caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("redeemer", "when redeemer")
+    }
+
+    @Test
+    fun suggestsOuterValidatorParametersInsideHandlerBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            validator policy(config: Int) {
+              mint(_redeemer: Int, _policy_id: Int, _tx: Int) {
+                con<caret>
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue(suggestions.toString(), suggestions.contains("config"))
+    }
+
+    @Test
+    fun suggestsTypesAtLetPatternDeclarationStartInsideFunctionBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val file = myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              value: Int,
+            }
+
+            pub type Input {
+              output: Output,
+              output_reference: Int,
+            }
+
+            fn qwer(Input { output, .. }, re: Int) -> Bool {
+              let Outp<caret>
+              re > 0
+            }
+            """.trimIndent()
+        )
+
+        val anchor = findElementAtCaret(file) ?: error("Expected anchor at caret")
+        val directSuggestions =
+            AikenReferenceVariants.forElement(anchor, myFixture.caretOffset, true)
+                .mapNotNull { it as? com.intellij.codeInsight.lookup.LookupElement }
+                .map { it.lookupString }
+        assertTrue("Expected direct Output type variant at let-pattern declaration start, got: $directSuggestions", directSuggestions.contains("Output"))
+        assertEquals(AikenCompletionScenario.TypeReference, AikenCompletionScenarioResolver.resolve(file, myFixture.caretOffset).scenario)
+
+        val suggestions = completionVariants()
+
+        assertTrue(
+            "Expected Output type in let-pattern declaration completion or auto-insert, got: $suggestions\n${myFixture.file.text}",
+            suggestions.contains("Output") || myFixture.file.text.contains("let Output")
+        )
+        assertFalse("Unexpected value leakage in let-pattern declaration completion: $suggestions", suggestions.contains("output"))
+    }
+
+    @Test
+    fun suggestsUnimportedTypesAtLetPatternAfterExpectPipeInitializer() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "build/packages/aiken-lang-stdlib/lib/cardano/transaction.ak",
+            """
+            pub type OutputReference {
+              OutputReference
+            }
+
+            pub type Input {
+              output_reference: OutputReference,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            pub fn find_input(inputs: List<Input>, output_reference: OutputReference) -> Option<Input> {
+              None
+            }
+            """.trimIndent()
+        )
+        val file = myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{OutputReference, Transaction, find_input}
+
+            validator contract {
+              spend(utxo: OutputReference, tx: Transaction) {
+                expect Transaction { inputs, .. } = tx
+                expect Some(contarct_utxo) = inputs |> find_input(utxo)
+                let Inp<caret>
+                True
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(AikenCompletionScenario.TypeReference, AikenCompletionScenarioResolver.resolve(file, myFixture.caretOffset).scenario)
+
+        val suggestions = completionVariants()
+
+        assertTrue(
+            "Expected unimported Input type at let-pattern declaration after expect pipe initializer, got: $suggestions\n${myFixture.file.text}",
+            suggestions.contains("Input") || myFixture.file.text.contains("let Input")
+        )
+        assertFalse("Unexpected value leakage in let-pattern declaration completion: $suggestions", suggestions.contains("inputs"))
+    }
+
+    @Test
+    fun suggestsTypesAtExpectPatternDeclarationStartInsideFunctionBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val file = myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              value: Int,
+            }
+
+            pub type Input {
+              output: Output,
+              output_reference: Int,
+            }
+
+            fn qwer(Input { output, .. }, re: Int) -> Bool {
+              expect Outp<caret> = output
+              re > 0
+            }
+            """.trimIndent()
+        )
+
+        val anchor = findElementAtCaret(file) ?: error("Expected anchor at caret")
+        val directSuggestions =
+            AikenReferenceVariants.forElement(anchor, myFixture.caretOffset, true)
+                .mapNotNull { it as? com.intellij.codeInsight.lookup.LookupElement }
+                .map { it.lookupString }
+        assertTrue("Expected direct Output type variant at expect-pattern declaration start, got: $directSuggestions", directSuggestions.contains("Output"))
+        assertEquals(AikenCompletionScenario.TypeReference, AikenCompletionScenarioResolver.resolve(file, myFixture.caretOffset).scenario)
+
+        val suggestions = completionVariants()
+
+        assertTrue(
+            "Expected Output type in expect-pattern declaration completion or auto-insert, got: $suggestions\n${myFixture.file.text}",
+            suggestions.contains("Output") || myFixture.file.text.contains("expect Output")
+        )
+        assertFalse("Unexpected value leakage in expect-pattern declaration completion: $suggestions", suggestions.contains("output"))
+    }
+
+    @Test
+    fun suggestsDestructuredFunctionHeadBindingsInLetInitializerWithoutWhenHijack() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              value: Int,
+            }
+
+            pub type Input {
+              output: Output,
+              output_reference: Int,
+            }
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            fn qwer(Input { output, .. }, re: MyRedeemer) -> Bool {
+              let Output { value: value, .. } = <caret>
+
+              when re is {
+                Mint -> True
+                Burn -> False
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected destructured head binding in typed let initializer completion, got: $suggestions", suggestions.contains("output"))
+        assertFalse("Unexpected lower when constructor leakage into let initializer completion: $suggestions", suggestions.contains("Mint"))
+        assertFalse("Unexpected lower when constructor leakage into let initializer completion: $suggestions", suggestions.contains("Burn"))
+    }
+
+    @Test
+    fun suggestsDestructuredFunctionHeadBindingsInExpectInitializerWithoutWhenHijack() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Output {
+              value: Int,
+            }
+
+            pub type Input {
+              output: Output,
+              output_reference: Int,
+            }
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            fn qwer(Input { output, .. }, re: MyRedeemer) -> Bool {
+              expect Output { value: value, .. } = <caret>
+
+              when re is {
+                Mint -> True
+                Burn -> False
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected destructured head binding in typed expect initializer completion, got: $suggestions", suggestions.contains("output"))
+        assertFalse("Unexpected lower when constructor leakage into expect initializer completion: $suggestions", suggestions.contains("Mint"))
+        assertFalse("Unexpected lower when constructor leakage into expect initializer completion: $suggestions", suggestions.contains("Burn"))
+    }
+
+    @Test
+    fun doesNotTreatUnfinishedWhenAsLowerWhenPatternContext() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature], .. } = tx
+
+                when <caret>
+
+                and {
+                  (signature == expected_pubkey)?,
+                  when redeemer is {
+                    Mint -> True
+                    Burn -> False
+                  }?,
+                }?
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected tx in ordinary completion after unfinished when, got: $suggestions", suggestions.contains("tx"))
+        assertTrue("Expected signature in ordinary completion after unfinished when, got: $suggestions", suggestions.contains("signature"))
+        assertTrue("Expected expected_pubkey in ordinary completion after unfinished when, got: $suggestions", suggestions.contains("expected_pubkey"))
+    }
+
+    @Test
+    fun keepsPatternRecordFieldValueCompletionInsideValidatorHandlerParameters() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              id: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+            }
+
+            validator policy {
+              mint(_redeemer: Int, _policy_id: Int, Transaction { inputs: inp<caret> }) {
+                True
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected field binding suggestion, got: $suggestions", suggestions.contains("inputs"))
+        assertFalse("Unexpected constructor/type leakage in handler pattern: $suggestions", suggestions.contains("Input"))
+    }
+
+    @Test
+    fun doesNotSuggestTrailingPatternSpreadSourcesInsideValidatorHandlerParameters() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.configureByText(
+            "main.ak",
+            """
+            pub type Input {
+              id: Int,
+            }
+
+            pub type Transaction {
+              inputs: List<Input>,
+              reference_inputs: List<Input>,
+            }
+
+            validator policy {
+              mint(_redeemer: Int, _policy_id: Int, Transaction { inputs: inputs, ..<caret> }) {
+                True
+              }
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Trailing pattern spread in handler params should not suggest anything, got: $suggestions", suggestions.isEmpty())
+    }
+
+    @Test
     fun suggestsTypedArgumentsForValidatorNamespaceCallFromCombinedValidatorAndHandlerSignature() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         myFixture.configureByText(
@@ -3376,6 +4754,386 @@ class AikenReferenceCompletionTest : AikenPlatformTestCase() {
 
         assertTrue(lastArgSuggestions.toString(), lastArgSuggestions.contains("tx"))
         assertFalse(lastArgSuggestions.toString(), lastArgSuggestions.contains("utxo"))
+    }
+
+    @Test
+    fun suggestsImportedValidatorNamespaceRootAndHandlers() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract {
+              mint(redeemer: MyRedeemer, _policy_id: ByteArray, tx: Transaction) {
+                True
+              }
+
+              else(_) {
+                False
+              }
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test success() {
+              contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        val rootSuggestions = completionVariants()
+
+        assertTrue(rootSuggestions.toString(), rootSuggestions.contains("contract"))
+        assertTrue(rootSuggestions.toString(), rootSuggestions.contains("MyRedeemer"))
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test success() {
+              contract.contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        val handlerSuggestions = completionVariants()
+
+        assertTrue(handlerSuggestions.toString(), handlerSuggestions.contains("mint"))
+        assertFalse("Validator namespace should expose handlers only, got: $handlerSuggestions", handlerSuggestions.contains("MyRedeemer"))
+    }
+
+    @Test
+    fun suggestsImportedValidatorNamespaceInFailingTestBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                expect Transaction { extra_signatories: [signature], .. } = tx
+
+                and {
+                  (signature == expected_pubkey)?,
+                  when redeemer is {
+                    Mint -> True
+                    Burn -> False
+                  }?,
+                }?
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test failed() fail {
+              contra<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("contract", "test failed() fail {\n  contract")
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test failed() fail {
+              contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("contract", "test failed() fail {\n  contract.contract")
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test failed() fail {
+              contract.contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("mint", "contract.contract.mint")
+    }
+
+    @Test
+    fun suggestsPartiallyImportedValidatorModuleNamespaceInFailingTestBody() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                True
+              }
+
+              else(_) {
+                fail
+              }
+            }
+            """.trimIndent()
+        )
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction, placeholder}
+            use contract.{Burn}
+
+            test success() {
+              contract.contract.mint(
+                "good",
+                Burn,
+                "pid",
+                Transaction { ..placeholder, extra_signatories: ["good"] },
+              )
+            }
+
+            test failed() fail {
+              contra<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("contract", "test failed() fail {\n  contract")
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction, placeholder}
+            use contract.{Burn}
+
+            test success() {
+              contract.contract.mint(
+                "good",
+                Burn,
+                "pid",
+                Transaction { ..placeholder, extra_signatories: ["good"] },
+              )
+            }
+
+            test failed() fail {
+              contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("contract", "test failed() fail {\n  contract.contract")
+
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use cardano/transaction.{Transaction, placeholder}
+            use contract.{Burn}
+
+            test success() {
+              contract.contract.mint(
+                "good",
+                Burn,
+                "pid",
+                Transaction { ..placeholder, extra_signatories: ["good"] },
+              )
+            }
+
+            test failed() fail {
+              contract.contract.<caret>
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("mint", "contract.contract.mint")
+    }
+
+    @Test
+    fun suggestsValidatorLocalInvariantsForImportedValidatorNamespaceCallArguments() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract {
+              mint(redeemer: MyRedeemer, _policy_id: ByteArray, tx: Transaction) {
+                True
+              }
+
+              else(_) {
+                False
+              }
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test success(tx: Transaction) {
+              contract.contract.mint(Mi<caret>, "", tx)
+            }
+            """.trimIndent()
+        )
+
+        assertCompletionContainsOrAutoInserted("Mint", "contract.contract.mint(Mint")
+    }
+
+    @Test
+    fun prioritizesPrefixMatchingValidatorInvariantBeforeTypedFallbackFunctions() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract {
+              mint(redeemer: MyRedeemer, _policy_id: ByteArray, tx: Transaction) {
+                when redeemer is {
+                  Mint -> True
+                  Burn -> False
+                }
+              }
+
+              else(_) {
+                False
+              }
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use contract
+
+            test success(tx: Transaction) {
+              contract.contract.mint(
+                Bur<caret>,
+                "",
+                tx
+              )
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected Burn suggestion, got: $suggestions", suggestions.contains("Burn"))
+        val burnIndex = suggestions.indexOf("Burn")
+        val reduceIndex = suggestions.indexOf("reduce")
+        if (reduceIndex >= 0) {
+            assertTrue(
+                "Expected prefix-matching invariant to outrank non-matching typed function fallback, got: $suggestions",
+                burnIndex in 0 until reduceIndex
+            )
+        }
+    }
+
+    @Test
+    fun prioritizesExactTypeValidatorInvariantsBeforeGenericFunctionFallbacksWithoutPrefix() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        myFixture.addFileToProject(
+            "validators/contract.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction}
+
+            pub type MyRedeemer {
+              Mint
+              Burn
+            }
+
+            validator contract(expected_pubkey: VerificationKeyHash) {
+              mint(redeemer: MyRedeemer, _policy_id: PolicyId, tx: Transaction) {
+                when redeemer is {
+                  Mint -> True
+                  Burn -> False
+                }
+              }
+
+              else(_) {
+                False
+              }
+            }
+            """.trimIndent()
+        )
+        myFixture.configureByText(
+            "main.ak",
+            """
+            use aiken/crypto.{VerificationKeyHash}
+            use cardano/assets.{PolicyId}
+            use cardano/transaction.{Transaction, placeholder}
+            use contract.{Burn}
+
+            test failed() fail {
+              contract.contract.mint("bad", <caret>, "pid", Transaction { ..placeholder, extra_signatories: ["good"] })
+            }
+            """.trimIndent()
+        )
+
+        val suggestions = completionVariants()
+
+        assertTrue("Expected Burn suggestion, got: $suggestions", suggestions.contains("Burn"))
+        assertTrue("Expected Mint suggestion, got: $suggestions", suggestions.contains("Mint"))
+        val burnIndex = suggestions.indexOf("Burn")
+        val mintIndex = suggestions.indexOf("Mint")
+        val reduceIndex = suggestions.indexOf("reduce")
+        if (reduceIndex >= 0) {
+            assertTrue(
+                "Expected exact-type invariants to outrank generic function fallback, got: $suggestions",
+                burnIndex in 0 until reduceIndex
+            )
+            assertTrue(
+                "Expected exact-type invariants to outrank generic function fallback, got: $suggestions",
+                mintIndex in 0 until reduceIndex
+            )
+        }
     }
 
     @Test

@@ -52,6 +52,15 @@ internal object AikenCompletionScenarioPolicies {
         val likelyTypeContext = AikenCompletionContexts.isLikelyTypeReferenceContext(text, offset)
 
         return when (scenario) {
+            AikenCompletionScenario.NoSuggestions ->
+                AikenCompletionScenarioPolicy(
+                    keywordVisibility = AikenKeywordVisibility.NONE,
+                    bareTypesAllowed = false,
+                    typeOnlySuggestions = false,
+                    lexicalFallbackAllowed = false,
+                    typedCompletionStopsFurtherMerging = true
+                )
+
             AikenCompletionScenario.UseModule,
             AikenCompletionScenario.UseSymbol ->
                 AikenCompletionScenarioPolicy(

@@ -196,8 +196,8 @@ internal object AikenTypedCandidateResolver {
         resolver: Resolver
     ): List<Pair<String, CompletionSymbolKind>> =
         when {
-            "Bool" in expectedType.compatibleTypes -> listOf("True" to CompletionSymbolKind.KEYWORD, "False" to CompletionSymbolKind.KEYWORD)
-            expectedType.compatibleTypes.keys.any { resolver.unwrapOptionType(it) != null } -> listOf("None" to CompletionSymbolKind.KEYWORD)
+            "Bool" in expectedType.compatibleTypes -> listOf("True" to CompletionSymbolKind.TYPE, "False" to CompletionSymbolKind.TYPE)
+            expectedType.compatibleTypes.keys.any { resolver.unwrapOptionType(it) != null } -> listOf("None" to CompletionSymbolKind.TYPE)
             else -> emptyList()
         }
 

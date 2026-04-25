@@ -97,6 +97,51 @@ class AikenCompletionScenarioPolicyTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun usesTypeOnlyPolicyInAnonymousFunctionArgumentReturnAnnotationPosition() {
+        val policy =
+            scenarioPolicy(
+                """
+                fn apply(predicate: fn(Int) -> Bool) -> Bool {
+                  predicate(1)
+                }
+
+                fn main(key: Bool) -> Bool {
+                  apply(fn(value: Int) -> Bo<caret> {
+                    key
+                  })
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
+    fun usesTypeOnlyPolicyInAssignedAnonymousFunctionReturnAnnotationPosition() {
+        val policy =
+            scenarioPolicy(
+                """
+                fn main(key: Bool) -> Bool {
+                  let predicate = fn(value: Int) -> Bo<caret> {
+                    key
+                  }
+                  predicate(1)
+                }
+                """.trimIndent()
+            )
+
+        assertEquals(AikenKeywordVisibility.NONE, policy.keywordVisibility)
+        assertTrue(policy.bareTypesAllowed)
+        assertTrue(policy.typeOnlySuggestions)
+        assertTrue(policy.lexicalFallbackAllowed)
+        assertTrue(policy.typedCompletionStopsFurtherMerging)
+    }
+
+    @Test
     fun usesTypeOnlyPolicyInConstAnnotationPosition() {
         val policy =
             scenarioPolicy(

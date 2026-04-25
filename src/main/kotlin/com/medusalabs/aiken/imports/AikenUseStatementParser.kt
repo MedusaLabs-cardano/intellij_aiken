@@ -14,7 +14,8 @@ object AikenUseStatementParser {
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
             if (tokenType == AikenTokenTypes.KEYWORD &&
-                text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "use"
+                text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "use" &&
+                hasKeywordBoundaries(text, lexer.tokenStart, lexer.tokenEnd)
             ) {
                 val useStart = lexer.tokenStart
                 lexer.advance()
@@ -162,7 +163,7 @@ object AikenUseStatementParser {
     private fun parseAlias(text: CharSequence, lexer: com.intellij.lexer.Lexer): Pair<String?, TextRange?> {
         val t = lexer.tokenType
         val tokenText = t?.let { text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() }
-        if (t == AikenTokenTypes.KEYWORD && tokenText == "as") {
+        if (t == AikenTokenTypes.KEYWORD && tokenText == "as" && hasKeywordBoundaries(text, lexer.tokenStart, lexer.tokenEnd)) {
             lexer.advance()
             skipWhitespace(lexer, text)
             val aliasTokenType = lexer.tokenType
@@ -183,4 +184,13 @@ object AikenUseStatementParser {
             lexer.advance()
         }
     }
+
+    private fun hasKeywordBoundaries(text: CharSequence, start: Int, end: Int): Boolean {
+        val beforeOk = start <= 0 || !isIdentifierChar(text[start - 1])
+        val afterOk = end >= text.length || !isIdentifierChar(text[end])
+        return beforeOk && afterOk
+    }
+
+    private fun isIdentifierChar(ch: Char): Boolean =
+        ch.isLetterOrDigit() || ch == '_'
 }

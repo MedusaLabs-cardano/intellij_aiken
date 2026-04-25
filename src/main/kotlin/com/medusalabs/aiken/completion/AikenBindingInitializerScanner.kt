@@ -158,6 +158,7 @@ internal object AikenBindingInitializerScanner {
         if (caretOffset < declarationOffset) return false
         if (declarationOffset < 0 || declarationOffset + bindingName.length > text.length) return false
         if (text.substring(declarationOffset, declarationOffset + bindingName.length) != bindingName) return false
+        val safeCaretOffset = caretOffset.coerceIn(0, text.length)
 
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
@@ -176,6 +177,12 @@ internal object AikenBindingInitializerScanner {
                 }
                 lexer.advance()
                 continue
+            }
+
+            if (safeCaretOffset in patternStart..lexer.tokenStart &&
+                !hasTopLevelStatementBoundaryBetween(text, patternStart, safeCaretOffset)
+            ) {
+                return true
             }
 
             if (tokenType == TokenType.WHITE_SPACE || tokenType == AikenTokenTypes.WHITESPACE || tokenType == AikenTokenTypes.COMMENT) {
@@ -201,6 +208,130 @@ internal object AikenBindingInitializerScanner {
             }
 
             lexer.advance()
+        }
+
+        return false
+    }
+
+    fun isInsideBindingPatternDeclaration(
+        text: String,
+        caretOffset: Int
+    ): Boolean {
+        val safeOffset = caretOffset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        var collectingPattern = false
+        var patternStart = -1
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            if (!collectingPattern) {
+                if (tokenType == AikenTokenTypes.KEYWORD && startsBindingPattern(text, tokenText, lexer.tokenEnd)) {
+                    collectingPattern = true
+                    patternStart = lexer.tokenEnd
+                }
+                lexer.advance()
+                continue
+            }
+
+            if (safeOffset in patternStart..lexer.tokenStart &&
+                !hasTopLevelStatementBoundaryBetween(text, patternStart, safeOffset)
+            ) {
+                return true
+            }
+
+            if (tokenType == TokenType.WHITE_SPACE || tokenType == AikenTokenTypes.WHITESPACE || tokenType == AikenTokenTypes.COMMENT) {
+                lexer.advance()
+                continue
+            }
+
+            val bindingOperator = if (tokenType == AikenTokenTypes.OPERATOR) bindingOperatorAt(text, lexer.tokenStart) else null
+            if (bindingOperator != null) {
+                val patternEnd = lexer.tokenStart
+                if (safeOffset in patternStart..patternEnd) return true
+
+                collectingPattern = false
+                patternStart = -1
+                if (bindingOperator == "<-") {
+                    lexer.start(text, (lexer.tokenStart + 2).coerceAtMost(text.length), text.length, 0)
+                } else {
+                    lexer.advance()
+                }
+                continue
+            }
+
+            lexer.advance()
+        }
+
+        return false
+    }
+
+    private fun hasTopLevelStatementBoundaryBetween(
+        text: String,
+        start: Int,
+        endExclusive: Int
+    ): Boolean {
+        var index = start.coerceIn(0, text.length)
+        val end = endExclusive.coerceIn(index, text.length)
+        var angleDepth = 0
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var inLineComment = false
+
+        while (index < end) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') {
+                    inLineComment = false
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return true
+                }
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < end) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < end && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            when (ch) {
+                '<' -> angleDepth++
+                '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                '\n', '\r', ';' -> if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                    return true
+                }
+            }
+
+            index++
         }
 
         return false

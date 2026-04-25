@@ -1,6 +1,7 @@
 package com.medusalabs.aiken.lsp
 
 import com.intellij.codeInsight.intention.IntentionAction
+import com.intellij.codeInsight.intention.PriorityAction
 import com.medusalabs.aiken.AikenPlatformTestCase
 import org.eclipse.lsp4j.Diagnostic
 import org.eclipse.lsp4j.DiagnosticSeverity
@@ -37,6 +38,7 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
         val action = AikenRemoveAllUnusedImportsIntention()
 
         assertTrue(action.isAvailable(project, myFixture.editor, findElementAtCaret(myFixture.file)!!))
+        assertEquals(PriorityAction.Priority.TOP, action.priority)
     }
 
     @Test

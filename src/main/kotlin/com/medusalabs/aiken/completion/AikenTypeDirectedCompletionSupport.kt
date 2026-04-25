@@ -75,6 +75,37 @@ object AikenTypeDirectedCompletionSupport {
         val currentValueText: String
     )
 
+    private data class CallableReturnExpectedTypeCandidate(
+        val context: CallableReturnExpectedTypeContext,
+        val span: Int
+    )
+
+    private data class WhenArmExpectedTypeContext(
+        val expectedType: String,
+        val currentValueText: String
+    )
+
+    private data class IfBranchExpectedTypeContext(
+        val expectedType: String,
+        val currentValueText: String
+    )
+
+    private data class OperatorOperandExpectedTypeContext(
+        val expectedType: String,
+        val currentValueText: String
+    )
+
+    private data class OperatorMatch(
+        val start: Int,
+        val end: Int,
+        val operator: String
+    )
+
+    private data class WhenPatternExpectedTypeContext(
+        val expectedType: String,
+        val currentPatternText: String
+    )
+
     private val inferredFunctionReturnGuard =
         ThreadLocal.withInitial<LinkedHashSet<String>> { linkedSetOf() }
     private val expressionTypeResolver =
@@ -214,6 +245,13 @@ object AikenTypeDirectedCompletionSupport {
         )
     }
 
+    fun hasBindingInitializerExpectedTypeContext(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): Boolean =
+        inferBindingInitializerExpectedTypeContext(anchor, text, offset) != null
+
     fun callableReturnLookups(
         anchor: PsiElement,
         text: String,
@@ -232,6 +270,145 @@ object AikenTypeDirectedCompletionSupport {
         text: String,
         offset: Int
     ): Boolean = inferCallableReturnExpectedTypeContext(text, offset) != null
+
+    fun whenArmExpressionLookups(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): List<LookupElement> {
+        val context = inferWhenArmExpectedTypeContext(anchor, text, offset) ?: return emptyList()
+        return lookupsForExpectedType(
+            anchor = anchor,
+            expectedType = context.expectedType,
+            currentValueText = context.currentValueText,
+            pruneByPrefix = true
+        )
+    }
+
+    fun ifBranchExpressionLookups(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): List<LookupElement> {
+        val context = inferIfBranchExpectedTypeContext(anchor, text, offset) ?: return emptyList()
+        return lookupsForExpectedType(
+            anchor = anchor,
+            expectedType = context.expectedType,
+            currentValueText = context.currentValueText,
+            pruneByPrefix = true
+        )
+    }
+
+    fun operatorOperandLookups(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): List<LookupElement> {
+        val context = inferOperatorOperandExpectedTypeContext(anchor, text, offset) ?: return emptyList()
+        return lookupsForExpectedType(
+            anchor = anchor,
+            expectedType = context.expectedType,
+            currentValueText = context.currentValueText,
+            pruneByPrefix = true
+        )
+    }
+
+    fun whenPatternLookups(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): List<LookupElement> {
+        val context = inferWhenPatternExpectedTypeContext(anchor, text, offset) ?: return emptyList()
+        return patternLookupsForExpectedType(anchor, context.expectedType, context.currentPatternText)
+    }
+
+    private fun patternLookupsForExpectedType(
+        anchor: PsiElement,
+        expectedType: String,
+        currentPatternText: String
+    ): List<LookupElement> {
+        val normalizedExpectedType = normalizeTypeText(expectedType)
+        if (normalizedExpectedType.isBlank()) return emptyList()
+
+        val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
+        val prefix = currentCompletionPrefix(currentPatternText)
+        val candidates =
+            AikenTypedCandidateResolver.collectCandidatesForExpectedType(
+                anchor = anchor,
+                expectedType = expectedTypeProfile,
+                extraCandidates = emptyList(),
+                context = AikenTypedCandidateContext.None,
+                excludedNames = emptySet(),
+                prefix = prefix,
+                resolver = cachedTypedCandidateResolver()
+            )
+                .asSequence()
+                .filter { candidate ->
+                    when (candidate) {
+                        is AikenTypedExpectedTypeCandidate.Constructible -> true
+                        is AikenTypedExpectedTypeCandidate.Identifier ->
+                            candidate.source == AikenTypedCandidateSource.BUILTIN_INVARIANT ||
+                                candidate.source == AikenTypedCandidateSource.BINDING ||
+                                candidate.source == AikenTypedCandidateSource.CONST
+                        is AikenTypedExpectedTypeCandidate.Function -> true
+                        AikenTypedExpectedTypeCandidate.ListLiteral -> true
+                        AikenTypedExpectedTypeCandidate.OptionSome -> true
+                        else -> false
+                    }
+                }
+                .map { candidate ->
+                    val lookup = AikenTypedLookupFactory.createExpectedTypeLookup(candidate, normalizedExpectedType)
+                    val patternCategory =
+                        when (candidate) {
+                            is AikenTypedExpectedTypeCandidate.Constructible -> AikenTypedCompletionCategory.PATTERN_PRIMARY
+                            is AikenTypedExpectedTypeCandidate.Identifier ->
+                                when (candidate.source) {
+                                    AikenTypedCandidateSource.BUILTIN_INVARIANT -> AikenTypedCompletionCategory.PATTERN_PRIMARY
+                                    AikenTypedCandidateSource.BINDING,
+                                    AikenTypedCandidateSource.CONST -> AikenTypedCompletionCategory.PATTERN_VALUE
+                                    else -> AikenTypedCompletionCategory.OTHER
+                                }
+                            is AikenTypedExpectedTypeCandidate.Function -> AikenTypedCompletionCategory.PATTERN_FUNCTION
+                            AikenTypedExpectedTypeCandidate.ListLiteral,
+                            AikenTypedExpectedTypeCandidate.OptionSome -> AikenTypedCompletionCategory.PATTERN_TEMPLATE
+                            else -> AikenTypedCompletionCategory.OTHER
+                        }
+                    AikenCompletionSorting.annotateTyped(
+                        lookup,
+                        patternCategory,
+                        candidate.matchDistance,
+                        candidate.scopeDistance()
+                    )
+                }
+                .toMutableList()
+
+        val trimmedPattern = currentPatternText.trim()
+        if (prefix.isBlank() || "_".startsWith(prefix)) {
+            candidates +=
+                AikenCompletionSorting.annotateTyped(
+                    AikenTypedLookupFactory.createTypeDirectedLookup(
+                        text = "_",
+                        kind = CompletionSymbolKind.KEYWORD,
+                        typeText = normalizedExpectedType
+                    ),
+                    AikenTypedCompletionCategory.PATTERN_TEMPLATE
+                )
+        }
+
+        if (normalizedExpectedType.startsWith("List<") && (prefix.isBlank() || trimmedPattern.startsWith("["))) {
+            candidates +=
+                AikenCompletionSorting.annotateTyped(
+                    AikenTypedLookupFactory.createTypeDirectedLookup(
+                        text = "[x, ..xs]",
+                        kind = CompletionSymbolKind.KEYWORD,
+                        typeText = normalizedExpectedType
+                    ),
+                    AikenTypedCompletionCategory.PATTERN_TEMPLATE
+                )
+        }
+
+        return candidates.distinctBy { it.lookupString }
+    }
 
     fun spreadLookupsForExpectedType(
         anchor: PsiElement,
@@ -372,6 +549,43 @@ object AikenTypeDirectedCompletionSupport {
             resolver = expressionTypeResolver
         )
 
+    internal fun ordinaryBindingDisplayType(
+        anchor: PsiElement,
+        bindingName: String,
+        beforeOffset: Int = anchor.textRange.startOffset
+    ): String? =
+        resolveVisibleBindingType(anchor, bindingName, beforeOffset, mutableSetOf())
+            ?.let(::normalizeTypeText)
+            ?.takeIf { it.isNotBlank() }
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+
+    internal fun ordinaryConstDisplayType(
+        anchor: PsiElement,
+        symbolText: String
+    ): String? =
+        resolveConstType(anchor, symbolText)
+            ?.let(::normalizeTypeText)
+            ?.takeIf { it.isNotBlank() }
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+
+    internal fun ordinaryFunctionDisplayType(
+        anchor: PsiElement,
+        symbolText: String
+    ): String? =
+        resolveFunctionValueType(anchor, symbolText)
+            ?.let(::normalizeTypeText)
+            ?.takeIf { it.isNotBlank() }
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+
+    internal fun ordinaryConstructibleDisplayType(
+        anchor: PsiElement,
+        symbolText: String
+    ): String? =
+        resolveConstructibleResultType(anchor, symbolText)
+            ?.let(::normalizeTypeText)
+            ?.takeIf { it.isNotBlank() }
+            ?.let(AikenTypeText::normalizeGenericVariablesForDisplay)
+
     private fun inferBindingInitializerExpectedTypeContext(
         anchor: PsiElement,
         text: String,
@@ -402,7 +616,11 @@ object AikenTypeDirectedCompletionSupport {
 
             if (tokenType == AikenTokenTypes.OPERATOR && tokenText == "=") {
                 val initializerTokenEnd = lexer.tokenEnd
-                val initializerEnd = AikenExpressionTypeInference.consumeExpressionEnd(text, initializerTokenEnd)
+                val initializerEnd =
+                    maxOf(
+                        AikenExpressionTypeInference.consumeExpressionEnd(text, initializerTokenEnd),
+                        skipWhitespaceForward(text, initializerTokenEnd)
+                    )
                 val insideInitializer = safeOffset in initializerTokenEnd..initializerEnd
                 val patternText =
                     if (patternStart in 0..lexer.tokenStart) {
@@ -445,36 +663,54 @@ object AikenTypeDirectedCompletionSupport {
         lexer.start(text)
 
         var braceDepth = 0
+        var bestCandidate: CallableReturnExpectedTypeCandidate? = null
 
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
             val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
 
-            if (braceDepth == 0 &&
-                tokenType == AikenTokenTypes.KEYWORD &&
-                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
+            if (tokenType == AikenTokenTypes.KEYWORD &&
+                (tokenText == "fn" || (braceDepth == 0 && (tokenText == "test" || tokenText == "bench")))
             ) {
                 val callable =
                     parseCallableBodyContext(
                         text = text,
                         declarationKeywordStart = lexer.tokenStart,
                         declarationKeyword = tokenText
-                    )
+                )
                 if (callable != null) {
                     if (safeOffset in (callable.bodyOpen + 1)..callable.bodyClose) {
                         if (!isStandaloneCallableReturnSlot(text, safeOffset, callable.bodyOpen, callable.bodyClose)) {
-                            return null
+                            lexer.advance()
+                            continue
                         }
                         val lineStart = findCurrentLineStart(text, safeOffset, callable.bodyOpen + 1)
                         val currentValueText = text.substring(lineStart.coerceAtMost(safeOffset), safeOffset)
-                        return CallableReturnExpectedTypeContext(
-                            expectedType = callable.returnType,
-                            currentValueText = currentValueText
+                        bestCandidate = bestCandidate.nearer(
+                            CallableReturnExpectedTypeCandidate(
+                                context = CallableReturnExpectedTypeContext(
+                                    expectedType = callable.returnType,
+                                    currentValueText = currentValueText
+                                ),
+                                span = callable.bodyClose - callable.bodyOpen
+                            )
                         )
+                        lexer.advance()
+                        continue
                     }
                     lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
                     braceDepth = 0
                     continue
+                }
+            }
+
+            if (braceDepth == 0 &&
+                tokenType == AikenTokenTypes.KEYWORD &&
+                tokenText == "validator"
+            ) {
+                val validatorContext = inferValidatorHandlerReturnExpectedTypeContext(text, safeOffset, lexer.tokenStart)
+                if (validatorContext != null) {
+                    bestCandidate = bestCandidate.nearer(validatorContext)
                 }
             }
 
@@ -486,7 +722,494 @@ object AikenTypeDirectedCompletionSupport {
             lexer.advance()
         }
 
+        return bestCandidate?.context
+    }
+
+    private fun CallableReturnExpectedTypeCandidate?.nearer(
+        candidate: CallableReturnExpectedTypeCandidate
+    ): CallableReturnExpectedTypeCandidate =
+        if (this == null || candidate.span < this.span) candidate else this
+
+    private fun inferValidatorHandlerReturnExpectedTypeContext(
+        text: String,
+        offset: Int,
+        validatorKeywordStart: Int
+    ): CallableReturnExpectedTypeCandidate? {
+        var index = skipWhitespaceForward(text, validatorKeywordStart + "validator".length)
+        if (index >= text.length || !isIdentifierChar(text[index])) return null
+        while (index < text.length && isIdentifierChar(text[index])) index++
+        index = skipWhitespaceForward(text, index)
+
+        if (index < text.length && text[index] == '(') {
+            val paramsClose = AikenSyntaxText.findMatchingDelimiter(text, index, '(', ')') ?: return null
+            index = skipWhitespaceForward(text, paramsClose + 1)
+        }
+
+        if (index >= text.length || text[index] != '{') return null
+        val validatorBodyOpen = index
+        val validatorBodyClose = AikenSyntaxText.findMatchingDelimiter(text, validatorBodyOpen, '{', '}') ?: return null
+        if (offset !in (validatorBodyOpen + 1)..validatorBodyClose) return null
+
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text, validatorBodyOpen + 1, validatorBodyClose, 0)
+
+        var bodyDepth = 0
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenStart = lexer.tokenStart
+            val tokenEnd = lexer.tokenEnd
+            val tokenText = text.subSequence(tokenStart, tokenEnd).toString()
+
+            if (bodyDepth == 0 &&
+                (tokenType == AikenTokenTypes.IDENTIFIER || tokenType == AikenTokenTypes.FUNCTION || tokenType == AikenTokenTypes.KEYWORD) &&
+                tokenText !in setOf("use", "const", "type", "validator", "fn", "test", "bench")
+            ) {
+                var handlerIndex = skipWhitespaceForward(text, tokenEnd)
+                if (handlerIndex < validatorBodyClose && text[handlerIndex] == '(') {
+                    val paramsClose = AikenSyntaxText.findMatchingDelimiter(text, handlerIndex, '(', ')')
+                    if (paramsClose != null && paramsClose < validatorBodyClose) {
+                        handlerIndex = skipWhitespaceForward(text, paramsClose + 1)
+                        if (handlerIndex < validatorBodyClose && text[handlerIndex] == '{') {
+                            val handlerBodyOpen = handlerIndex
+                            val handlerBodyClose = AikenSyntaxText.findMatchingDelimiter(text, handlerBodyOpen, '{', '}')
+                            if (handlerBodyClose != null && handlerBodyClose <= validatorBodyClose) {
+                                if (offset in (handlerBodyOpen + 1)..handlerBodyClose &&
+                                    isStandaloneCallableReturnSlot(text, offset, handlerBodyOpen, handlerBodyClose)
+                                ) {
+                                    val lineStart = findCurrentLineStart(text, offset, handlerBodyOpen + 1)
+                                    return CallableReturnExpectedTypeCandidate(
+                                        context = CallableReturnExpectedTypeContext(
+                                            expectedType = "Bool",
+                                            currentValueText = text.substring(lineStart.coerceAtMost(offset), offset)
+                                        ),
+                                        span = handlerBodyClose - handlerBodyOpen
+                                    )
+                                }
+                                lexer.start(text, (handlerBodyClose + 1).coerceAtMost(validatorBodyClose), validatorBodyClose, 0)
+                                bodyDepth = 0
+                                continue
+                            }
+                        }
+                    }
+                }
+            }
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> bodyDepth += 1
+                AikenTokenTypes.RBRACE -> bodyDepth = (bodyDepth - 1).coerceAtLeast(0)
+            }
+            lexer.advance()
+        }
+
         return null
+    }
+
+    private fun inferWhenArmExpectedTypeContext(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): WhenArmExpectedTypeContext? {
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+            if (tokenType != AikenTokenTypes.KEYWORD || tokenText != "when") {
+                lexer.advance()
+                continue
+            }
+
+            val whenBody = findWhenPatternBodyContext(text, lexer.tokenEnd)
+            if (whenBody == null) {
+                lexer.advance()
+                continue
+            }
+            if (safeOffset !in (whenBody.bodyOpenBrace + 1)..whenBody.bodyCloseBrace) {
+                lexer.start(text, (whenBody.bodyCloseBrace + 1).coerceAtMost(text.length), text.length, 0)
+                continue
+            }
+
+            var cursor = whenBody.bodyOpenBrace + 1
+            while (cursor < whenBody.bodyCloseBrace) {
+                val arrowOffset = findTopLevelArrowInRange(text, cursor, whenBody.bodyCloseBrace) ?: break
+                val expressionStart = skipInlineWhitespaceForward(text, arrowOffset + 2)
+                if (expressionStart > whenBody.bodyCloseBrace) break
+                val expressionEnd = consumeExpressionEndWithin(text, expressionStart, whenBody.bodyCloseBrace)
+                val insideCurrentArmExpression = safeOffset in expressionStart..expressionEnd
+                if (insideCurrentArmExpression) {
+                    val siblingTypes = LinkedHashSet<String>()
+                    var siblingCursor = whenBody.bodyOpenBrace + 1
+                    while (siblingCursor < whenBody.bodyCloseBrace) {
+                        val siblingArrow = findTopLevelArrowInRange(text, siblingCursor, whenBody.bodyCloseBrace) ?: break
+                        val siblingExpressionStart = skipInlineWhitespaceForward(text, siblingArrow + 2)
+                        if (siblingExpressionStart > whenBody.bodyCloseBrace) break
+                        val siblingExpressionEnd = consumeExpressionEndWithin(text, siblingExpressionStart, whenBody.bodyCloseBrace)
+                        if (siblingExpressionStart != expressionStart || siblingExpressionEnd != expressionEnd) {
+                            val siblingExpressionText =
+                                text.substring(siblingExpressionStart, siblingExpressionEnd.coerceAtMost(text.length)).trim()
+                            if (siblingExpressionText.isNotBlank()) {
+                                inferExpressionType(
+                                    anchor = anchor,
+                                    expressionText = siblingExpressionText,
+                                    beforeOffset = siblingExpressionEnd
+                                )?.let { siblingTypes += normalizeTypeText(it) }
+                            }
+                        }
+                        siblingCursor = if (siblingExpressionEnd > siblingCursor) siblingExpressionEnd else (siblingArrow + 2)
+                    }
+
+                    if (siblingTypes.size == 1) {
+                        return WhenArmExpectedTypeContext(
+                            expectedType = siblingTypes.first(),
+                            currentValueText = text.substring(expressionStart.coerceAtMost(safeOffset), safeOffset)
+                        )
+                    }
+                    return null
+                }
+
+                cursor = if (expressionEnd > cursor) expressionEnd else (arrowOffset + 2)
+            }
+
+            lexer.start(text, (whenBody.bodyCloseBrace + 1).coerceAtMost(text.length), text.length, 0)
+        }
+
+        return null
+    }
+
+    private fun inferOperatorOperandExpectedTypeContext(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): OperatorOperandExpectedTypeContext? {
+        if (text.isEmpty()) return null
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lineStart = findCurrentLineStart(text, safeOffset, 0)
+        val linePrefix = text.substring(lineStart.coerceAtMost(safeOffset), safeOffset)
+        val operator = findLastTopLevelExpectedOperandOperator(linePrefix) ?: return null
+        val leftExpression = normalizeLeftOperandText(linePrefix.substring(0, operator.start))
+        if (leftExpression.isBlank()) return null
+
+        val operatorEnd = lineStart + operator.end
+        val currentValueStart = skipWhitespaceForward(text, operatorEnd).coerceAtMost(safeOffset)
+        val currentValueText = text.substring(currentValueStart, safeOffset)
+        val expectedType =
+            if (operator.operator == "&&" || operator.operator == "||") {
+                "Bool"
+            } else {
+                inferExpressionType(anchor = anchor, expressionText = leftExpression, beforeOffset = lineStart + operator.start)
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: ordinaryBindingDisplayType(anchor, leftExpression, safeOffset)
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: resolveBareIdentifierType(anchor, leftExpression, safeOffset)
+                    ?: resolveScopedParameterBindingType(text, leftExpression, safeOffset, anchor)
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+            }
+
+        return OperatorOperandExpectedTypeContext(
+            expectedType = expectedType ?: return null,
+            currentValueText = currentValueText
+        )
+    }
+
+    private fun normalizeLeftOperandText(text: String): String {
+        val trimmed = text.trim()
+        return when {
+            trimmed.startsWith("else if ") -> trimmed.removePrefix("else if ").trim()
+            trimmed.startsWith("if ") -> trimmed.removePrefix("if ").trim()
+            else -> trimmed
+        }
+    }
+
+    private fun findLastTopLevelExpectedOperandOperator(text: String): OperatorMatch? {
+        val operators = listOf("==", "!=", "<=", ">=", "&&", "||", "<", ">")
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var index = 0
+        var lastMatch: OperatorMatch? = null
+
+        while (index < text.length) {
+            when (text[index]) {
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                val operator = operators.firstOrNull { text.startsWith(it, index) }
+                if (operator != null && isExpectedOperandOperatorContext(text, index, operator.length)) {
+                    lastMatch = OperatorMatch(index, index + operator.length, operator)
+                    index += operator.length
+                    continue
+                }
+            }
+
+            index++
+        }
+
+        return lastMatch
+    }
+
+    private fun isExpectedOperandOperatorContext(
+        text: String,
+        operatorStart: Int,
+        operatorLength: Int
+    ): Boolean {
+        val previous = previousNonWhitespaceIndex(text, operatorStart - 1) ?: return false
+        val next = nextNonWhitespaceIndex(text, operatorStart + operatorLength)
+        if (operatorStart > 0 && text[operatorStart - 1] == '-') return false
+        if (next != null && text.startsWith(">", operatorStart) && text[next] == '=') return false
+        return !isOperatorBoundaryChar(text[previous])
+    }
+
+    private fun isOperatorBoundaryChar(ch: Char): Boolean =
+        ch == '(' || ch == '[' || ch == '{' || ch == ',' || ch == ':' || ch == '='
+
+    private fun previousNonWhitespaceIndex(
+        text: String,
+        start: Int
+    ): Int? {
+        var index = start.coerceAtMost(text.lastIndex)
+        while (index >= 0) {
+            if (!text[index].isWhitespace()) return index
+            index--
+        }
+        return null
+    }
+
+    private fun nextNonWhitespaceIndex(
+        text: String,
+        start: Int
+    ): Int? {
+        var index = start.coerceAtLeast(0)
+        while (index < text.length) {
+            if (!text[index].isWhitespace()) return index
+            index++
+        }
+        return null
+    }
+
+    private fun inferIfBranchExpectedTypeContext(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): IfBranchExpectedTypeContext? {
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        var bestContext: IfBranchExpectedTypeContext? = null
+        var bestSpan = Int.MAX_VALUE
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+            if (tokenType != AikenTokenTypes.KEYWORD || tokenText != "if") {
+                lexer.advance()
+                continue
+            }
+
+            val thenOpen = findTopLevelChar(text, '{', lexer.tokenEnd)
+            if (thenOpen == null) {
+                lexer.advance()
+                continue
+            }
+            val thenClose = AikenSyntaxText.findMatchingDelimiter(text, thenOpen, '{', '}')
+            if (thenClose == null) {
+                lexer.advance()
+                continue
+            }
+            val afterThen = skipWhitespaceForward(text, thenClose + 1)
+            if (!startsWithKeyword(text, "else", afterThen)) {
+                lexer.advance()
+                continue
+            }
+            val elseStart = skipWhitespaceForward(text, afterThen + "else".length)
+            if (elseStart >= text.length || text[elseStart] != '{') {
+                lexer.advance()
+                continue
+            }
+            val elseClose = AikenSyntaxText.findMatchingDelimiter(text, elseStart, '{', '}')
+            if (elseClose == null) {
+                lexer.advance()
+                continue
+            }
+
+            val inThen = safeOffset in (thenOpen + 1)..thenClose
+            val inElse = safeOffset in (elseStart + 1)..elseClose
+            if (!inThen && !inElse) {
+                lexer.advance()
+                continue
+            }
+
+            val span = elseClose - lexer.tokenStart
+            if (span >= bestSpan) {
+                lexer.advance()
+                continue
+            }
+
+            val siblingStart = if (inThen) elseStart + 1 else thenOpen + 1
+            val siblingEnd = if (inThen) elseClose else thenClose
+            val siblingText = text.substring(siblingStart.coerceAtMost(siblingEnd), siblingEnd.coerceAtMost(text.length)).trim()
+            val siblingType =
+                siblingText
+                    .takeIf { it.isNotBlank() }
+                    ?.let {
+                        inferExpressionType(
+                            anchor = anchor,
+                            expressionText = it,
+                            beforeOffset = siblingEnd
+                        )
+                    }
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+
+            if (siblingType != null) {
+                val branchOpen = if (inThen) thenOpen else elseStart
+                val lineStart = findCurrentLineStart(text, safeOffset, branchOpen + 1)
+                bestContext =
+                    IfBranchExpectedTypeContext(
+                        expectedType = siblingType,
+                        currentValueText = text.substring(lineStart.coerceAtMost(safeOffset), safeOffset)
+                    )
+                bestSpan = span
+            }
+
+            lexer.advance()
+        }
+
+        return bestContext
+    }
+
+    private fun inferWhenPatternExpectedTypeContext(
+        anchor: PsiElement,
+        text: String,
+        offset: Int
+    ): WhenPatternExpectedTypeContext? {
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+            if (tokenType != AikenTokenTypes.KEYWORD || tokenText != "when") {
+                lexer.advance()
+                continue
+            }
+
+            val whenBody = findWhenPatternBodyContext(text, lexer.tokenEnd)
+            if (whenBody == null) {
+                lexer.advance()
+                continue
+            }
+            if (safeOffset !in (whenBody.bodyOpenBrace + 1)..whenBody.bodyCloseBrace) {
+                lexer.start(text, (whenBody.bodyCloseBrace + 1).coerceAtMost(text.length), text.length, 0)
+                continue
+            }
+
+            val scrutineeText =
+                text.substring(whenBody.scrutineeStart, whenBody.scrutineeEnd.coerceAtMost(text.length)).trim()
+            if (scrutineeText.isBlank()) {
+                lexer.advance()
+                continue
+            }
+            val scrutineeType =
+                inferExpressionType(anchor = anchor, expressionText = scrutineeText, beforeOffset = whenBody.scrutineeEnd)
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: resolveBareIdentifierType(anchor, scrutineeText, whenBody.scrutineeEnd)
+                    ?: resolveScopedParameterBindingType(text, scrutineeText, safeOffset, anchor)
+                    ?.let(::normalizeTypeText)
+                    ?.takeIf { it.isNotBlank() }
+            if (scrutineeType == null) {
+                lexer.advance()
+                continue
+            }
+
+            var cursor = whenBody.bodyOpenBrace + 1
+            while (cursor < whenBody.bodyCloseBrace) {
+                val rawPatternStart = cursor
+                val patternStart = skipWhitespaceForward(text, cursor)
+                val effectivePatternStart = patternStart.coerceAtMost(safeOffset)
+                val arrowOffset = findTopLevelArrowInRange(text, cursor, whenBody.bodyCloseBrace)
+                if (arrowOffset == null) {
+                    if (safeOffset in rawPatternStart..whenBody.bodyCloseBrace) {
+                        return WhenPatternExpectedTypeContext(
+                            expectedType = scrutineeType,
+                            currentPatternText = text.substring(effectivePatternStart, safeOffset)
+                        )
+                    }
+                    break
+                }
+
+                if (safeOffset in rawPatternStart..arrowOffset) {
+                    return WhenPatternExpectedTypeContext(
+                        expectedType = scrutineeType,
+                        currentPatternText = text.substring(effectivePatternStart, safeOffset)
+                    )
+                }
+
+                val expressionStart = skipWhitespaceForward(text, arrowOffset + 2)
+                if (expressionStart >= whenBody.bodyCloseBrace) break
+                val expressionEnd = consumeExpressionEndWithin(text, expressionStart, whenBody.bodyCloseBrace)
+                if (safeOffset in expressionStart..expressionEnd) {
+                    return null
+                }
+                cursor = if (expressionEnd > cursor) expressionEnd else (arrowOffset + 2)
+            }
+
+            lexer.start(text, (whenBody.bodyCloseBrace + 1).coerceAtMost(text.length), text.length, 0)
+        }
+
+        return null
+    }
+
+    private fun resolveBareIdentifierType(
+        anchor: PsiElement,
+        expressionText: String,
+        beforeOffset: Int
+    ): String? {
+        val identifier = expressionText.trim()
+        if (identifier.isBlank() || identifier.contains('.')) return null
+        if (AikenSyntaxText.leadingQualifiedIdentifierRange(identifier, 0)?.let { it.first == 0 && it.last == identifier.lastIndex } != true) {
+            return null
+        }
+        return resolveVisibleBindingType(anchor, identifier, beforeOffset, mutableSetOf())
+            ?: resolveConstType(anchor, identifier)
+            ?: resolveFunctionReturnType(anchor, identifier)
+            ?: resolveConstructibleResultType(anchor, identifier)
+    }
+
+    private fun resolveScopedParameterBindingType(
+        text: String,
+        expressionText: String,
+        referenceOffset: Int,
+        anchor: PsiElement
+    ): String? {
+        val bindingName = expressionText.trim()
+        if (bindingName.isBlank() || bindingName.contains('.')) return null
+
+        val bindingContext =
+            AikenParameterBindingScanner.collectBindings(text)
+                .asSequence()
+                .filter { binding ->
+                    binding.name == bindingName &&
+                        binding.declarationOffset <= referenceOffset &&
+                        (binding.scope.containsOffset(referenceOffset) || binding.declarationOffset == referenceOffset)
+                }
+                .maxByOrNull { it.declarationOffset }
+                ?: return null
+
+        return findParameterBindingType(text, bindingContext.declarationOffset, bindingContext.name, anchor)
     }
 
     private data class ParsedCallableBodyContext(
@@ -502,10 +1225,15 @@ object AikenTypeDirectedCompletionSupport {
         declarationKeyword: String
     ): ParsedCallableBodyContext? {
         var index = skipWhitespaceForward(text, declarationKeywordStart + declarationKeyword.length)
-        if (index >= text.length || !isIdentifierChar(text[index])) return null
+        if (index >= text.length) return null
 
-        while (index < text.length && isIdentifierChar(text[index])) index++
-        index = skipWhitespaceForward(text, index)
+        if (text[index] == '(') {
+            // Anonymous function: fn(...) -> T { ... }
+        } else {
+            if (!isIdentifierChar(text[index])) return null
+            while (index < text.length && isIdentifierChar(text[index])) index++
+            index = skipWhitespaceForward(text, index)
+        }
 
         if (index < text.length && text[index] == '<') {
             index = skipTopLevelAngles(text, index) ?: return null
@@ -548,6 +1276,18 @@ object AikenTypeDirectedCompletionSupport {
         val linePrefix = text.substring(lineStart.coerceIn(bodyStartInclusive, offset), offset.coerceAtMost(text.length))
         val trimmed = linePrefix.trimStart()
         if (trimmed.isEmpty()) return true
+        val trimmedEnd = trimmed.trimEnd()
+        if (trimmedEnd.endsWith("==") ||
+            trimmedEnd.endsWith("!=") ||
+            trimmedEnd.endsWith("<=") ||
+            trimmedEnd.endsWith(">=") ||
+            trimmedEnd.endsWith("->")
+        ) {
+            return false
+        }
+        if (trimmedEnd.lastOrNull() in setOf('(', '[', '{', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '.')) {
+            return false
+        }
 
         val forbiddenStarts =
             listOf(
@@ -583,6 +1323,17 @@ object AikenTypeDirectedCompletionSupport {
             index--
         }
         return floor
+    }
+
+    private fun skipInlineWhitespaceForward(
+        text: String,
+        start: Int
+    ): Int {
+        var index = start.coerceIn(0, text.length)
+        while (index < text.length && (text[index] == ' ' || text[index] == '\t')) {
+            index++
+        }
+        return index
     }
 
     private fun skipTopLevelAngles(text: String, start: Int): Int? {
@@ -1185,6 +1936,79 @@ object AikenTypeDirectedCompletionSupport {
                 '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
                 '<' -> angleDepth++
                 '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+            }
+            index++
+        }
+
+        return null
+    }
+
+    private fun startsWithKeyword(
+        text: String,
+        keyword: String,
+        offset: Int
+    ): Boolean {
+        if (!text.startsWith(keyword, offset)) return false
+        val before = offset - 1
+        val after = offset + keyword.length
+        val beforeOk = before < 0 || !isIdentifierChar(text[before])
+        val afterOk = after >= text.length || !isIdentifierChar(text[after])
+        return beforeOk && afterOk
+    }
+
+    private fun findTopLevelChar(
+        text: String,
+        target: Char,
+        start: Int
+    ): Int? {
+        var parenDepth = 0
+        var bracketDepth = 0
+        var braceDepth = 0
+        var inString = false
+        var inLineComment = false
+        var index = start.coerceIn(0, text.length)
+
+        while (index < text.length) {
+            val ch = text[index]
+
+            if (inLineComment) {
+                if (ch == '\n' || ch == '\r') inLineComment = false
+                index++
+                continue
+            }
+
+            if (inString) {
+                if (ch == '\\' && index + 1 < text.length) {
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inString = false
+                index++
+                continue
+            }
+
+            if (ch == '/' && index + 1 < text.length && text[index + 1] == '/') {
+                inLineComment = true
+                index += 2
+                continue
+            }
+
+            if (ch == '"') {
+                inString = true
+                index++
+                continue
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ch == target) return index
+
+            when (ch) {
+                '(' -> parenDepth++
+                ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+                '[' -> bracketDepth++
+                ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+                '{' -> braceDepth++
+                '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                '\n', '\r' -> if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) return null
             }
             index++
         }

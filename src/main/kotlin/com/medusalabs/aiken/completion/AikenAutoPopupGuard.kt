@@ -85,6 +85,40 @@ internal object AikenAutoPopupGuard {
         return true
     }
 
+    fun suppressBlankOrdinaryExpressionAutoPopup(
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        val offset = editor.caretModel.offset
+        val prefix = AikenSyntaxText.identifierPrefix(file.text, offset)
+        if (prefix.isNotBlank()) return false
+
+        val resolution = AikenCompletionScenarioResolver.resolve(file, offset)
+        if (resolution.scenario != AikenCompletionScenario.OrdinaryExpression) return false
+
+        val anchor = resolution.anchor ?: fallbackAnchor(file, offset) ?: return false
+        if (AikenTypeDirectedCompletionSupport.hasBindingInitializerExpectedTypeContext(anchor, file.text, offset)) {
+            return false
+        }
+
+        return true
+    }
+
+    fun suppressBlankUnconstrainedArgumentAutoPopup(
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        val offset = editor.caretModel.offset
+        val prefix = AikenSyntaxText.identifierPrefix(file.text, offset)
+        if (prefix.isNotBlank()) return false
+
+        val resolution = AikenCompletionScenarioResolver.resolve(file, offset)
+        if (resolution.scenario != AikenCompletionScenario.FunctionArgument) return false
+
+        val anchor = resolution.anchor ?: fallbackAnchor(file, offset) ?: return false
+        return AikenArgumentCompletionSupport.hasBlankArgumentWithUnconstrainedExpectedType(anchor, offset)
+    }
+
     fun consumeSuppressedExactPrefix(
         editor: Editor,
         prefix: String

@@ -4,10 +4,14 @@ import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 
 object AikenCompletionContexts {
+    private val declarationNamePattern =
+        Regex("""^(?:pub\s+)?(?:opaque\s+)?(?:const|fn|type|validator|test|bench)\s+[A-Za-z_][A-Za-z0-9_]*$""")
+
     // Keep this as a low-level fallback heuristic only. Scenario policy should decide first.
     fun isLikelyValueExpressionContext(text: String, offset: Int): Boolean {
         if (text.isEmpty()) return false
         if (isCallableParameterDeclarationContext(text, offset)) return false
+        if (AikenBindingInitializerScanner.isInsideBindingPatternDeclaration(text, offset)) return false
         if (isInsideGenericTypeArgumentContext(text, offset)) return false
         if (isCallableReturnTypeContext(text, offset)) return false
         var index = offset.coerceIn(0, text.length) - 1
@@ -24,6 +28,7 @@ object AikenCompletionContexts {
     fun isLikelyTypeReferenceContext(text: String, offset: Int): Boolean {
         if (text.isEmpty()) return false
         if (isCallableParameterDeclarationContext(text, offset)) return true
+        if (AikenBindingInitializerScanner.isInsideBindingPatternDeclaration(text, offset)) return true
         if (isInsideGenericTypeArgumentContext(text, offset)) return true
         if (isCallableReturnTypeContext(text, offset)) return true
         var index = offset.coerceIn(0, text.length) - 1
@@ -32,7 +37,6 @@ object AikenCompletionContexts {
         if (index < 0) return false
 
         if (text[index] == ':') return true
-        if (index > 0 && text[index] == '>' && text[index - 1] == '-') return true
         return isKeywordIsAt(text, index)
     }
 
@@ -50,50 +54,33 @@ object AikenCompletionContexts {
     fun isCallableParameterDeclarationContext(text: String, offset: Int): Boolean {
         if (text.isEmpty()) return false
         val safeOffset = offset.coerceIn(0, text.length)
-        val lexer = AikenLexing.createLexer()
-        lexer.start(text)
-
-        var braceDepth = 0
-
-        while (lexer.tokenType != null) {
-            val tokenType = lexer.tokenType
-            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
-
-            if (braceDepth == 0 &&
-                tokenType == AikenTokenTypes.KEYWORD &&
-                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
-            ) {
-                val header =
-                    parseCallableHeaderRegions(
-                        text = text,
-                        declarationKeywordStart = lexer.tokenStart,
-                        declarationKeyword = tokenText
-                    )
-                if (header != null) {
-                    if (safeOffset in (header.paramsOpen + 1)..header.paramsClose) {
-                        return currentParameterSegmentHasNoTopLevelColon(
-                            text = text,
-                            paramsOpen = header.paramsOpen,
-                            paramsClose = header.paramsClose,
-                            offset = safeOffset
-                        )
-                    }
-                    lexer.start(text, header.resumeOffset.coerceAtMost(text.length), text.length, 0)
-                    braceDepth = 0
-                    continue
-                }
+        for (region in AikenParameterBindingScanner.collectParameterRegions(text)) {
+            if (safeOffset in (region.paramsOpen + 1)..region.paramsClose) {
+                return currentParameterSegmentHasNoTopLevelColon(
+                    text = text,
+                    paramsOpen = region.paramsOpen,
+                    paramsClose = region.paramsClose,
+                    offset = safeOffset
+                )
             }
-
-            when (tokenType) {
-                AikenTokenTypes.LBRACE -> braceDepth += 1
-                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
-            }
-
-            lexer.advance()
         }
-
         return false
     }
+
+    fun isDeclarationNameContext(text: String, offset: Int): Boolean {
+        if (text.isEmpty()) return false
+        val safeOffset = offset.coerceIn(0, text.length)
+        val lineStart = text.lastIndexOf('\n', (safeOffset - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
+        val beforeCaret = text.substring(lineStart, safeOffset).trimStart()
+        if (!declarationNamePattern.matches(beforeCaret)) return false
+
+        var index = safeOffset
+        while (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) index++
+        while (index < text.length && text[index].isWhitespace() && text[index] != '\n' && text[index] != '\r') index++
+
+        return index >= text.length || text[index] in charArrayOf('\n', '\r', '(', '{', '<', ':', '=')
+    }
+
 
     fun isCallableReturnTypeContext(text: String, offset: Int): Boolean {
         if (text.isEmpty()) return false
@@ -107,9 +94,8 @@ object AikenCompletionContexts {
             val tokenType = lexer.tokenType
             val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
 
-            if (braceDepth == 0 &&
-                tokenType == AikenTokenTypes.KEYWORD &&
-                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
+            if (tokenType == AikenTokenTypes.KEYWORD &&
+                (tokenText == "fn" || (braceDepth == 0 && (tokenText == "test" || tokenText == "bench")))
             ) {
                 val callable =
                     parseCallableReturnTypeRegion(
@@ -123,9 +109,11 @@ object AikenCompletionContexts {
                     if (safeOffset in returnTypeStart..returnTypeEndExclusive) {
                         return true
                     }
-                    lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
-                    braceDepth = 0
-                    continue
+                    if (safeOffset !in lexer.tokenStart..callable.resumeOffset) {
+                        lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
+                        braceDepth = 0
+                        continue
+                    }
                 }
             }
 
@@ -155,9 +143,8 @@ object AikenCompletionContexts {
             val tokenType = lexer.tokenType
             val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
 
-            if (braceDepth == 0 &&
-                tokenType == AikenTokenTypes.KEYWORD &&
-                (tokenText == "fn" || tokenText == "test" || tokenText == "bench")
+            if (tokenType == AikenTokenTypes.KEYWORD &&
+                (tokenText == "fn" || (braceDepth == 0 && (tokenText == "test" || tokenText == "bench")))
             ) {
                 val callable =
                     parseCallableReturnTypeRegion(
@@ -182,9 +169,11 @@ object AikenCompletionContexts {
                             }
                         }
                     }
-                    lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
-                    braceDepth = 0
-                    continue
+                    if (safeOffset !in lexer.tokenStart..callable.resumeOffset) {
+                        lexer.start(text, callable.resumeOffset.coerceAtMost(text.length), text.length, 0)
+                        braceDepth = 0
+                        continue
+                    }
                 }
             }
 
@@ -221,10 +210,15 @@ object AikenCompletionContexts {
         declarationKeyword: String
     ): ParsedCallableHeaderRegions? {
         var index = skipWhitespaceForward(text, declarationKeywordStart + declarationKeyword.length)
-        if (index >= text.length || !AikenSyntaxText.isIdentifierChar(text[index])) return null
+        if (index >= text.length) return null
 
-        while (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) index++
-        index = skipWhitespaceForward(text, index)
+        if (declarationKeyword == "fn" && text[index] == '(') {
+            // Anonymous function: fn(...) -> T { ... }
+        } else {
+            if (!AikenSyntaxText.isIdentifierChar(text[index])) return null
+            while (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) index++
+            index = skipWhitespaceForward(text, index)
+        }
 
         if (index < text.length && text[index] == '<') {
             index = skipTopLevelAngles(text, index) ?: return null

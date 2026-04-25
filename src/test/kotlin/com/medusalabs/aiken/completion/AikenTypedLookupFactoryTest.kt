@@ -34,6 +34,32 @@ class AikenTypedLookupFactoryTest {
     }
 
     @Test
+    fun suppressesPipeFunctionArgumentAutoPopupForUnconstrainedGenericParameter() {
+        val template =
+            AikenTypedLookupFactory.pipeFunctionCallTemplate(
+                lookupText = "reduce",
+                signature = "fn(self: List<a>, zero: b, with: fn(b, a) -> b) -> b"
+            )
+
+        assertEquals("reduce()", template.text)
+        assertEquals("reduce(".length, template.caretOffset)
+        assertFalse(template.shouldTriggerAutoPopup)
+    }
+
+    @Test
+    fun suppressesFunctionArgumentAutoPopupForUnconstrainedGenericParameter() {
+        val template =
+            AikenTypedLookupFactory.functionCallTemplate(
+                name = "identity",
+                signature = "fn(value: a) -> a"
+            )
+
+        assertEquals("identity()", template.text)
+        assertEquals("identity(".length, template.caretOffset)
+        assertFalse(template.shouldTriggerAutoPopup)
+    }
+
+    @Test
     fun keepsBarePipeLookupWhenNoRemainingParameters() {
         val template =
             AikenTypedLookupFactory.pipeFunctionCallTemplate(

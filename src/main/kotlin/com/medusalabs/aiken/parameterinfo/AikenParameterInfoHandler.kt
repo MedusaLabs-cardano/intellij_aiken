@@ -10,6 +10,8 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.TokenType
 import com.intellij.util.indexing.FileBasedIndex
+import com.medusalabs.aiken.completion.AikenSyntaxText
+import com.medusalabs.aiken.completion.AikenValidatorNamespaceSupport
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
@@ -21,8 +23,6 @@ import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 
 private const val AIKEN_PIPE_IMPLICIT_ARGUMENT_MARKER = "\u0000PIPE"
-private val AIKEN_DIRECT_SYMBOL_PATTERN =
-    Regex("""([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?""")
 private val AIKEN_CALLABLE_BINDING_TARGET_PATTERN =
     Regex("""(?:=|->)\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?""")
 private val AIKEN_CALLABLE_BRANCH_TARGET_PATTERN =
@@ -330,20 +330,10 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
         val name = text.subSequence(start, end).toString()
 
         var qualifier: String? = null
-        while (i >= 0 && text[i].isWhitespace()) i--
-        if (i >= 0 && text[i] == '.') {
-            i--
-            while (i >= 0 && text[i].isWhitespace()) i--
-            val qualifierEnd = i + 1
-            while (i >= 0 && isIdentifierChar(text[i])) i--
-            val qualifierStart = i + 1
-            if (qualifierStart < qualifierEnd) {
-                qualifier = text.subSequence(qualifierStart, qualifierEnd).toString()
-                return Callee(name, qualifier, start, qualifierStart, 0, null, null, emptyList())
-            }
-        }
+        qualifier = AikenSyntaxText.qualifiedChainBeforeOffset(text, start)
+        val callableStartOffset = qualifier?.let { start - it.length - 1 } ?: start
 
-        return Callee(name, qualifier, start, start, 0, null, null, emptyList())
+        return Callee(name, qualifier, start, callableStartOffset, 0, null, null, emptyList())
     }
 
     private fun detectPipeImplicitArgumentCount(text: CharSequence, callableStartOffset: Int): Int {
@@ -513,6 +503,22 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
                 emptyList()
             )
         if (importedIndexed.isNotEmpty()) return importedIndexed
+
+        val importedValidatorHandlers =
+            target.qualifier
+                ?.let { qualifierChain ->
+                    val useModel = AikenUseStatementParser.parseModel(fileText)
+                    AikenValidatorNamespaceSupport.importedValidatorHandlerSignatures(
+                        anchorFile = anchorFile,
+                        useModel = useModel,
+                        qualifierChain = qualifierChain,
+                        handlerName = target.symbolName
+                    )
+                }
+                .orEmpty()
+        if (importedValidatorHandlers.isNotEmpty()) {
+            return adaptSignaturesForCallShape(importedValidatorHandlers, target.returnedCallableDepth, emptyList())
+        }
 
         return emptySet()
     }
@@ -868,14 +874,15 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
     }
 
     private fun directSymbolTarget(expression: String): CallableTarget? {
-        val match = AIKEN_DIRECT_SYMBOL_PATTERN.matchEntire(expression.trim()) ?: return null
-        val first = match.groupValues[1]
-        val second = match.groupValues[2].ifBlank { null }
-        return if (second != null) {
-            CallableTarget(second, first)
-        } else {
-            CallableTarget(first, null)
+        val trimmed = expression.trim()
+        if (trimmed.isEmpty()) return null
+        val lastSegment = trimmed.substringAfterLast('.').trim()
+        if (lastSegment.isEmpty() || !lastSegment.all(::isIdentifierChar)) return null
+        val qualifier = trimmed.substringBeforeLast('.', "").trim().takeIf { it.isNotEmpty() }
+        if (qualifier != null && qualifier.split('.').any { segment -> segment.isBlank() || !segment.all(::isIdentifierChar) }) {
+            return null
         }
+        return CallableTarget(lastSegment, qualifier)
     }
 
     private fun splitTopLevelArguments(text: String, openParenOffset: Int): List<String>? {

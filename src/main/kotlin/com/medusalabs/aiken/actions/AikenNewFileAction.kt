@@ -253,14 +253,14 @@ private object AikenValidatorTemplateProvider {
             }
 
             val projectDir = tempRoot.resolve("template")
-            val candidate = projectDir.resolve("validators").resolve("placeholder.ak")
+            val candidate = projectDir.resolve("validators").resolve("contract.ak")
             if (Files.exists(candidate)) {
                 return Files.readString(candidate, StandardCharsets.UTF_8)
             }
 
             Files.walk(tempRoot).use { stream ->
                 val discovered = stream
-                    .filter { Files.isRegularFile(it) && it.fileName.toString() == "placeholder.ak" }
+                    .filter { Files.isRegularFile(it) && it.fileName.toString() == "contract.ak" }
                     .findFirst()
                     .orElse(null)
                 if (discovered != null) {

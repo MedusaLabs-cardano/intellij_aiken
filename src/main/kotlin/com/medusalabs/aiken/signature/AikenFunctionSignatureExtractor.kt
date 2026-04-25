@@ -41,6 +41,40 @@ object AikenFunctionSignatureExtractor {
         return extractIndexedEntries(text).map { entry -> SignatureEntry(entry.name, entry.signature, entry.exported) }
     }
 
+    fun extractValidatorNames(text: CharSequence): List<String> {
+        val lexer = AikenLexing.createLexer()
+        lexer.start(text)
+
+        val results = LinkedHashSet<String>()
+        var braceDepth = 0
+
+        while (lexer.tokenType != null) {
+            val tokenType = lexer.tokenType
+            val tokenText = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
+
+            when (tokenType) {
+                AikenTokenTypes.LBRACE -> braceDepth += 1
+                AikenTokenTypes.RBRACE -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            }
+
+            if (braceDepth == 0 && tokenType == AikenTokenTypes.KEYWORD && tokenText == "validator") {
+                var index = skipWhitespace(text, lexer.tokenEnd)
+                if (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) {
+                    val start = index
+                    while (index < text.length && AikenSyntaxText.isIdentifierChar(text[index])) index++
+                    val name = text.subSequence(start, index).toString().trim()
+                    if (name.isNotEmpty()) {
+                        results += name
+                    }
+                }
+            }
+
+            lexer.advance()
+        }
+
+        return results.toList()
+    }
+
     fun extractValidatorHandlerEntries(text: CharSequence): List<ValidatorHandlerEntry> {
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
