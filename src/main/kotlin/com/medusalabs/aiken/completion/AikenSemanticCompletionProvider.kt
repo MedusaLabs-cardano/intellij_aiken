@@ -15,7 +15,6 @@ import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
 
 class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>() {
     private val allKeywords = com.medusalabs.aiken.highlight.lexer.AikenLexing.keywords
-    private val expressionKeywords = setOf("if", "when", "fn", "todo", "fail")
     private val builtinValueSuggestions =
         listOf(
             "True" to "Bool",
@@ -424,7 +423,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
                 stopAfter = false,
                 excludedLookups = callableReturnSuggestions
             )
-            addKeywordFallbackSuggestions(parameters, result, AikenKeywordVisibility.ALL, prefix)
+            addKeywordFallbackSuggestions(parameters, result, prefix)
             result.stopHere()
             return true
         }
@@ -436,7 +435,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             prefix = prefix,
             excludedLookups = callableReturnSuggestions
         )
-        addKeywordFallbackSuggestions(parameters, result, AikenKeywordVisibility.ALL, prefix)
+        addKeywordFallbackSuggestions(parameters, result, prefix)
         result.stopHere()
         return true
     }
@@ -463,7 +462,7 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
             excludedLookups = suggestions
         )
         addBuiltinValueSuggestions(parameters, result, prefix, excludedLookups = suggestions)
-        addKeywordFallbackSuggestions(parameters, result, AikenKeywordVisibility.ALL, prefix)
+        addKeywordFallbackSuggestions(parameters, result, prefix)
         result.stopHere()
         return true
     }
@@ -503,18 +502,10 @@ class AikenSemanticCompletionProvider : CompletionProvider<CompletionParameters>
     private fun addKeywordFallbackSuggestions(
         parameters: CompletionParameters,
         result: CompletionResultSet,
-        visibility: AikenKeywordVisibility,
         prefix: String
     ) {
-        if (visibility == AikenKeywordVisibility.NONE) return
-        val keywords =
-            when (visibility) {
-                AikenKeywordVisibility.ALL -> allKeywords
-                AikenKeywordVisibility.EXPRESSION_ONLY -> allKeywords.filter { it in expressionKeywords }
-                AikenKeywordVisibility.NONE -> emptyList()
-            }
         val keywordResult = AikenCompletionSorting.withTypedSorter(parameters, result.withPrefixMatcher(""))
-        for (keyword in keywords) {
+        for (keyword in allKeywords) {
             if (prefix.isNotBlank() && !AikenCompletionPrefixMatching.matches(keyword, PlainPrefixMatcher(prefix), prefix)) continue
             keywordResult.addElement(
                 AikenCompletionSorting.annotateTyped(

@@ -334,8 +334,7 @@ object AikenReferenceVariants {
                 if (!seen.add(validatorName)) continue
                 variants +=
                     createValidatorNamespaceRootLookup(
-                        validatorName = validatorName,
-                        rankingCategory = AikenOrdinaryCompletionCategory.IMPORTED_SYMBOL
+                        validatorName = validatorName
                     )
             }
         }
@@ -1016,16 +1015,13 @@ object AikenReferenceVariants {
         )
     }
 
-    private fun createValidatorNamespaceRootLookup(
-        validatorName: String,
-        rankingCategory: AikenOrdinaryCompletionCategory
-    ): LookupElement =
+    private fun createValidatorNamespaceRootLookup(validatorName: String): LookupElement =
         AikenCompletionSorting.annotate(
             com.intellij.codeInsight.lookup.LookupElementBuilder
                 .create(validatorName)
                 .withIcon(com.intellij.icons.AllIcons.Nodes.Package)
                 .withTypeText("validator", true),
-            rankingCategory,
+            AikenOrdinaryCompletionCategory.IMPORTED_SYMBOL,
             CompletionSymbolKind.IDENTIFIER
         )
 

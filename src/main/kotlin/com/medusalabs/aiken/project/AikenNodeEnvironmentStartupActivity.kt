@@ -8,6 +8,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ide.util.PropertiesComponent
+import com.medusalabs.aiken.AikenBundle
 import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
 import com.medusalabs.aiken.tooling.AikenNodeToolchain
@@ -44,12 +45,12 @@ class AikenNodeEnvironmentStartupActivity : ProjectActivity {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP_ID)
             .createNotification(
-                "Node.js / npm is required for local Aiken toolchains",
-                "${availability.message} The project wizard and local runners can use the IDE Node.js configuration if you set it up here.",
+                AikenBundle.message("aiken.notification.node.missing.title"),
+                AikenBundle.message("aiken.notification.node.missing.content", availability.message),
                 NotificationType.WARNING
             )
             .addAction(
-                NotificationAction.createSimple("Configure Node.js…") {
+                NotificationAction.createSimple(AikenBundle.message("aiken.notification.node.missing.action")) {
                     if (AikenNodeToolchain.openNodeInterpreterDialog(project)) {
                         PropertiesComponent.getInstance(project).unsetValue(NPM_WARNING_SHOWN_KEY)
                     }
@@ -68,7 +69,7 @@ class AikenNodeEnvironmentStartupActivity : ProjectActivity {
     }
 
     private companion object {
-        const val NOTIFICATION_GROUP_ID = "Aiken Toolchain"
+        const val NOTIFICATION_GROUP_ID = "aiken.toolchain.notifications"
         const val NPM_WARNING_SHOWN_KEY = "aiken.toolchain.npm.warning.shown"
     }
 }

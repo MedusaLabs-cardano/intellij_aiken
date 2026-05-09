@@ -58,7 +58,6 @@ import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
-import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.ui.ComponentContainer
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.JDOMExternalizerUtil
@@ -111,9 +110,6 @@ import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
-import com.intellij.ui.render.RenderingUtil
-import com.intellij.ui.treeStructure.Tree
-import com.intellij.ui.tree.ui.DefaultTreeUI
 import com.intellij.ui.dualView.TreeTableView
 import com.intellij.ui.treeStructure.treetable.ListTreeTableModelOnColumns
 import com.intellij.ui.treeStructure.treetable.TreeColumnInfo
@@ -132,6 +128,7 @@ import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
 import javax.swing.Box
 import javax.swing.BoxLayout
+import javax.swing.DefaultListSelectionModel
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JTable
@@ -147,45 +144,35 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.MouseMotionAdapter
 import javax.swing.event.DocumentListener
-import javax.swing.ListSelectionModel
 import javax.swing.table.TableCellEditor
 import javax.swing.table.TableCellRenderer
+import javax.swing.tree.DefaultTreeSelectionModel
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeCellRenderer
-import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreeCellRenderer
 import javax.swing.tree.TreePath
-import javax.swing.tree.TreeSelectionModel
 import javax.swing.tree.TreeNode
 import java.awt.FlowLayout
 import java.awt.Font
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
-import java.util.function.Supplier
 
 private const val APPLY_EDITOR_LEFT_INSET = 10
 private const val DIAGNOSTICS_ROOT_ID = "aiken-root"
 private const val DIAGNOSTIC_TITLE_MAX_LENGTH = 120
 
-private class TransparentTreeTableSelectionUI : DefaultTreeUI() {
-    override fun paint(graphics: Graphics, component: JComponent) {
-        val treeTableTree = component as? com.intellij.ui.treeStructure.treetable.TreeTableTree
-        if (treeTableTree == null) {
-            super.paint(graphics, component)
-            return
-        }
+private class NoTreeSelectionModel : DefaultTreeSelectionModel() {
+    override fun setSelectionPath(path: TreePath?) = Unit
+    override fun setSelectionPaths(paths: Array<out TreePath>?) = Unit
+    override fun addSelectionPath(path: TreePath?) = Unit
+    override fun addSelectionPaths(paths: Array<out TreePath>?) = Unit
+}
 
-        val table = treeTableTree.treeTable
-        @Suppress("UNCHECKED_CAST")
-        val oldSupplier =
-            table.getClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND) as? Supplier<Color>
-        table.putClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND, Supplier { UIUtil.TRANSPARENT_COLOR })
-        try {
-            super.paint(graphics, component)
-        } finally {
-            table.putClientProperty(RenderingUtil.CUSTOM_SELECTION_BACKGROUND, oldSupplier)
-        }
-    }
+private class NoListSelectionModel : DefaultListSelectionModel() {
+    override fun setSelectionInterval(index0: Int, index1: Int) = Unit
+    override fun addSelectionInterval(index0: Int, index1: Int) = Unit
+    override fun removeSelectionInterval(index0: Int, index1: Int) = Unit
+    override fun clearSelection() = Unit
 }
 
 private fun isDarkUiTheme(): Boolean {
@@ -980,7 +967,7 @@ class AikenRunConfiguration(
                     typeName = schema.typeName,
                     constructors = schema.constructors
                 )
-                is ApplySchema.Opaque -> ApplyOpaqueNode(name, schema.reason, ::normalizeCborHex, ::parseHexBytes)
+                is ApplySchema.Opaque -> ApplyOpaqueNode(name, ::normalizeCborHex, ::parseHexBytes)
             }
         }
 
@@ -991,7 +978,7 @@ class AikenRunConfiguration(
             constructors: List<ApplyConstructor>
         ): ApplyUiNode {
             if (constructors.isEmpty()) {
-                return ApplyOpaqueNode(name, "empty constructor set", ::normalizeCborHex, ::parseHexBytes)
+                return ApplyOpaqueNode(name, ::normalizeCborHex, ::parseHexBytes)
             }
 
             if (constructors.size == 1) {
@@ -1377,19 +1364,45 @@ class AikenRunConfiguration(
             )
             private var parameterTreeModel = buildTreeTableModel(DefaultMutableTreeNode("No parameters"))
             private val parameterTreeTable = object : TreeTableView(parameterTreeModel) {
+                override fun changeSelection(
+                    rowIndex: Int,
+                    columnIndex: Int,
+                    toggle: Boolean,
+                    extend: Boolean
+                ) {
+                    // TreeTable selection is only visual noise in the parameter editor. Editing and action
+                    // dispatch are handled directly from mouse/keyboard events, so keep the selection empty.
+                    clearSelection()
+                    tree.clearSelection()
+                }
+
+                override fun prepareRenderer(
+                    renderer: TableCellRenderer,
+                    row: Int,
+                    column: Int
+                ): Component {
+                    val value = getValueAt(row, column)
+                    val component = renderer.getTableCellRendererComponent(this, value, false, false, row, column)
+                    if (component is JComponent) {
+                        component.isOpaque = false
+                    }
+                    return component
+                }
+
                 override fun createTableRenderer(model: TreeTableModel): TreeTableCellRenderer {
                     return object : TreeTableCellRenderer(this, tree) {
                         override fun getTableCellRendererComponent(
-                            table: javax.swing.JTable,
+                            table: JTable,
                             value: Any?,
                             isSelected: Boolean,
                             hasFocus: Boolean,
                             row: Int,
                             column: Int
                         ): Component {
-                            val rowSelected = table.isRowSelected(row)
+                            // Keep JTable selection for keyboard/mouse behavior, but do not let the tree renderer
+                            // paint a selected row background. Plugin verifier rejects the old internal UI hook.
                             val component =
-                                super.getTableCellRendererComponent(table, value, rowSelected, hasFocus, row, column)
+                                super.getTableCellRendererComponent(table, value, false, hasFocus, row, column)
                             (component as? JComponent)?.isOpaque = false
                             return component
                         }
@@ -1398,8 +1411,12 @@ class AikenRunConfiguration(
             }.apply {
                 setRootVisible(true)
                 tree.showsRootHandles = true
-                tree.selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
-                setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+                tree.selectionModel = NoTreeSelectionModel()
+                selectionModel = NoListSelectionModel()
+                columnModel.selectionModel = NoListSelectionModel()
+                setRowSelectionAllowed(false)
+                setColumnSelectionAllowed(false)
+                cellSelectionEnabled = false
                 rowHeight = JBUI.scale(32)
                 tree.rowHeight = rowHeight
                 intercellSpacing = JBUI.size(0, 2)
@@ -1407,6 +1424,7 @@ class AikenRunConfiguration(
                 showHorizontalLines = false
                 isOpaque = false
                 background = UIUtil.TRANSPARENT_COLOR
+                selectionBackground = UIUtil.TRANSPARENT_COLOR
                 border = JBUI.Borders.empty(6)
                 putClientProperty("terminateEditOnFocusLost", true)
             }
@@ -1449,16 +1467,19 @@ class AikenRunConfiguration(
             }
 
             private fun configureTreeTableView() {
-                currentTree().setUI(TransparentTreeTableSelectionUI())
                 currentTree().showsRootHandles = true
-                currentTree().selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+                currentTree().selectionModel = NoTreeSelectionModel()
                 currentTree().isOpaque = false
                 currentTree().background = UIUtil.TRANSPARENT_COLOR
                 if (baseTreeCellRenderer == null) {
                     baseTreeCellRenderer = currentTree().originalCellRenderer
                 }
                 currentTree().cellRenderer = createTreeColumnRenderer()
-                parameterTreeTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+                parameterTreeTable.setRowSelectionAllowed(false)
+                parameterTreeTable.setColumnSelectionAllowed(false)
+                parameterTreeTable.cellSelectionEnabled = false
+                parameterTreeTable.selectionModel = NoListSelectionModel()
+                parameterTreeTable.columnModel.selectionModel = NoListSelectionModel()
                 parameterTreeTable.autoResizeMode = JTable.AUTO_RESIZE_OFF
                 parameterTreeTable.rowHeight = JBUI.scale(32)
                 currentTree().rowHeight = parameterTreeTable.rowHeight
@@ -1467,33 +1488,30 @@ class AikenRunConfiguration(
                 parameterTreeTable.showHorizontalLines = false
                 parameterTreeTable.isOpaque = false
                 parameterTreeTable.background = UIUtil.TRANSPARENT_COLOR
+                parameterTreeTable.selectionBackground = UIUtil.TRANSPARENT_COLOR
                 parameterTreeTable.border = JBUI.Borders.empty(6)
                 parameterTreeTable.putClientProperty("terminateEditOnFocusLost", true)
             }
 
             private fun currentTree() = parameterTreeTable.tree
 
-            private fun normalizeTreeRendererComponent(component: Component, selected: Boolean) {
+            private fun normalizeTreeRendererComponent(component: Component) {
                 if (component is JComponent) {
                     component.isOpaque = false
                     component.border = JBUI.Borders.empty()
-                    component.foreground = if (selected) {
-                        parameterTreeTable.selectionForeground
-                    } else {
-                        parameterTreeTable.foreground
-                    }
+                    component.foreground = parameterTreeTable.foreground
                     component.components.forEach { child ->
-                        normalizeTreeRendererComponent(child, selected)
+                        normalizeTreeRendererComponent(child)
                     }
                 }
             }
 
             private fun createTreeColumnRenderer(): TreeCellRenderer {
                 val delegate = baseTreeCellRenderer ?: DefaultTreeCellRenderer()
-                return TreeCellRenderer { tree, value, selected, expanded, leaf, row, hasFocus ->
+                return TreeCellRenderer { tree, value, _, expanded, leaf, row, _ ->
                     val delegateComponent =
                         delegate.getTreeCellRendererComponent(tree, value, false, expanded, leaf, row, false)
-                    normalizeTreeRendererComponent(delegateComponent, selected)
+                    normalizeTreeRendererComponent(delegateComponent)
                     object : JPanel(BorderLayout()) {
                         override fun getPreferredSize(): Dimension {
                             val preferred = super.getPreferredSize()
@@ -1626,14 +1644,14 @@ class AikenRunConfiguration(
             }
 
             private fun createTextRenderer(text: String, node: ApplyUiNode?): TableCellRenderer =
-                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                TableCellRenderer { table, _, _, _, _, _ ->
                     val isPlaceholder = isPlaceholderValue(text, node)
                     val label = JBLabel(
                         when {
                             text.isNotBlank() -> text
-                            node is ApplyIntegerNode -> "e.g. 42"
-                            node is ApplyBytesNode -> "hex bytes (without 0x)"
-                            node is ApplyOpaqueNode -> "raw CBOR hex"
+                            node is ApplyIntegerNode -> "Example: 42"
+                            node is ApplyBytesNode -> "Hex bytes (without 0x)"
+                            node is ApplyOpaqueNode -> "Raw CBOR hex"
                             else -> ""
                         }
                     ).apply {
@@ -1644,7 +1662,6 @@ class AikenRunConfiguration(
                             isPlaceholder -> {
                                 JBColor.namedColor("CheckBox.disabledText", UIUtil.getLabelDisabledForeground())
                             }
-                            isSelected -> table.selectionForeground
                             else -> table.foreground
                         }
                         font = if (isPlaceholder) table.font.deriveFont(Font.ITALIC) else table.font
@@ -1652,13 +1669,13 @@ class AikenRunConfiguration(
                     JPanel(BorderLayout()).apply {
                         isOpaque = true
                         border = JBUI.Borders.empty()
-                        background = if (isSelected) table.selectionBackground else table.background
+                        background = table.background
                         add(label, BorderLayout.CENTER)
                     }
                 }
 
             private fun createBooleanRenderer(label: String, selected: Boolean): TableCellRenderer =
-                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                TableCellRenderer { table, _, _, _, _, _ ->
                     JBCheckBox(label, selected).apply {
                         isOpaque = true
                         isEnabled = true
@@ -1669,17 +1686,17 @@ class AikenRunConfiguration(
                         isContentAreaFilled = false
                         isRolloverEnabled = false
                         border = JBUI.Borders.empty(0, 4)
-                        background = if (isSelected) table.selectionBackground else table.background
-                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                        background = table.background
+                        foreground = table.foreground
                     }
                 }
 
             private fun createComboRenderer(options: List<String>, selectedIndex: Int): TableCellRenderer =
-                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                TableCellRenderer { table, _, _, _, _, _ ->
                     val selectedText = options.getOrElse(selectedIndex.coerceIn(0, (options.size - 1).coerceAtLeast(0))) { "" }
                     JPanel(BorderLayout()).apply {
                         isOpaque = true
-                        background = if (isSelected) table.selectionBackground else table.background
+                        background = table.background
                         border = JBUI.Borders.empty(0, 2)
                         add(
                             JPanel(BorderLayout(JBUI.scale(6), 0)).apply {
@@ -1688,14 +1705,14 @@ class AikenRunConfiguration(
                                 add(
                                     JBLabel(selectedText).apply {
                                         isOpaque = false
-                                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                                        foreground = table.foreground
                                     },
                                     BorderLayout.CENTER
                                 )
                                 add(
                                     JBLabel(AllIcons.General.ArrowDown).apply {
                                         isOpaque = false
-                                        foreground = if (isSelected) table.selectionForeground else table.foreground
+                                        foreground = table.foreground
                                         disabledIcon = AllIcons.General.ArrowDown
                                     },
                                     BorderLayout.EAST
@@ -1707,7 +1724,7 @@ class AikenRunConfiguration(
                 }
 
             private fun createActionsRenderer(node: ApplyUiNode?): TableCellRenderer =
-                TableCellRenderer { table, _, isSelected, _, _, _ ->
+                TableCellRenderer { table, _, _, _, _, _ ->
                     val actionsStrip = JPanel().apply {
                         layout = FlowLayout(FlowLayout.CENTER, JBUI.scale(4), 0)
                         isOpaque = false
@@ -1726,7 +1743,7 @@ class AikenRunConfiguration(
                     }
                     JPanel(BorderLayout()).apply {
                         isOpaque = true
-                        background = if (isSelected) table.selectionBackground else table.background
+                        background = table.background
                         border = JBUI.Borders.empty(0, 2)
                         add(
                             object : JPanel(java.awt.GridBagLayout()) {
@@ -1798,8 +1815,6 @@ class AikenRunConfiguration(
                     object : MouseAdapter() {
                         override fun mousePressed(e: MouseEvent) {
                             val resolved = resolveTableActionAt(e.point) ?: return
-                            parameterTreeTable.setRowSelectionInterval(resolved.row, resolved.row)
-                            currentTree().setSelectionRow(resolved.row)
                             performTreeAction(resolved.node, resolved.action)
                             e.consume()
                         }
@@ -1905,7 +1920,7 @@ class AikenRunConfiguration(
                     }
 
                     override fun getTableCellEditorComponent(
-                        table: javax.swing.JTable,
+                        table: JTable,
                         value: Any?,
                         isSelected: Boolean,
                         row: Int,
@@ -1970,14 +1985,14 @@ class AikenRunConfiguration(
                     }
 
                     override fun getTableCellEditorComponent(
-                        table: javax.swing.JTable,
+                        table: JTable,
                         value: Any?,
                         isSelected: Boolean,
                         row: Int,
                         column: Int
                     ): Component {
                         checkBox.isSelected = initialValue
-                        checkBox.foreground = if (isSelected) table.selectionForeground else table.foreground
+                        checkBox.foreground = table.foreground
                         updateLabel()
                         panel.removeAll()
                         panel.add(checkBox, BorderLayout.CENTER)
@@ -2007,7 +2022,7 @@ class AikenRunConfiguration(
                     }
 
                     override fun getTableCellEditorComponent(
-                        table: javax.swing.JTable,
+                        table: JTable,
                         value: Any?,
                         isSelected: Boolean,
                         row: Int,
@@ -2150,8 +2165,6 @@ class AikenRunConfiguration(
 
             fun snapshotSections(): List<ApplyParameterSection> = synchronized(sections) { sections.toList() }
 
-            fun peekFirstSection(): ApplyParameterSection? = synchronized(sections) { sections.firstOrNull() }
-
             fun removeFirstSection() {
                 val removed = synchronized(sections) {
                     if (sections.isEmpty()) false else {
@@ -2224,8 +2237,7 @@ class AikenRunConfiguration(
                 val selectionNode = preferredSelection?.let { findTreeNode(swingRoot, it) }
                     ?: (swingRoot.firstChild as? DefaultMutableTreeNode)
                     ?: swingRoot
-                currentTree().selectionPath = TreePath(selectionNode.path)
-                currentTree().scrollPathToVisible(currentTree().selectionPath)
+                currentTree().scrollPathToVisible(TreePath(selectionNode.path))
                 rootPanel.revalidate()
                 rootPanel.repaint()
 
@@ -2294,15 +2306,6 @@ class AikenRunConfiguration(
                 applyButton.isEnabled = visible && enabled
             }
         }
-
-        private fun simpleDocumentListener(onChange: () -> Unit): DocumentListener =
-            object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onChange()
-
-                override fun removeUpdate(e: DocumentEvent?) = onChange()
-
-                override fun changedUpdate(e: DocumentEvent?) = onChange()
-            }
 
         private interface ApplyValueEditor {
             val component: JComponent
@@ -3705,22 +3708,11 @@ class AikenRunConfiguration(
         }
 
         private fun applyEditorStripeOverlayColor(): Color {
-            val dark = isDarkUiTheme()
-            val fallback =
-                if (dark) {
-                    JBColor.namedColor("EditorPane.inactiveBackground", Color(0xF5, 0xF5, 0xF5))
-                } else {
-                    JBColor.namedColor("EditorPane.inactiveBackground", Color(0x2B, 0x2D, 0x30))
-                }
-            return if (dark) {
-                UIManager.getColor("Table.alternateRowColor")
-                    ?: JBColor.namedColor("Table.alternateRowColor", fallback)
-                    ?: JBColor.WHITE
-            } else {
-                UIManager.getColor("Table.alternateRowColor")
-                    ?: JBColor.namedColor("Table.alternateRowColor", fallback)
-                    ?: UIUtil.getLabelForeground()
-            }
+            return UIManager.getColor("Table.alternateRowColor")
+                ?: UIManager.getColor("EditorPane.inactiveBackground")
+                ?: UIManager.getColor("TextField.inactiveBackground")
+                ?: UIManager.getColor("Label.foreground")
+                ?: UIUtil.getLabelForeground()
         }
 
         private fun BigInteger.toIntExactOrNull(): Int? =
@@ -3806,9 +3798,30 @@ class AikenRunConfiguration(
         }
 
         private sealed class ApplyData {
-            data class RawCbor(val bytes: ByteArray) : ApplyData()
+            class RawCbor(bytes: ByteArray) : ApplyData() {
+                val bytes: ByteArray = bytes.copyOf()
+
+                override fun equals(other: Any?): Boolean =
+                    other is RawCbor && bytes.contentEquals(other.bytes)
+
+                override fun hashCode(): Int = bytes.contentHashCode()
+
+                override fun toString(): String = "RawCbor(bytes=${bytes.contentToString()})"
+            }
+
             data class Integer(val value: BigInteger) : ApplyData()
-            data class Bytes(val value: ByteArray) : ApplyData()
+
+            class Bytes(value: ByteArray) : ApplyData() {
+                val value: ByteArray = value.copyOf()
+
+                override fun equals(other: Any?): Boolean =
+                    other is Bytes && value.contentEquals(other.value)
+
+                override fun hashCode(): Int = value.contentHashCode()
+
+                override fun toString(): String = "Bytes(value=${value.contentToString()})"
+            }
+
             data class List(val items: kotlin.collections.List<ApplyData>) : ApplyData()
             data class Map(val items: kotlin.collections.List<Pair<ApplyData, ApplyData>>) : ApplyData()
             data class Constr(val index: Long, val fields: kotlin.collections.List<ApplyData>) : ApplyData()
@@ -3867,7 +3880,6 @@ class AikenRunConfiguration(
 
         private class ApplyOpaqueNode(
             override var title: String,
-            val reason: String,
             val normalizer: (String?) -> String?,
             val bytesParser: (String, String) -> ByteArray
         ) : ApplyUiNode(title, "Data") {
@@ -6634,7 +6646,7 @@ class AikenRunConfiguration(
                 val passed = testObject.getString("status")?.equals("pass", ignoreCase = true) == true
                 val traces = testObject.getStringArray("traces")
                 val executionUnits = testObject["execution_units"]?.asJsonObjectOrNull()
-                val details = buildFailureDetails(testObject, kind, traces)
+                val details = buildFailureDetails(testObject, kind)
                 tests += ParsedTest(
                     title = title,
                     kind = kind,
@@ -6929,7 +6941,7 @@ class AikenRunConfiguration(
         return null
     }
 
-    private fun buildFailureDetails(test: JsonObject, kind: String?, traces: List<String>): String? {
+    private fun buildFailureDetails(test: JsonObject, kind: String?): String? {
         val details = ArrayList<String>()
 
         if (!kind.isNullOrBlank()) {

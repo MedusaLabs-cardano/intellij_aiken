@@ -7,6 +7,10 @@ import java.io.File
 import javax.swing.tree.DefaultMutableTreeNode
 
 class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
+    private companion object {
+        const val APPLY_DATA_CONSTRUCTOR_INDEX = 7L
+    }
+
     @Test
     fun omitsDefaultCheckFlagsFromCommandLine() {
         val configuration = buildConfiguration(AikenRunCommand.CHECK)
@@ -341,6 +345,43 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
         assertEquals("2 validators", context.readPrivateField<String>("displayTarget"))
     }
 
+    @Test
+    fun applyDataByteLeavesUseContentEquality() {
+        val bytes = newApplyDataBytes(byteArrayOf(1, 2, 3))
+        val sameBytes = newApplyDataBytes(byteArrayOf(1, 2, 3))
+        val differentBytes = newApplyDataBytes(byteArrayOf(1, 2, 4))
+        val raw = newApplyDataRawCbor(byteArrayOf(0xd8.toByte(), 0x79, 0x80.toByte()))
+        val sameRaw = newApplyDataRawCbor(byteArrayOf(0xd8.toByte(), 0x79, 0x80.toByte()))
+        val differentRaw = newApplyDataRawCbor(byteArrayOf(0xd8.toByte(), 0x7a, 0x80.toByte()))
+
+        assertEquals(bytes, sameBytes)
+        assertEquals(bytes.hashCode(), sameBytes.hashCode())
+        assertFalse(bytes == differentBytes)
+        assertEquals(raw, sameRaw)
+        assertEquals(raw.hashCode(), sameRaw.hashCode())
+        assertFalse(raw == differentRaw)
+    }
+
+    @Test
+    fun applyDataNestedStructuresUseByteContentEquality() {
+        val bytes = newApplyDataBytes(byteArrayOf(1, 2, 3))
+        val sameBytes = newApplyDataBytes(byteArrayOf(1, 2, 3))
+        val raw = newApplyDataRawCbor(byteArrayOf(0x41, 0xff.toByte()))
+        val sameRaw = newApplyDataRawCbor(byteArrayOf(0x41, 0xff.toByte()))
+
+        val list = newApplyDataList(listOf(bytes, raw))
+        val sameList = newApplyDataList(listOf(sameBytes, sameRaw))
+        val map = newApplyDataMap(listOf(bytes to raw))
+        val sameMap = newApplyDataMap(listOf(sameBytes to sameRaw))
+        val constr = newApplyDataConstr(listOf(list, map))
+        val sameConstr = newApplyDataConstr(listOf(sameList, sameMap))
+
+        assertEquals(list, sameList)
+        assertEquals(map, sameMap)
+        assertEquals(constr, sameConstr)
+        assertEquals(constr.hashCode(), sameConstr.hashCode())
+    }
+
     private fun buildConfiguration(command: AikenRunCommand): AikenRunConfiguration {
         val type = AikenRunConfigurationType()
         val factory =
@@ -369,5 +410,37 @@ class AikenRunConfigurationCompatibilityTest : AikenPlatformTestCase() {
         val field = javaClass.getDeclaredField(name)
         field.isAccessible = true
         return field.get(this) as T
+    }
+
+    private fun newApplyDataBytes(value: ByteArray): Any =
+        newApplyData("Bytes", ByteArray::class.java, value)
+
+    private fun newApplyDataRawCbor(bytes: ByteArray): Any =
+        newApplyData("RawCbor", ByteArray::class.java, bytes)
+
+    private fun newApplyDataList(items: List<Any>): Any =
+        newApplyData("List", List::class.java, items)
+
+    private fun newApplyDataMap(items: List<Pair<Any, Any>>): Any =
+        newApplyData("Map", List::class.java, items)
+
+    private fun newApplyDataConstr(fields: List<Any>): Any {
+        val constructor =
+            applyDataSubclass("Constr").getDeclaredConstructor(Long::class.javaPrimitiveType, List::class.java)
+        constructor.isAccessible = true
+        return constructor.newInstance(APPLY_DATA_CONSTRUCTOR_INDEX, fields)
+    }
+
+    private fun newApplyData(simpleName: String, parameterType: Class<*>, value: Any): Any {
+        val constructor = applyDataSubclass(simpleName).getDeclaredConstructor(parameterType)
+        constructor.isAccessible = true
+        return constructor.newInstance(value)
+    }
+
+    private fun applyDataSubclass(simpleName: String): Class<*> {
+        val applyStateClass =
+            AikenRunConfiguration::class.java.declaredClasses.first { it.simpleName == "AikenApplyGuiRunState" }
+        val applyDataClass = applyStateClass.declaredClasses.first { it.simpleName == "ApplyData" }
+        return applyDataClass.declaredClasses.first { it.simpleName == simpleName }
     }
 }

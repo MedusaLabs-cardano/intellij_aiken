@@ -329,8 +329,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
 
         val name = text.subSequence(start, end).toString()
 
-        var qualifier: String? = null
-        qualifier = AikenSyntaxText.qualifiedChainBeforeOffset(text, start)
+        val qualifier = AikenSyntaxText.qualifiedChainBeforeOffset(text, start)
         val callableStartOffset = qualifier?.let { start - it.length - 1 } ?: start
 
         return Callee(name, qualifier, start, callableStartOffset, 0, null, null, emptyList())

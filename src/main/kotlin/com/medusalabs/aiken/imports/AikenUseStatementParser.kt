@@ -52,7 +52,6 @@ object AikenUseStatementParser {
                         skipWhitespace(lexer, text)
                         if (lexer.tokenType == AikenTokenTypes.LBRACE) {
                             modulePathEnd = dotOffset
-                            foundImportListStart = true
                             break
                         }
                         modulePathBuilder.append(".")

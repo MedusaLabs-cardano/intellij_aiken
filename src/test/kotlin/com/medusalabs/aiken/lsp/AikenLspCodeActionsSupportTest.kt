@@ -128,7 +128,7 @@ class AikenLspCodeActionsSupportTest {
             lsp4jSender: (LanguageServer) -> CompletableFuture<Lsp4jResponse>
         ): Lsp4jResponse? = throw UnsupportedOperationException()
 
-        override fun <Lsp4jResponse : Any?> sendRequestSync(
+        override fun <Lsp4jResponse> sendRequestSync(
             timeoutMs: Int,
             lsp4jSender: (LanguageServer) -> CompletableFuture<Lsp4jResponse>
         ): Lsp4jResponse? = throw UnsupportedOperationException()
@@ -143,7 +143,7 @@ class AikenLspCodeActionsSupportTest {
     private class RecordingLspServer : FakeLspServer() {
         var lastTimeoutMs: Int? = null
 
-        override fun <Lsp4jResponse : Any?> sendRequestSync(
+        override fun <Lsp4jResponse> sendRequestSync(
             timeoutMs: Int,
             lsp4jSender: (LanguageServer) -> CompletableFuture<Lsp4jResponse>
         ): Lsp4jResponse? {

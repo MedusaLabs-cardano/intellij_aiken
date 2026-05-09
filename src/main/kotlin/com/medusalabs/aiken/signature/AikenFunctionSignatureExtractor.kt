@@ -271,7 +271,7 @@ object AikenFunctionSignatureExtractor {
                 (tokenType == AikenTokenTypes.IDENTIFIER || tokenType == AikenTokenTypes.FUNCTION)
             ) {
                 val handlerName = text.subSequence(tokenStart, tokenEnd).toString()
-                var handlerIndex = skipWhitespace(text, tokenEnd)
+                val handlerIndex = skipWhitespace(text, tokenEnd)
                 if (handlerIndex < bodyClose && text[handlerIndex] == '(') {
                     val handlerCloseParen = findMatchingParen(text, handlerIndex)
                     if (handlerCloseParen != null && handlerCloseParen < bodyClose) {

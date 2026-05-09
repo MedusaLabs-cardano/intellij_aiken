@@ -31,10 +31,10 @@ class KeywordCompletionProvider(
         if (keywordVisibility == AikenKeywordVisibility.NONE) return
 
         val keywordsToSuggest =
-            when (keywordVisibility) {
-                AikenKeywordVisibility.ALL -> distinctKeywords
-                AikenKeywordVisibility.EXPRESSION_ONLY -> distinctKeywords.filter { it in expressionKeywords }
-                AikenKeywordVisibility.NONE -> emptyList()
+            if (keywordVisibility == AikenKeywordVisibility.ALL) {
+                distinctKeywords
+            } else {
+                distinctKeywords.filter { it in expressionKeywords }
             }
         val rankedResult = AikenCompletionSorting.withOrdinarySorter(parameters, result)
 

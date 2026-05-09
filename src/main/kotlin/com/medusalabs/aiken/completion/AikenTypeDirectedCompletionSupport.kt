@@ -213,7 +213,7 @@ object AikenTypeDirectedCompletionSupport {
         val normalizedExpectedType = normalizeTypeText(effectiveContext.expectedType)
         if (normalizedExpectedType.isEmpty()) return emptyList()
         if (effectiveContext.isSpread) {
-            return spreadLookupsForExpectedType(anchor, normalizedExpectedType, excludedNames, currentValueText)
+            return spreadLookupsForExpectedType(anchor, normalizedExpectedType, excludedNames)
         }
         val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
         val completionPrefix = if (pruneByPrefix) currentCompletionPrefix(currentValueText) else ""
@@ -413,19 +413,16 @@ object AikenTypeDirectedCompletionSupport {
     fun spreadLookupsForExpectedType(
         anchor: PsiElement,
         expectedType: String,
-        excludedNames: Set<String> = emptySet(),
-        currentValueText: String = ""
+        excludedNames: Set<String> = emptySet()
     ): List<LookupElement> {
         val normalizedExpectedType = normalizeTypeText(expectedType)
         if (normalizedExpectedType.isEmpty()) return emptyList()
 
         val expectedTypeProfile = buildExpectedTypeProfile(anchor, normalizedExpectedType)
-        val completionPrefix = currentCompletionPrefix(currentValueText)
         return AikenTypedCandidateResolver.collectSpreadCandidatesForExpectedType(
             anchor = anchor,
             expectedType = expectedTypeProfile,
             excludedNames = excludedNames,
-            prefix = completionPrefix,
             resolver = cachedTypedCandidateResolver()
         ).map { candidate ->
             AikenTypedLookupFactory.createSpreadLookup(candidate, normalizedExpectedType)
@@ -1017,7 +1014,7 @@ object AikenTypeDirectedCompletionSupport {
                 continue
             }
 
-            val thenOpen = findTopLevelChar(text, '{', lexer.tokenEnd)
+            val thenOpen = findTopLevelOpenBrace(text, lexer.tokenEnd)
             if (thenOpen == null) {
                 lexer.advance()
                 continue
@@ -1028,7 +1025,7 @@ object AikenTypeDirectedCompletionSupport {
                 continue
             }
             val afterThen = skipWhitespaceForward(text, thenClose + 1)
-            if (!startsWithKeyword(text, "else", afterThen)) {
+            if (!startsWithElseKeyword(text, afterThen)) {
                 lexer.advance()
                 continue
             }
@@ -1943,11 +1940,9 @@ object AikenTypeDirectedCompletionSupport {
         return null
     }
 
-    private fun startsWithKeyword(
-        text: String,
-        keyword: String,
-        offset: Int
-    ): Boolean {
+    private fun startsWithElseKeyword(text: String, offset: Int): Boolean {
+        // This context parser only recognizes `else` after a completed `if` branch.
+        val keyword = "else"
         if (!text.startsWith(keyword, offset)) return false
         val before = offset - 1
         val after = offset + keyword.length
@@ -1956,11 +1951,12 @@ object AikenTypeDirectedCompletionSupport {
         return beforeOk && afterOk
     }
 
-    private fun findTopLevelChar(
+    private fun findTopLevelOpenBrace(
         text: String,
-        target: Char,
         start: Int
     ): Int? {
+        // `if` branch context starts at the top-level opening brace after the condition.
+        val target = '{'
         var parenDepth = 0
         var bracketDepth = 0
         var braceDepth = 0

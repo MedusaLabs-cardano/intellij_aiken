@@ -14,6 +14,7 @@ import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.Row
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.UIUtil
+import com.medusalabs.aiken.AikenBundle
 import com.medusalabs.aiken.ui.AdaptiveWrapText
 import javax.swing.DefaultComboBoxModel
 
@@ -37,7 +38,11 @@ private fun com.intellij.ui.dsl.builder.Panel.aikenToolchainWrappedCommentRow(te
     }
 
 class AikenToolchainConfigurable(private val project: Project) :
-    BoundSearchableConfigurable("Aiken Toolchain", "aiken.toolchain.settings", "Aiken Toolchain") {
+    BoundSearchableConfigurable(
+        AikenBundle.message("aiken.settings.toolchain.display.name"),
+        "aiken.toolchain.settings",
+        AikenBundle.message("aiken.settings.toolchain.display.name")
+    ) {
 
     private val settings = project.service<AikenProjectToolchainSettings>()
     private val modeCombo = ComboBox(DefaultComboBoxModel(AikenToolchainMode.entries.toTypedArray()))
@@ -52,23 +57,23 @@ class AikenToolchainConfigurable(private val project: Project) :
     private var versionsLoaded = false
 
     override fun createPanel() = panel {
-        row("Toolchain mode:") {
+        row(AikenBundle.message("aiken.settings.toolchain.mode.label")) {
             cell(modeCombo)
                 .align(AlignX.FILL)
         }
-        aikenToolchainWrappedCommentRow("Choose whether this project uses the globally installed Aiken or a version installed locally via npm.")
-        globalCommandRow = row("Global Aiken command:") {
+        aikenToolchainWrappedCommentRow(AikenBundle.message("aiken.settings.toolchain.mode.comment"))
+        globalCommandRow = row(AikenBundle.message("aiken.settings.toolchain.global.command.label")) {
             cell(globalCommandField)
                 .resizableColumn()
                 .align(AlignX.FILL)
         }
-        globalCommandCommentRow = aikenToolchainWrappedCommentRow("Command name or full path. Used when the project is in `Use global Aiken` mode.")
-        localVersionRow = row("Local Aiken version:") {
+        globalCommandCommentRow = aikenToolchainWrappedCommentRow(AikenBundle.message("aiken.settings.toolchain.global.command.comment"))
+        localVersionRow = row(AikenBundle.message("aiken.settings.toolchain.local.version.label")) {
             cell(localVersionField)
                 .resizableColumn()
                 .align(AlignX.FILL)
         }
-        localVersionCommentRow = aikenToolchainWrappedCommentRow("Stored for locally managed toolchains. You can type a version manually if npm metadata is unavailable.")
+        localVersionCommentRow = aikenToolchainWrappedCommentRow(AikenBundle.message("aiken.settings.toolchain.local.version.comment"))
         row {
             cell(hintLabel)
                 .resizableColumn()
@@ -77,8 +82,8 @@ class AikenToolchainConfigurable(private val project: Project) :
     }.also {
         val globalCommandDescriptor =
             FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
-                .withTitle("Select Aiken Executable")
-                .withDescription("Choose the global Aiken executable or script to run for this project.")
+                .withTitle(AikenBundle.message("aiken.settings.toolchain.select.executable.title"))
+                .withDescription(AikenBundle.message("aiken.settings.toolchain.select.executable.description"))
         globalCommandField.addBrowseFolderListener(
             TextBrowseFolderListener(globalCommandDescriptor, project)
         )
@@ -115,9 +120,12 @@ class AikenToolchainConfigurable(private val project: Project) :
         localVersionField.isEnabled = localMode
         hintLabel.text = if (localMode) {
             loadAvailableVersions()
-            "Local mode installs the selected Aiken version directly into `${AikenNodeToolchain.LOCAL_TOOLCHAIN_DIRECTORY}/` when needed and runs that local binary."
+            AikenBundle.message(
+                "aiken.settings.toolchain.local.mode.hint",
+                AikenNodeToolchain.LOCAL_TOOLCHAIN_DIRECTORY
+            )
         } else {
-            "Global mode skips npm-based Aiken installation and always runs the configured global command."
+            AikenBundle.message("aiken.settings.toolchain.global.mode.hint")
         }
     }
 
@@ -126,7 +134,7 @@ class AikenToolchainConfigurable(private val project: Project) :
             return
         }
         versionsLoading = true
-        hintLabel.text = "Loading Aiken versions..."
+        hintLabel.text = AikenBundle.message("aiken.settings.toolchain.loading.versions")
         val baseDirectory = project.basePath?.let { LocalFileSystem.getInstance().refreshAndFindFileByPath(it) }
         AikenNodeToolchain.fetchAvailableAikenVersions(project, baseDirectory)
             .whenComplete { catalog, _ ->

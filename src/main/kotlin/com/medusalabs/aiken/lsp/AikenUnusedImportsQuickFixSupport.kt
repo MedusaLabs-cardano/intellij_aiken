@@ -7,7 +7,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.LspServerManager
-import com.intellij.platform.lsp.api.customization.LspIntentionAction
 import com.intellij.psi.PsiFile
 import org.eclipse.lsp4j.CodeAction
 import org.eclipse.lsp4j.CodeActionContext
@@ -19,7 +18,6 @@ import org.eclipse.lsp4j.jsonrpc.messages.Either
 object AikenUnusedImportsQuickFixSupport {
     const val UNUSED_IMPORT_VALUE = "aiken::check::unused:import::value"
     const val UNUSED_IMPORT_MODULE = "aiken::check::unused::import::module"
-    const val REMOVE_ONE_UNUSED_IMPORT = "Remove unused import"
     const val REMOVE_ALL_UNUSED_IMPORTS = "Remove all unused imports"
     private const val LSP_REMOVE_UNUSED_IMPORTS = "Remove redundant imports"
     internal const val CODE_ACTION_REQUEST_TIMEOUT_MS = 10_000
@@ -54,8 +52,8 @@ object AikenUnusedImportsQuickFixSupport {
         val caretLine = document.getLineNumber(offset.coerceAtMost(document.textLength))
         return diagnostics.firstOrNull { diagnostic ->
             val range = diagnostic.range ?: return@firstOrNull false
-            val startLine = range.start?.line?.toInt() ?: return@firstOrNull false
-            val endLine = range.end?.line?.toInt() ?: startLine
+            val startLine = range.start?.line ?: return@firstOrNull false
+            val endLine = range.end?.line ?: startLine
             caretLine in startLine..endLine
         }
     }

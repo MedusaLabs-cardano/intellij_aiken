@@ -7,7 +7,6 @@ import com.medusalabs.aiken.imports.AikenUseStatementParser
 import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureNameKey
-import com.medusalabs.aiken.project.AikenModuleFiles
 import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor

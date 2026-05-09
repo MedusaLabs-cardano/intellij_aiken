@@ -1,6 +1,9 @@
 package com.medusalabs.aiken.project
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
 import com.medusalabs.aiken.tooling.AikenToolchainMode
 import com.medusalabs.aiken.naming.AikenNamingRules
 import com.medusalabs.aiken.tooling.AikenNodeToolchain
@@ -31,9 +34,17 @@ internal object AikenProjectScaffolder {
         )
     private val OPTIONAL_TEMPLATE_DIRECTORIES =
         listOf(
-            ".idea/runConfigurations",
             ".run"
         )
+    private val DEFAULT_RUN_CONFIGURATION_FILES =
+        listOf(
+            "Build_blueprint.xml",
+            "Clean_artifacts.xml",
+            "Make_artifacts.xml",
+            "Parametrize_blueprint.xml",
+            "Run_checks.xml"
+        )
+    private const val RUN_CONFIGURATION_MARKER_PATH = ".idea/aiken/default_run_configurations_initialized"
 
     private data class TemplateFile(
         val resourcePath: String,
@@ -162,7 +173,39 @@ internal object AikenProjectScaffolder {
                 replacements = templateValues
             )
         }
+        ensureDefaultRunConfigurations(targetDir.toPath())
     }
+
+    fun ensureDefaultRunConfigurations(projectRootPath: Path, markInitialized: Boolean = false) {
+        var projectRoot: VirtualFile? = null
+        ApplicationManager.getApplication().runWriteAction {
+            projectRoot = VfsUtil.createDirectories(projectRootPath.toString())
+        }
+        ensureDefaultRunConfigurations(projectRoot ?: return, markInitialized)
+    }
+
+    fun ensureDefaultRunConfigurations(projectRoot: VirtualFile, markInitialized: Boolean = false) {
+        val templates = DEFAULT_RUN_CONFIGURATION_FILES.map { fileName ->
+            fileName to readTemplateContent(".idea/runConfigurations/$fileName", emptyMap())
+        }
+        ApplicationManager.getApplication().runWriteAction {
+            val targetDirectory = VfsUtil.createDirectoryIfMissing(projectRoot, ".idea/runConfigurations")
+            templates.forEach { (fileName, content) ->
+                if (targetDirectory.findChild(fileName) != null) return@forEach
+                val file = targetDirectory.createChildData(AikenProjectScaffolder, fileName)
+                VfsUtil.saveText(file, content)
+            }
+            if (markInitialized) {
+                val markerDirectory = VfsUtil.createDirectoryIfMissing(projectRoot, ".idea/aiken")
+                val markerFile = markerDirectory.findChild("default_run_configurations_initialized")
+                    ?: markerDirectory.createChildData(AikenProjectScaffolder, "default_run_configurations_initialized")
+                VfsUtil.saveText(markerFile, "Default Aiken run configurations were initialized for this project.\n")
+            }
+        }
+    }
+
+    fun defaultRunConfigurationsInitialized(projectRoot: VirtualFile): Boolean =
+        VfsUtil.findRelativeFile(projectRoot, *RUN_CONFIGURATION_MARKER_PATH.split('/').toTypedArray()) != null
 
     private fun copyTemplateFile(
         templateRelativePath: String,
@@ -173,15 +216,21 @@ internal object AikenProjectScaffolder {
             return
         }
 
+        val content = readTemplateContent(templateRelativePath, replacements)
+        destination.parent?.let(Files::createDirectories)
+        Files.writeString(destination, content, StandardCharsets.UTF_8)
+    }
+
+    private fun readTemplateContent(
+        templateRelativePath: String,
+        replacements: Map<String, String>
+    ): String {
         val resourcePath = "/$TEMPLATE_ROOT/$templateRelativePath"
         val input = AikenProjectScaffolder::class.java.getResourceAsStream(resourcePath)
             ?: throw IOException("Missing bundled project template resource: $resourcePath")
-        val content =
-            input.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                applyTemplateReplacements(reader.readText(), replacements)
-            }
-        destination.parent?.let(Files::createDirectories)
-        Files.writeString(destination, content, StandardCharsets.UTF_8)
+        return input.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+            applyTemplateReplacements(reader.readText(), replacements)
+        }
     }
 
     private fun copyTemplateDirectoryIfPresent(
@@ -286,14 +335,14 @@ internal object AikenProjectScaffolder {
             return
         }
 
-        val content = Files.readString(manifestPath, StandardCharsets.UTF_8)
+        val content = readProjectText(manifestPath) ?: return
         val normalizedPlutusVersion = plutusVersion?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
         val updated = buildString {
             append(updatePlutusVersion(content, normalizedPlutusVersion))
         }.let { updateStdlibDependencyVersion(it, stdlibVersion) }
 
         if (updated != content) {
-            Files.writeString(manifestPath, updated, StandardCharsets.UTF_8)
+            writeProjectText(manifestPath, updated)
         }
     }
 
@@ -380,11 +429,11 @@ internal object AikenProjectScaffolder {
             }
         }
         if (!Files.exists(gitignore)) {
-            Files.writeString(gitignore, entries.joinToString(separator = "\n", postfix = "\n"), StandardCharsets.UTF_8)
+            writeProjectText(gitignore, entries.joinToString(separator = "\n", postfix = "\n"))
             return
         }
 
-        val content = Files.readString(gitignore, StandardCharsets.UTF_8)
+        val content = readProjectText(gitignore) ?: return
         val lines = content.lines().map { it.trim() }
         val missingEntries = entries.filterNot { entry ->
             entry in lines || entry.removeSuffix("/") in lines
@@ -394,16 +443,28 @@ internal object AikenProjectScaffolder {
         }
 
         val suffix = if (content.isEmpty() || content.endsWith("\n")) "" else "\n"
-        Files.writeString(
+        writeProjectText(
             gitignore,
             buildString {
                 append(content)
                 append(suffix)
                 append(missingEntries.joinToString(separator = "\n"))
                 append('\n')
-            },
-            StandardCharsets.UTF_8
+            }
         )
+    }
+
+    private fun readProjectText(path: Path): String? =
+        VfsUtil.findFile(path, true)?.let { VfsUtil.loadText(it) }
+
+    private fun writeProjectText(path: Path, content: String) {
+        val parentPath = path.parent ?: throw IOException("Path has no parent: $path")
+        ApplicationManager.getApplication().runWriteAction {
+            val parent = VfsUtil.createDirectories(parentPath.toString())
+            val fileName = path.fileName.toString()
+            val file = parent.findChild(fileName) ?: parent.createChildData(AikenProjectScaffolder, fileName)
+            VfsUtil.saveText(file, content)
+        }
     }
 
     private fun ensureDefaultTestFile(targetDir: File) {

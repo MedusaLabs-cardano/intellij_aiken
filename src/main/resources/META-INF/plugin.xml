@@ -14,7 +14,8 @@
         <li>Sticky lines / breadcrumbs for scope awareness</li>
         <li>Integrated suggestions (completion)</li>
       </ul>
-    ]]></description>
+	    ]]></description>
+    <resource-bundle>messages.AikenBundle</resource-bundle>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lang</depends>
@@ -51,6 +52,7 @@
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenNodeEnvironmentStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.project.AikenRunConfigurationsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.whatsnew.AikenWhatsNewStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
@@ -69,7 +71,12 @@
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>
         <newProjectWizard.languageGenerator implementation="com.medusalabs.aiken.project.AikenNewProjectWizard"/>
-        <projectConfigurable id="aiken.toolchain.settings" groupId="tools" displayName="Aiken Toolchain" instance="com.medusalabs.aiken.tooling.AikenToolchainConfigurable" nonDefaultProject="true"/>
+        <projectConfigurable id="aiken.toolchain.settings"
+                             groupId="tools"
+                             bundle="messages.AikenBundle"
+                             key="aiken.settings.toolchain.display.name"
+                             instance="com.medusalabs.aiken.tooling.AikenToolchainConfigurable"
+                             nonDefaultProject="true"/>
 
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenImportIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenModuleIndex"/>
@@ -96,10 +103,13 @@
         <intentionAction>
             <language>Aiken</language>
             <className>com.medusalabs.aiken.lsp.AikenRemoveAllUnusedImportsIntention</className>
-            <category>Aiken</category>
+            <categoryKey>aiken.intentions.category</categoryKey>
         </intentionAction>
 
-        <notificationGroup id="Aiken Toolchain" displayType="BALLOON"/>
+        <notificationGroup id="aiken.toolchain.notifications"
+                           displayType="BALLOON"
+                           bundle="messages.AikenBundle"
+                           key="aiken.notification.group.toolchain"/>
     </extensions>
 
     <extensions defaultExtensionNs="org.jetbrains.plugins.terminal">
@@ -111,11 +121,9 @@
                   topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
     </applicationListeners>
 
-    <actions>
+    <actions resource-bundle="messages.AikenBundle">
         <action id="com.medusalabs.aiken.actions.AikenNewFileAction"
                 class="com.medusalabs.aiken.actions.AikenNewFileAction"
-                text="Aiken File"
-                description="Create a new Aiken file"
                 icon="/icons/aiken.png">
             <add-to-group group-id="NewGroup" anchor="last"/>
         </action>

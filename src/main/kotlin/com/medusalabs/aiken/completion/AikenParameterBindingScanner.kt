@@ -194,7 +194,7 @@ internal object AikenParameterBindingScanner {
                     (tokenType == AikenTokenTypes.KEYWORD && tokenText == "else")
 
             if (relativeBraceDepth == 0 && isHandlerName && isAtLogicalLineStart(text, tokenStart)) {
-                var handlerIndex = skipWhitespace(text, tokenEnd)
+                val handlerIndex = skipWhitespace(text, tokenEnd)
                 if (handlerIndex < bodyClose && text[handlerIndex] == '(') {
                     val handlerParamsOpen = handlerIndex
                     val handlerParamsClose = AikenSyntaxText.findMatchingDelimiter(text, handlerParamsOpen, '(', ')')
@@ -300,7 +300,7 @@ internal object AikenParameterBindingScanner {
         val (trimmedSegment, trimmedStart) = trimWithOffset(rawSegment, startOffset)
         if (trimmedSegment.isBlank()) return null
 
-        val viaRange = findTopLevelKeyword(trimmedSegment, "via")
+        val viaRange = findTopLevelViaKeyword(trimmedSegment)
         val beforeVia = viaRange?.let { trimmedSegment.substring(0, it.first).trimEnd() } ?: trimmedSegment
         val beforeViaStart = trimmedStart
         val viaExpressionText = viaRange?.let { trimmedSegment.substring(it.last + 1).trim() }?.takeIf { it.isNotBlank() }
@@ -425,10 +425,9 @@ internal object AikenParameterBindingScanner {
         return null
     }
 
-    private fun findTopLevelKeyword(
-        text: String,
-        keyword: String
-    ): IntRange? {
+    private fun findTopLevelViaKeyword(text: String): IntRange? {
+        // Validator parameter binding syntax only uses the top-level `via` separator here.
+        val keyword = "via"
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
 
