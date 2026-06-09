@@ -12,6 +12,7 @@ import com.intellij.util.Processor
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.ID
 import com.medusalabs.aiken.index.IdentifierKind
+import com.medusalabs.aiken.project.AikenSearchScopes
 
 class IndexedIdentifierCompletionProvider(
     private val indexId: ID<String, Int>,
@@ -39,7 +40,7 @@ class IndexedIdentifierCompletionProvider(
         var added = 0
         try {
             val index = FileBasedIndex.getInstance()
-            val scope = GlobalSearchScope.allScope(project)
+            val scope = AikenSearchScopes.forFile(project, parameters.originalFile.virtualFile)
             index.processAllKeys(
                 indexId,
                 Processor { key ->

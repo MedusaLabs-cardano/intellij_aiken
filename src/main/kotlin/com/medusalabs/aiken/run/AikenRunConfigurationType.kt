@@ -3,21 +3,23 @@ package com.medusalabs.aiken.run
 import com.intellij.execution.configurations.ConfigurationFactory
 import com.intellij.execution.configurations.ConfigurationType
 import com.intellij.execution.configurations.ConfigurationTypeBase
+import com.intellij.execution.configurations.RunConfiguration
+import com.intellij.execution.RunManager
 import com.intellij.openapi.project.Project
 import com.medusalabs.aiken.icons.AikenIcons
 
 class AikenRunConfigurationType : ConfigurationTypeBase(
     "AIKEN_RUN_CONFIGURATION",
     "Aiken",
-    "Run Aiken workflows (Build blueprint, Run checks, Parametrize, Make artifacts, Clean artifacts)",
+    "Run Aiken workflows (Build blueprint, Run checks, Parametrize blueprint, Make artifacts, Clean artifacts)",
     AikenIcons.AIKEN
 ) {
     init {
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Run checks"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.BUILD, "Build blueprint"))
+        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Parametrize blueprint"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.ADDRESS, "Make artifacts"))
         addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CLEAN, "Clean artifacts"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.APPLY, "Parametrize"))
-        addFactory(AikenRunConfigurationFactory(this, AikenRunCommand.CHECK, "Run checks"))
     }
 }
 
@@ -26,6 +28,20 @@ internal class AikenRunConfigurationFactory(
     internal val presetCommand: AikenRunCommand,
     private val displayName: String
 ) : ConfigurationFactory(type) {
+    override fun createConfiguration(name: String?, template: RunConfiguration): RunConfiguration {
+        val configuration = super.createConfiguration(name, template)
+        val aikenConfiguration = configuration as? AikenRunConfiguration ?: return configuration
+        val baseName = RunManager.extractBaseName(name ?: displayName).ifBlank { displayName }
+        val uniqueName = RunManager.getInstance(aikenConfiguration.project).suggestUniqueName(baseName, type)
+        aikenConfiguration.name = uniqueName
+        if (uniqueName == baseName) {
+            aikenConfiguration.setGeneratedName()
+        } else {
+            aikenConfiguration.setNameChangedByUser(true)
+        }
+        return aikenConfiguration
+    }
+
     override fun createTemplateConfiguration(project: Project): AikenRunConfiguration {
         return AikenRunConfiguration(
             project = project,
@@ -46,4 +62,5 @@ internal class AikenRunConfigurationFactory(
         }
 
     override fun getName(): String = displayName
+
 }

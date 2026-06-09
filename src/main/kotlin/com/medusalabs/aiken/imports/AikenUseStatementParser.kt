@@ -6,29 +6,16 @@ import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 
 object AikenUseStatementParser {
-    data class UseItem(
-        val name: String,
-        val nameRange: TextRange,
-        val alias: String? = null,
-        val aliasRange: TextRange? = null
-    )
-
-    data class UseStatement(
-        val modulePath: String,
-        val modulePathRange: TextRange?,
-        val items: List<UseItem>,
-        val statementRange: TextRange
-    )
-
-    fun parse(text: CharSequence): List<UseStatement> {
+    fun parse(text: CharSequence): List<AikenUseStatement> {
         val lexer = AikenLexing.createLexer()
         lexer.start(text)
 
-        val result = ArrayList<UseStatement>()
+        val result = ArrayList<AikenUseStatement>()
         while (lexer.tokenType != null) {
             val tokenType = lexer.tokenType
             if (tokenType == AikenTokenTypes.KEYWORD &&
-                text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "use"
+                text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() == "use" &&
+                hasKeywordBoundaries(text, lexer.tokenStart, lexer.tokenEnd)
             ) {
                 val useStart = lexer.tokenStart
                 lexer.advance()
@@ -65,7 +52,6 @@ object AikenUseStatementParser {
                         skipWhitespace(lexer, text)
                         if (lexer.tokenType == AikenTokenTypes.LBRACE) {
                             modulePathEnd = dotOffset
-                            foundImportListStart = true
                             break
                         }
                         modulePathBuilder.append(".")
@@ -98,15 +84,21 @@ object AikenUseStatementParser {
                         emptyList()
                     }
 
+                skipWhitespace(lexer, text)
+                val (moduleAlias, moduleAliasRange) = parseAlias(text, lexer)
+
                 val statementEnd =
-                    items.lastOrNull()?.aliasRange?.endOffset
+                    moduleAliasRange?.endOffset
+                        ?: items.lastOrNull()?.aliasRange?.endOffset
                         ?: items.lastOrNull()?.nameRange?.endOffset
                         ?: (modulePathRange?.endOffset ?: (lexer.tokenEnd.takeIf { it > useStart } ?: useStart))
 
                 result.add(
-                    UseStatement(
+                    AikenUseStatement(
                         modulePath = modulePath,
                         modulePathRange = modulePathRange,
+                        moduleAlias = moduleAlias,
+                        moduleAliasRange = moduleAliasRange,
                         items = items,
                         statementRange = TextRange(useStart, statementEnd)
                     )
@@ -121,11 +113,13 @@ object AikenUseStatementParser {
         return result
     }
 
-    private fun parseImportItems(text: CharSequence, lexer: com.intellij.lexer.Lexer): List<UseItem> {
+    fun parseModel(text: CharSequence): AikenUseModel = AikenUseModel(parse(text))
+
+    private fun parseImportItems(text: CharSequence, lexer: com.intellij.lexer.Lexer): List<AikenUseItem> {
         // Assumes current token is `{`.
         lexer.advance()
 
-        val items = ArrayList<UseItem>()
+        val items = ArrayList<AikenUseItem>()
         var braceDepth = 1
 
         while (lexer.tokenType != null && braceDepth > 0) {
@@ -154,7 +148,7 @@ object AikenUseStatementParser {
                     skipWhitespace(lexer, text)
                     val (alias, aliasRange) = parseAlias(text, lexer)
 
-                    items.add(UseItem(name = tokenText, nameRange = nameRange, alias = alias, aliasRange = aliasRange))
+                    items.add(AikenUseItem(name = tokenText, nameRange = nameRange, alias = alias, aliasRange = aliasRange))
                 }
                 else -> {
                     lexer.advance()
@@ -168,7 +162,7 @@ object AikenUseStatementParser {
     private fun parseAlias(text: CharSequence, lexer: com.intellij.lexer.Lexer): Pair<String?, TextRange?> {
         val t = lexer.tokenType
         val tokenText = t?.let { text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString() }
-        if (t == AikenTokenTypes.KEYWORD && tokenText == "as") {
+        if (t == AikenTokenTypes.KEYWORD && tokenText == "as" && hasKeywordBoundaries(text, lexer.tokenStart, lexer.tokenEnd)) {
             lexer.advance()
             skipWhitespace(lexer, text)
             val aliasTokenType = lexer.tokenType
@@ -189,4 +183,13 @@ object AikenUseStatementParser {
             lexer.advance()
         }
     }
+
+    private fun hasKeywordBoundaries(text: CharSequence, start: Int, end: Int): Boolean {
+        val beforeOk = start <= 0 || !isIdentifierChar(text[start - 1])
+        val afterOk = end >= text.length || !isIdentifierChar(text[end])
+        return beforeOk && afterOk
+    }
+
+    private fun isIdentifierChar(ch: Char): Boolean =
+        ch.isLetterOrDigit() || ch == '_'
 }

@@ -25,6 +25,8 @@ class IdentifierCompletionProvider(
         context: ProcessingContext,
         result: CompletionResultSet
     ) {
+        if (qualifiedAccessContext(parameters.position)) return
+
         val elementType = parameters.position.node.elementType
         if (stopTokenTypes.contains(elementType)) return
 
@@ -51,11 +53,15 @@ class IdentifierCompletionProvider(
             }
 
             if (collectingBindings) {
+                val tokenText = text.substring(lexer.tokenStart, lexer.tokenEnd)
+                val isMonadicBindOperator =
+                    tokenText == "<" && lexer.tokenStart + 1 < text.length && text[lexer.tokenStart + 1] == '-'
                 when {
                     tokenType == TokenType.WHITE_SPACE -> {}
-                    text.substring(lexer.tokenStart, lexer.tokenEnd) == "=" -> collectingBindings = false
+                    tokenText == "=" -> collectingBindings = false
+                    isMonadicBindOperator -> collectingBindings = false
                     tokenType != null && kindByTokenType[tokenType] == CompletionSymbolKind.IDENTIFIER -> {
-                        val word = text.substring(lexer.tokenStart, lexer.tokenEnd)
+                        val word = tokenText
                         if (word.length >= 2 && seen.add(word) && prefixMatcher.prefixMatches(word)) {
                             result.addElement(
                                 CompletionItemFactory.create(
@@ -67,7 +73,11 @@ class IdentifierCompletionProvider(
                         }
                     }
                 }
-                lexer.advance()
+                if (isMonadicBindOperator) {
+                    lexer.start(text, (lexer.tokenStart + 2).coerceAtMost(text.length), text.length, 0)
+                } else {
+                    lexer.advance()
+                }
                 continue
             }
 
@@ -146,4 +156,11 @@ class IdentifierCompletionProvider(
             CompletionSymbolKind.IDENTIFIER -> 0.0
             CompletionSymbolKind.KEYWORD -> 0.0
         }
+
+    private fun qualifiedAccessContext(position: com.intellij.psi.PsiElement): Boolean {
+        val text = position.containingFile?.text ?: return false
+        var index = position.textRange.startOffset - 1
+        while (index >= 0 && text[index].isWhitespace()) index--
+        return index >= 0 && text[index] == '.'
+    }
 }

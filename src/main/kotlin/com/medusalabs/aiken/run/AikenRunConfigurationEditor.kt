@@ -2,8 +2,8 @@ package com.medusalabs.aiken.run
 
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.SettingsEditor
-import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.ui.TextBrowseFolderListener
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.ScrollPaneFactory
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
@@ -19,6 +19,7 @@ import javax.swing.JComponent
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.BoxLayout
 import javax.swing.text.JTextComponent
 
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
@@ -33,7 +34,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private var rootContent: JComponent? = null
 
     private val projectDirectoryField = TextFieldWithBrowseButton(JBTextField())
-    private val aikenBinaryField = TextFieldWithBrowseButton(JBTextField())
     private val extraArgsField = JBTextField()
 
     private val buildDenyWarningsCheck = JBCheckBox("Treat warnings as errors")
@@ -72,6 +72,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyDefaultCborParametersField = JBTextField()
     private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
     private val applyOutputModeCombo = JComboBox(AikenApplyOutputMode.entries.toTypedArray())
+    private val applyAutoRepeatPanel = JPanel().apply {
+        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        isOpaque = false
+    }
+    private val applyAutoRepeatComment = JLabel("If disabled, run Parametrize blueprint separately for each parameter.")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
     private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
@@ -92,14 +97,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 .withDescription("Directory passed to `aiken ... [DIRECTORY]` and used as working directory.")
         projectDirectoryField.addBrowseFolderListener(TextBrowseFolderListener(projectDirectoryDescriptor, null))
 
-        val aikenBinaryDescriptor =
-            FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
-                .withTitle("Select aiken binary")
-                .withDescription("Path to `aiken` executable.")
-        aikenBinaryField.addBrowseFolderListener(TextBrowseFolderListener(aikenBinaryDescriptor, null))
-
         (projectDirectoryField.textField as? JBTextField)?.emptyText?.text = "e.g. /home/user/my-aiken-project"
-        (aikenBinaryField.textField as? JBTextField)?.emptyText?.text = "aiken"
         extraArgsField.emptyText.text = "e.g. --help"
 
         buildEnvField.emptyText.text = "e.g. preprod"
@@ -119,6 +117,13 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyModuleField.emptyText.text = "e.g. my_module"
         applyValidatorField.emptyText.text = "e.g. my_validator"
         applyDefaultCborParametersField.emptyText.text = "e.g. 182A, d8799f0102ff"
+        applyAutoRepeatComment.foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        applyAutoRepeatComment.border = JBUI.Borders.emptyTop(2)
+        applyAutoRepeatPanel.add(applyAutoUntilNoParametersCheck)
+        applyAutoRepeatPanel.add(applyAutoRepeatComment)
+        applyOutputModeCombo.addActionListener {
+            updateApplyModeVisibility()
+        }
 
         addressArtifactsBasePathField.emptyText.text = "artifacts"
         cleanTargetPathField.emptyText.text = "artifacts"
@@ -134,7 +139,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         updatePreferredSize(configuration.command)
         projectDirectoryField.text =
             configuration.projectDirectory.ifBlank { configuration.project.basePath ?: "" }
-        aikenBinaryField.text = configuration.aikenBinaryPath.ifBlank { "aiken" }
         extraArgsField.text = configuration.extraArgs
 
         buildDenyWarningsCheck.isSelected = configuration.denyWarnings
@@ -177,6 +181,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         applyDefaultCborParametersField.text = configuration.applyDefaultCborParameters
         applyAutoUntilNoParametersCheck.isSelected = configuration.applyAutoUntilNoParameters
         applyOutputModeCombo.selectedItem = configuration.applyOutputMode
+        updateApplyModeVisibility()
 
         checkSkipTestsCheck.isSelected = configuration.checkSkipTests
         checkOutputModeCombo.selectedItem = configuration.checkOutputMode
@@ -193,7 +198,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
     override fun applyEditorTo(configuration: AikenRunConfiguration) {
         configuration.projectDirectory = projectDirectoryField.text.trim()
-        configuration.aikenBinaryPath = aikenBinaryField.text.trim().ifEmpty { "aiken" }
         configuration.extraArgs = extraArgsField.text.trim()
 
         when (configuration.command) {
@@ -297,13 +301,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("Working directory for Aiken command. Relative paths resolve from here.")
-                }
-
-                row("Aiken binary path:") {
-                    cell(aikenBinaryField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
-                        .comment("Binary name or full path. Default: aiken.")
                 }
 
                 row("Extra arguments:") {
@@ -640,19 +637,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                         .comment("Tip: run manual parameterization first, then paste those CBOR values here. Separate values with comma or space.")
                 }
 
-                row {
-                    cell(applyAutoUntilNoParametersCheck)
-                        .comment("If disabled, run Apply separately for each parameter.")
-                }
-
                 row("Output mode:") {
                     cell(applyOutputModeCombo)
                         .resizableColumn()
                         .align(AlignX.FILL)
                         .comment("TTY for native interactive prompts, IDE integrated for structured GUI parameterization.")
                 }
+
+                row {
+                    cell(applyAutoRepeatPanel)
+                        .resizableColumn()
+                        .align(AlignX.FILL)
+                }
             }
         }
+    }
+
+    private fun updateApplyModeVisibility() {
+        val ttySelected = (applyOutputModeCombo.selectedItem as? AikenApplyOutputMode) == AikenApplyOutputMode.TTY
+        applyAutoRepeatPanel.isVisible = ttySelected
+        applyAutoUntilNoParametersCheck.isVisible = ttySelected
+        applyAutoRepeatComment.isVisible = ttySelected
+        rootContent?.revalidate()
+        rootContent?.repaint()
     }
 
     private fun showCommandCard(command: AikenRunCommand) {

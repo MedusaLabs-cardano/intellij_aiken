@@ -2,18 +2,54 @@ package com.medusalabs.aiken.project
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
+import com.medusalabs.aiken.tooling.AikenToolchainMode
 import com.medusalabs.aiken.naming.AikenNamingRules
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileSystem
+import java.nio.file.FileSystemNotFoundException
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.ExecutionException
-import kotlin.io.path.deleteIfExists
+import java.net.URI
 
+@Suppress("SameParameterValue")
 internal object AikenProjectScaffolder {
-    private data class CommandResult(val exitCode: Int, val output: String)
+    private const val TEMPLATE_ROOT = "project-template"
+    private val COMMON_TEMPLATE_FILES =
+        listOf(
+            TemplateFile("gitignore.template", ".gitignore"),
+            TemplateFile("README.md", "README.md"),
+            TemplateFile("aiken.toml", "aiken.toml"),
+            TemplateFile(".github/workflows/continuous-integration.yml", ".github/workflows/continuous-integration.yml")
+        )
+    private val VALIDATOR_TEMPLATE_FILES =
+        listOf(
+            TemplateFile("validators/contract.ak", "validators/contract.ak"),
+            TemplateFile("validators/tests/test_module.ak", "validators/tests/test_module.ak")
+        )
+    private val OPTIONAL_TEMPLATE_DIRECTORIES =
+        listOf(
+            ".run"
+        )
+    private val DEFAULT_RUN_CONFIGURATION_FILES =
+        listOf(
+            "Build_blueprint.xml",
+            "Clean_artifacts.xml",
+            "Make_artifacts.xml",
+            "Parametrize_blueprint.xml",
+            "Run_checks.xml"
+        )
+    private const val RUN_CONFIGURATION_MARKER_PATH = ".idea/aiken/default_run_configurations_initialized"
+
+    private data class TemplateFile(
+        val resourcePath: String,
+        val destinationPath: String
+    )
 
     fun normalizeToken(raw: String): String = AikenNamingRules.normalizePackageToken(raw)
 
@@ -30,7 +66,11 @@ internal object AikenProjectScaffolder {
         targetDirectoryPath: String,
         vendor: String,
         projectName: String,
-        libraryOnly: Boolean
+        libraryOnly: Boolean,
+        toolchainMode: AikenToolchainMode,
+        aikenVersion: String,
+        stdlibVersion: String,
+        plutusVersion: String?
     ) {
         val targetDir = File(targetDirectoryPath.trim()).absoluteFile
         val parentDir = targetDir.parentFile
@@ -47,21 +87,22 @@ internal object AikenProjectScaffolder {
         if (targetIssue != null) {
             throw IOException(targetIssue)
         }
-        val targetExists = targetDir.exists()
-        val targetEmpty = targetExists && (targetDir.listFiles()?.isEmpty() == true)
-        if (!targetExists || targetEmpty) {
-            if (targetEmpty) {
-                targetDir.delete()
-            }
-            runAikenNew(parentDir, vendor, projectName, libraryOnly)
-        } else {
-            scaffoldIntoExistingTarget(parentDir, targetDir, vendor, projectName, libraryOnly)
-        }
-        applyPostInitializationDefaults(targetDir, libraryOnly)
+        Files.createDirectories(targetDir.toPath())
+        scaffoldFromTemplate(
+            targetDir = targetDir,
+            vendor = vendor,
+            projectName = projectName,
+            libraryOnly = libraryOnly,
+            aikenVersion = aikenVersion,
+            stdlibVersion = stdlibVersion
+        )
+        applyPostInitializationDefaults(targetDir, libraryOnly, toolchainMode == AikenToolchainMode.LOCAL)
+        updateAikenManifest(targetDir, stdlibVersion, plutusVersion)
 
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(targetDir)?.refresh(false, true)
     }
 
+    @Suppress("unused") // Kept as a project-path convenience validator for UI callers outside the current wizard flow.
     fun validateTargetDirectory(projectPath: String, projectName: String): String? {
         val targetDirPath = resolveTargetDirectoryPath(projectPath, projectName)
         return validateTargetDirectoryPath(targetDirPath, projectName)
@@ -88,113 +129,188 @@ internal object AikenProjectScaffolder {
         return null
     }
 
-    private fun runAikenNew(
-        workDirectory: File,
-        vendor: String,
-        projectName: String,
-        libraryOnly: Boolean
-    ) {
-        val result = runWithProgress("Initializing Aiken project") {
-            runAikenNewBlocking(workDirectory, vendor, projectName, libraryOnly)
-        }
-        if (result.exitCode != 0) {
-            val body = result.output.ifBlank { "(no output)" }
-            throw IOException("`aiken new` failed with exit code ${result.exitCode}.\n$body")
-        }
-    }
-
-    private fun runWithProgress(title: String, action: () -> CommandResult): CommandResult {
-        var result: CommandResult? = null
-        var failure: Throwable? = null
-        val finished = ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            {
-                try {
-                    val future = ApplicationManager.getApplication().executeOnPooledThread<CommandResult> {
-                        action()
-                    }
-                    result = future.get()
-                } catch (e: ExecutionException) {
-                    failure = e.cause ?: e
-                } catch (t: Throwable) {
-                    failure = t
-                }
-            },
-            title,
-            false,
-            null
-        )
-        if (!finished) {
-            throw IOException("$title was cancelled")
-        }
-        failure?.let { throw it }
-        return result ?: throw IOException("$title failed with no result")
-    }
-
-    private fun runAikenNewBlocking(
-        workDirectory: File,
-        vendor: String,
-        projectName: String,
-        libraryOnly: Boolean
-    ): CommandResult {
-        val args = mutableListOf("aiken", "new")
-        if (libraryOnly) {
-            args += "-l"
-        }
-        args += "$vendor/$projectName"
-
-        val process = ProcessBuilder(args)
-            .directory(workDirectory)
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.readBytes().toString(StandardCharsets.UTF_8).trim()
-        val exitCode = process.waitFor()
-        return CommandResult(exitCode, output)
-    }
-
-    private fun scaffoldIntoExistingTarget(
-        parentDir: File,
+    private fun scaffoldFromTemplate(
         targetDir: File,
         vendor: String,
         projectName: String,
-        libraryOnly: Boolean
+        libraryOnly: Boolean,
+        aikenVersion: String,
+        stdlibVersion: String
     ) {
-        val tempRoot = Files.createTempDirectory(parentDir.toPath(), ".aiken-new-").toFile()
-        try {
-            runAikenNew(tempRoot, vendor, projectName, libraryOnly)
-            val generatedDir = File(tempRoot, projectName)
-            if (!generatedDir.isDirectory) {
-                throw IOException("`aiken new` did not produce expected directory: ${generatedDir.path}")
+        Files.createDirectories(targetDir.toPath().resolve("lib"))
+        if (!libraryOnly) {
+            Files.createDirectories(targetDir.toPath().resolve("env"))
+        }
+
+        val templateValues =
+            mapOf(
+                "%VENDOR_NAME%" to vendor,
+                "%PROJECT_NAME%" to projectName,
+                "%AIKEN_VERSION%" to aikenVersion,
+                "%STDLIB_VERSION%" to stdlibVersion
+            )
+
+        COMMON_TEMPLATE_FILES.forEach { templateFile ->
+            copyTemplateFile(
+                templateRelativePath = templateFile.resourcePath,
+                destination = targetDir.toPath().resolve(templateFile.destinationPath),
+                replacements = templateValues
+            )
+        }
+        if (!libraryOnly) {
+            VALIDATOR_TEMPLATE_FILES.forEach { templateFile ->
+                copyTemplateFile(
+                    templateRelativePath = templateFile.resourcePath,
+                    destination = targetDir.toPath().resolve(templateFile.destinationPath),
+                    replacements = templateValues
+                )
             }
-            copyTree(generatedDir.toPath(), targetDir.toPath())
-        } finally {
-            deleteTree(tempRoot.toPath())
+        }
+        OPTIONAL_TEMPLATE_DIRECTORIES.forEach { templateDirectory ->
+            copyTemplateDirectoryIfPresent(
+                templateRelativePath = templateDirectory,
+                destinationRoot = targetDir.toPath().resolve(templateDirectory),
+                replacements = templateValues
+            )
+        }
+        ensureDefaultRunConfigurations(targetDir.toPath())
+    }
+
+    fun ensureDefaultRunConfigurations(projectRootPath: Path, markInitialized: Boolean = false) {
+        var projectRoot: VirtualFile? = null
+        ApplicationManager.getApplication().runWriteAction {
+            projectRoot = VfsUtil.createDirectories(projectRootPath.toString())
+        }
+        ensureDefaultRunConfigurations(projectRoot ?: return, markInitialized)
+    }
+
+    fun ensureDefaultRunConfigurations(projectRoot: VirtualFile, markInitialized: Boolean = false) {
+        val templates = DEFAULT_RUN_CONFIGURATION_FILES.map { fileName ->
+            fileName to readTemplateContent(".idea/runConfigurations/$fileName", emptyMap())
+        }
+        ApplicationManager.getApplication().runWriteAction {
+            val targetDirectory = VfsUtil.createDirectoryIfMissing(projectRoot, ".idea/runConfigurations")
+            templates.forEach { (fileName, content) ->
+                if (targetDirectory.findChild(fileName) != null) return@forEach
+                val file = targetDirectory.createChildData(AikenProjectScaffolder, fileName)
+                VfsUtil.saveText(file, content)
+            }
+            if (markInitialized) {
+                val markerDirectory = VfsUtil.createDirectoryIfMissing(projectRoot, ".idea/aiken")
+                val markerFile = markerDirectory.findChild("default_run_configurations_initialized")
+                    ?: markerDirectory.createChildData(AikenProjectScaffolder, "default_run_configurations_initialized")
+                VfsUtil.saveText(markerFile, "Default Aiken run configurations were initialized for this project.\n")
+            }
         }
     }
 
-    private fun copyTree(from: Path, to: Path) {
-        Files.walk(from).forEach { src ->
-            val relative = from.relativize(src)
-            if (relative.toString().isEmpty()) return@forEach
-            val topLevel = relative.nameCount > 0 && relative.getName(0).toString() == ".git"
-            if (topLevel) return@forEach
-            val dst = to.resolve(relative)
-            when {
-                Files.isDirectory(src) -> Files.createDirectories(dst)
-                Files.exists(dst) -> throw IOException("Target file already exists: $dst")
-                else -> {
-                    Files.createDirectories(dst.parent)
-                    Files.copy(src, dst)
+    fun defaultRunConfigurationsInitialized(projectRoot: VirtualFile): Boolean =
+        VfsUtil.findRelativeFile(projectRoot, *RUN_CONFIGURATION_MARKER_PATH.split('/').toTypedArray()) != null
+
+    private fun copyTemplateFile(
+        templateRelativePath: String,
+        destination: Path,
+        replacements: Map<String, String>
+    ) {
+        if (Files.exists(destination)) {
+            return
+        }
+
+        val content = readTemplateContent(templateRelativePath, replacements)
+        destination.parent?.let(Files::createDirectories)
+        Files.writeString(destination, content, StandardCharsets.UTF_8)
+    }
+
+    private fun readTemplateContent(
+        templateRelativePath: String,
+        replacements: Map<String, String>
+    ): String {
+        val resourcePath = "/$TEMPLATE_ROOT/$templateRelativePath"
+        val input = AikenProjectScaffolder::class.java.getResourceAsStream(resourcePath)
+            ?: throw IOException("Missing bundled project template resource: $resourcePath")
+        return input.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+            applyTemplateReplacements(reader.readText(), replacements)
+        }
+    }
+
+    private fun copyTemplateDirectoryIfPresent(
+        templateRelativePath: String,
+        destinationRoot: Path,
+        replacements: Map<String, String>
+    ) {
+        val resourcePath = "/$TEMPLATE_ROOT/$templateRelativePath"
+        val resourceUrl = AikenProjectScaffolder::class.java.getResource(resourcePath) ?: return
+        openTemplateDirectory(resourceUrl.toURI()).use { templateDirectory ->
+            val templateRoot = templateDirectory.root
+            val paths = templateDirectory.paths
+            paths
+                .filter(Files::isRegularFile)
+                .forEach { templateFile ->
+                    val relativePath = templateRoot.relativize(templateFile).toString().replace(File.separatorChar, '/')
+                    copyTemplateFile(
+                        templateRelativePath = "$templateRelativePath/$relativePath",
+                        destination = destinationRoot.resolve(relativePath),
+                        replacements = replacements
+                    )
                 }
+        }
+    }
+
+    private data class OpenTemplateDirectory(
+        val root: Path,
+        val paths: java.util.stream.Stream<Path>,
+        private val fileSystemToClose: FileSystem? = null
+    ) : AutoCloseable {
+        override fun close() {
+            try {
+                paths.close()
+            } finally {
+                fileSystemToClose?.close()
             }
         }
     }
 
-    private fun deleteTree(path: Path) {
-        if (!Files.exists(path)) return
-        Files.walk(path)
-            .sorted(Comparator.reverseOrder())
-            .forEach { it.deleteIfExists() }
+    private fun openTemplateDirectory(resourceUri: URI): OpenTemplateDirectory {
+        if (resourceUri.scheme != "jar") {
+            val root = Path.of(resourceUri)
+            return OpenTemplateDirectory(root = root, paths = Files.walk(root))
+        }
+
+        val (templateRoot, fileSystem, created) = resolveJarTemplateRoot(resourceUri)
+        return OpenTemplateDirectory(
+            root = templateRoot,
+            paths = Files.walk(templateRoot),
+            fileSystemToClose = fileSystem.takeIf { created }
+        )
     }
+
+    private fun openJarFileSystem(jarFileUri: URI): Pair<FileSystem, Boolean> =
+        try {
+            FileSystems.getFileSystem(jarFileUri) to false
+        } catch (_: FileSystemNotFoundException) {
+            FileSystems.newFileSystem(jarFileUri, emptyMap<String, Any>()) to true
+        }
+
+    private fun resolveJarTemplateRoot(resourceUri: URI): Triple<Path, FileSystem, Boolean> {
+        val raw = resourceUri.toString()
+        val separatorIndex = raw.indexOf("!/")
+        if (separatorIndex < 0) {
+            throw IOException("Unsupported jar resource URI: $resourceUri")
+        }
+
+        val jarFileUri = URI.create(raw.substring(0, separatorIndex))
+        val entryPath = raw.substring(separatorIndex + 2)
+        val (fileSystem, created) = openJarFileSystem(jarFileUri)
+        return Triple(fileSystem.getPath("/$entryPath"), fileSystem, created)
+    }
+
+    private fun applyTemplateReplacements(
+        content: String,
+        replacements: Map<String, String>
+    ): String =
+        replacements.entries.fold(content) { current, (placeholder, value) ->
+            current.replace(placeholder, value)
+        }
 
     private fun isAllowedBootstrapEntry(entry: File, projectName: String): Boolean {
         val name = entry.name
@@ -205,29 +321,150 @@ internal object AikenProjectScaffolder {
             name == "$projectName.iml"
     }
 
-    private fun applyPostInitializationDefaults(targetDir: File, libraryOnly: Boolean) {
-        ensureArtifactsInGitignore(targetDir)
+    private fun applyPostInitializationDefaults(targetDir: File, libraryOnly: Boolean, includeNodeModules: Boolean) {
+        ensureArtifactsInGitignore(targetDir, includeNodeModules)
         if (!libraryOnly) {
+            ensureDefaultValidatorFile(targetDir)
             ensureDefaultTestFile(targetDir)
         }
     }
 
-    private fun ensureArtifactsInGitignore(targetDir: File) {
-        val gitignore = targetDir.toPath().resolve(".gitignore")
-        val entry = "artifacts/"
-        if (!Files.exists(gitignore)) {
-            Files.writeString(gitignore, "$entry\n", StandardCharsets.UTF_8)
+    private fun updateAikenManifest(targetDir: File, stdlibVersion: String, plutusVersion: String?) {
+        val manifestPath = targetDir.toPath().resolve("aiken.toml")
+        if (!Files.isRegularFile(manifestPath)) {
             return
         }
 
-        val content = Files.readString(gitignore, StandardCharsets.UTF_8)
+        val content = readProjectText(manifestPath) ?: return
+        val normalizedPlutusVersion = plutusVersion?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        val updated = buildString {
+            append(updatePlutusVersion(content, normalizedPlutusVersion))
+        }.let { updateStdlibDependencyVersion(it, stdlibVersion) }
+
+        if (updated != content) {
+            writeProjectText(manifestPath, updated)
+        }
+    }
+
+    private fun updatePlutusVersion(content: String, plutusVersion: String?): String {
+        if (plutusVersion.isNullOrBlank()) return content
+        val plutusRegex = Regex("""(?m)^plutus\s*=\s*["'][^"']+["']\s*$""")
+        val legacyPlutusRegex = Regex("""(?m)^plutusVersion\s*=\s*["'][^"']+["']\s*$""")
+        val replacement = """plutus = "$plutusVersion""""
+        val legacyReplacement = """plutusVersion = "$plutusVersion""""
+        if (plutusRegex.containsMatchIn(content)) {
+            return plutusRegex.replace(content, replacement)
+        }
+        if (legacyPlutusRegex.containsMatchIn(content)) {
+            return legacyPlutusRegex.replace(content, legacyReplacement)
+        }
+
+        val lines = content.lines().toMutableList()
+        val versionIndex = lines.indexOfFirst { it.trimStart().startsWith("version =") }
+        if (versionIndex >= 0) {
+            lines.add(versionIndex + 1, replacement)
+            return lines.joinToString("\n")
+        }
+        return "$replacement\n$content"
+    }
+
+    private fun updateStdlibDependencyVersion(content: String, stdlibVersion: String): String {
+        val lines = content.lines().toMutableList()
+        val stdlibNameRegex = Regex("""^name\s*=\s*["']aiken-lang/stdlib["']\s*$""")
+        var index = 0
+        while (index < lines.size) {
+            if (lines[index].trim() != "[[dependencies]]") {
+                index += 1
+                continue
+            }
+
+            val blockStart = index
+            var blockEnd = lines.size
+            var cursor = index + 1
+            while (cursor < lines.size) {
+                if (lines[cursor].trim() == "[[dependencies]]") {
+                    blockEnd = cursor
+                    break
+                }
+                cursor += 1
+            }
+
+            val block = lines.subList(blockStart, blockEnd)
+            if (block.none { stdlibNameRegex.matches(it.trim()) }) {
+                index = blockEnd
+                continue
+            }
+
+            val replacement = """version = "$stdlibVersion""""
+            val versionIndex = block.indexOfFirst { it.trimStart().startsWith("version =") }
+            if (versionIndex >= 0) {
+                block[versionIndex] = replacement
+            } else {
+                val nameIndex = block.indexOfFirst { stdlibNameRegex.matches(it.trim()) }
+                val insertAt = if (nameIndex >= 0) nameIndex + 1 else 1
+                block.add(insertAt, replacement)
+            }
+            return lines.joinToString("\n")
+        }
+
+        val suffix = if (content.endsWith("\n")) "" else "\n"
+        return buildString {
+            append(content)
+            append(suffix)
+            append("\n[[dependencies]]\n")
+            append("name = \"aiken-lang/stdlib\"\n")
+            append("version = \"")
+            append(stdlibVersion)
+            append("\"\n")
+            append("source = \"github\"\n")
+        }
+    }
+
+    private fun ensureArtifactsInGitignore(targetDir: File, includeLocalToolchain: Boolean) {
+        val gitignore = targetDir.toPath().resolve(".gitignore")
+        val entries = buildList {
+            add("artifacts/")
+            if (includeLocalToolchain) {
+                add("${AikenNodeToolchain.LOCAL_TOOLCHAIN_DIRECTORY}/")
+            }
+        }
+        if (!Files.exists(gitignore)) {
+            writeProjectText(gitignore, entries.joinToString(separator = "\n", postfix = "\n"))
+            return
+        }
+
+        val content = readProjectText(gitignore) ?: return
         val lines = content.lines().map { it.trim() }
-        if (entry in lines || "artifacts" in lines) {
+        val missingEntries = entries.filterNot { entry ->
+            entry in lines || entry.removeSuffix("/") in lines
+        }
+        if (missingEntries.isEmpty()) {
             return
         }
 
         val suffix = if (content.isEmpty() || content.endsWith("\n")) "" else "\n"
-        Files.writeString(gitignore, "$content$suffix$entry\n", StandardCharsets.UTF_8)
+        writeProjectText(
+            gitignore,
+            buildString {
+                append(content)
+                append(suffix)
+                append(missingEntries.joinToString(separator = "\n"))
+                append('\n')
+            }
+        )
+    }
+
+    private fun readProjectText(path: Path): String? =
+        VfsUtil.findFile(path, true)?.let { VfsUtil.loadText(it) }
+
+    private fun writeProjectText(path: Path, content: String) {
+        val parentPath = path.parent ?: throw IOException("Path has no parent: $path")
+        ApplicationManager.getApplication().runWriteAction {
+            val parent = VfsUtil.createDirectories(parentPath.toString())
+            val fileName = path.fileName.toString()
+            val file = parent.findChild(fileName) ?: parent.createChildData(AikenProjectScaffolder, fileName)
+            VfsUtil.saveText(file, content)
+        }
     }
 
     private fun ensureDefaultTestFile(targetDir: File) {
@@ -240,7 +477,7 @@ internal object AikenProjectScaffolder {
         }
 
         val content = """
-            use placeholder
+            use contract
             
             test example() {
               2 + 2 == 4
@@ -248,6 +485,52 @@ internal object AikenProjectScaffolder {
             
         """.trimIndent()
         Files.writeString(testFile, content, StandardCharsets.UTF_8)
+    }
+
+    private fun ensureDefaultValidatorFile(targetDir: File) {
+        val validatorsDir = targetDir.toPath().resolve("validators")
+        Files.createDirectories(validatorsDir)
+
+        val validatorFile = validatorsDir.resolve("contract.ak")
+        if (Files.exists(validatorFile)) {
+            return
+        }
+
+        val content = """
+            use cardano/address.{Credential}
+            use cardano/assets.{PolicyId}
+            use cardano/certificate.{Certificate}
+            use cardano/governance.{ProposalProcedure, Voter}
+            use cardano/transaction.{Transaction, OutputReference}
+            
+            validator contract {
+              mint(_redeemer: Data, _policy_id: PolicyId, _self: Transaction) {
+                todo @"mint logic goes here"
+              }
+            
+              spend(_datum: Option<Data>, _redeemer: Data, _utxo: OutputReference, _self: Transaction) {
+                todo @"spend logic goes here"
+              }
+            
+              withdraw(_redeemer: Data, _account: Credential, _self: Transaction) {
+                todo @"withdraw logic goes here"
+              }
+            
+              publish(_redeemer: Data, _certificate: Certificate, _self: Transaction) {
+                todo @"publish logic goes here"
+              }
+            
+              vote(_redeemer: Data, _voter: Voter, _self: Transaction) {
+                todo @"vote logic goes here"
+              }
+            
+              propose(_redeemer: Data, _proposal: ProposalProcedure, _self: Transaction) {
+                todo @"propose logic goes here"
+              }
+            }
+            
+        """.trimIndent()
+        Files.writeString(validatorFile, content, StandardCharsets.UTF_8)
     }
 
 }

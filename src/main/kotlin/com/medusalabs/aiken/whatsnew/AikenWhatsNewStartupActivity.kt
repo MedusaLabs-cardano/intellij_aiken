@@ -3,68 +3,146 @@ package com.medusalabs.aiken.whatsnew
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.impl.HTMLEditorProvider
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.StartupActivity
+import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.UIUtil
 import java.awt.Color
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.Locale
 
-class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
-    override fun runActivity(project: Project) {
+private val AIKEN_WHATS_NEW_LOGGER: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
+private val AIKEN_PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
+private const val AIKEN_WHATS_NEW_SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
+private const val AIKEN_WHATS_NEW_TAB_TITLE = "Aiken · What's New"
+private const val AIKEN_WHATS_NEW_LATEST_RESOURCE = "/whatsnew/latest/index.html"
+
+class AikenWhatsNewStartupActivity : ProjectActivity {
+    override suspend fun execute(project: Project) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+
         val currentVersion = currentPluginVersion()
         if (currentVersion.isBlank()) return
-        subscribeToLafChanges(project)
 
         val props = PropertiesComponent.getInstance()
-        val shownVersion = props.getValue(SHOWN_VERSION_KEY)?.trim().orEmpty()
-//        if (shownVersion == currentVersion) return
+        if (props.getValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY) == currentVersion) return
+
+        subscribeToLafChanges(project)
         val html = loadHtml(currentVersion) ?: return
 
         ApplicationManager.getApplication().invokeLater {
             openOrRefreshTab(project, html)
-            props.setValue(SHOWN_VERSION_KEY, currentVersion)
+            props.setValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY, currentVersion)
         }
     }
 
     private fun loadHtml(version: String): String? {
         val escapedVersion = StringUtil.escapeXmlEntities(version)
         val themeVars = buildThemeCssVariables()
-        val template = readResource("/whatsnew/$version.html")
-            ?: readResource("/whatsnew/latest.html")
-            ?: return null
-        return template
+        val versionResourcePath = "/whatsnew/$version/index.html"
+        var baseResourcePath = versionResourcePath
+        var template = readResource(versionResourcePath)
+        if (template == null) {
+            baseResourcePath = AIKEN_WHATS_NEW_LATEST_RESOURCE
+            template = readResource(AIKEN_WHATS_NEW_LATEST_RESOURCE)
+        }
+        template ?: return null
+        val baseResourceDir = baseResourcePath.substringBeforeLast('/', missingDelimiterValue = "")
+        return inlineImageResources(template, baseResourceDir)
             .replace("{{VERSION}}", escapedVersion)
-            .replace("{{IDE_THEME_VARS}}", themeVars)
+            .replace("/*{{IDE_THEME_VARS}}*/", themeVars)
+    }
+
+    private fun inlineImageResources(html: String, baseResourceDir: String): String {
+        val imageSourcePattern = Regex("""(<img\b[^>]*\bsrc=")([^"]+)(")""")
+        return imageSourcePattern.replace(html) { match ->
+            val prefix = match.groupValues[1]
+            val source = match.groupValues[2]
+            val suffix = match.groupValues[3]
+            if (source.startsWith("data:") || source.startsWith("http://") || source.startsWith("https://")) {
+                match.value
+            } else {
+                val resourcePath = resolveResourcePath(baseResourceDir, source)
+                val bytes = readResourceBytes(resourcePath)
+                if (bytes == null) {
+                    AIKEN_WHATS_NEW_LOGGER.warn("Failed to inline What's New image resource: $resourcePath")
+                    match.value
+                } else {
+                    val mimeType = imageMimeType(resourcePath)
+                    val encoded = Base64.getEncoder().encodeToString(bytes)
+                    prefix + "data:$mimeType;base64,$encoded" + suffix
+                }
+            }
+        }
+    }
+
+    private fun resolveResourcePath(baseResourceDir: String, source: String): String {
+        if (source.startsWith('/')) return source
+        val parts = (baseResourceDir.trimEnd('/') + "/" + source).split('/')
+        val normalized = ArrayDeque<String>()
+        for (part in parts) {
+            when (part) {
+                "",
+                "." -> Unit
+                ".." -> if (normalized.isNotEmpty()) normalized.removeLast()
+                else -> normalized.addLast(part)
+            }
+        }
+        return "/" + normalized.joinToString("/")
+    }
+
+    private fun imageMimeType(path: String): String =
+        when (path.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)) {
+            "jpg",
+            "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "webp" -> "image/webp"
+            else -> "image/png"
+        }
+
+    private fun readResourceBytes(path: String): ByteArray? {
+        return try {
+            javaClass.getResourceAsStream(path)?.use { stream ->
+                stream.readBytes()
+            }
+        } catch (t: Throwable) {
+                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                null
+            }
     }
 
     private fun readResource(path: String): String? {
         return try {
-            javaClass.getResourceAsStream(path)?.use { stream ->
-                String(stream.readBytes(), StandardCharsets.UTF_8)
+            readResourceBytes(path)?.let { bytes ->
+                String(bytes, StandardCharsets.UTF_8)
             }
         } catch (t: Throwable) {
-            logger.warn("Failed to read What's New resource: $path", t)
-            null
-        }
+                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                null
+            }
     }
 
     private fun subscribeToLafChanges(project: Project) {
-        ApplicationManager.getApplication().messageBus.connect(project).subscribe(
+        val connection = ApplicationManager.getApplication().messageBus.connect(project.service<AikenWhatsNewListenerDisposable>())
+        connection.subscribe(
             LafManagerListener.TOPIC,
             LafManagerListener {
                 val version = currentPluginVersion().takeIf { it.isNotBlank() } ?: return@LafManagerListener
                 val html = loadHtml(version) ?: return@LafManagerListener
                 ApplicationManager.getApplication().invokeLater {
                     val manager = FileEditorManager.getInstance(project)
-                    if (manager.openFiles.none { it.name == TAB_TITLE }) return@invokeLater
+                    if (manager.openFiles.none { it.name == AIKEN_WHATS_NEW_TAB_TITLE }) return@invokeLater
                     openOrRefreshTab(project, html)
                 }
             }
@@ -74,13 +152,13 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
     private fun openOrRefreshTab(project: Project, html: String) {
         val manager = FileEditorManager.getInstance(project)
         manager.openFiles
-            .filter { it.name == TAB_TITLE }
+            .filter { it.name == AIKEN_WHATS_NEW_TAB_TITLE }
             .forEach { manager.closeFile(it) }
-        HTMLEditorProvider.openEditor(project, TAB_TITLE, html)
+        HTMLEditorProvider.openEditor(project, AIKEN_WHATS_NEW_TAB_TITLE, html)
     }
 
     private fun currentPluginVersion(): String = PluginManagerCore
-        .getPlugin(PLUGIN_ID)
+        .getPlugin(AIKEN_PLUGIN_ID)
         ?.version
         ?.trim()
         .orEmpty()
@@ -93,8 +171,8 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
             JBColor(Color(0xD0, 0xD7, 0xDE), Color(0x55, 0x5A, 0x60))
         )
 
-        val sans = """-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif"""
-        val mono = """"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace"""
+        val sans = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\""
+        val mono = "\"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo"
 
         return buildString {
             appendLine(":root {")
@@ -116,11 +194,9 @@ class AikenWhatsNewStartupActivity : StartupActivity.DumbAware {
         val a = String.format(Locale.US, "%.3f", normalized).trimEnd('0').trimEnd('.')
         return "rgba($red, $green, $blue, $a)"
     }
+}
 
-    private companion object {
-        val logger: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
-        val PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
-        const val SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
-        const val TAB_TITLE = "Aiken · What's New"
-    }
+@Service(Service.Level.PROJECT)
+private class AikenWhatsNewListenerDisposable : Disposable {
+    override fun dispose() = Unit
 }

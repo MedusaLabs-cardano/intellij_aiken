@@ -1,0 +1,17 @@
+package com.medusalabs.aiken.terminal
+
+import com.intellij.openapi.project.Project
+import com.medusalabs.aiken.tooling.AikenNodeToolchain
+import org.jetbrains.plugins.terminal.LocalTerminalCustomizer
+
+class AikenLocalTerminalCustomizer : LocalTerminalCustomizer() {
+    override fun customizeCommandAndEnvironment(
+        project: Project,
+        workingDirectory: String?,
+        command: Array<String>,
+        envs: MutableMap<String, String>
+    ): Array<String> {
+        AikenNodeToolchain.applyProjectLocalAikenToTerminalEnvironment(project, envs)
+        return command
+    }
+}

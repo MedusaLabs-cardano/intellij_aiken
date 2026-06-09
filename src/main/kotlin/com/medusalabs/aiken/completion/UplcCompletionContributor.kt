@@ -6,7 +6,7 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.patterns.PlatformPatterns
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
-import com.medusalabs.aiken.index.UplcIdentifierIndex
+import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
 import com.medusalabs.aiken.lang.UplcLanguage
 
 class UplcCompletionContributor : CompletionContributor(), DumbAware {
@@ -30,7 +30,7 @@ class UplcCompletionContributor : CompletionContributor(), DumbAware {
             CompletionType.BASIC,
             PlatformPatterns.psiElement().withLanguage(UplcLanguage),
             IndexedIdentifierCompletionProvider(
-                indexId = UplcIdentifierIndex.NAME,
+                indexId = UPLC_IDENTIFIER_INDEX_NAME,
                 stopTokenTypes = setOf(UplcTokenTypes.COMMENT, UplcTokenTypes.STRING)
             )
         )

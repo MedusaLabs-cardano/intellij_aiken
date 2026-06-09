@@ -8,10 +8,129 @@ import com.intellij.util.indexing.ID
 import com.intellij.util.io.DataExternalizer
 import com.intellij.util.io.EnumeratorStringDescriptor
 import com.intellij.util.io.KeyDescriptor
+import com.medusalabs.aiken.completion.AikenSyntaxText
 import com.medusalabs.aiken.lang.AikenFileType
+import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 import java.io.DataInput
 import java.io.DataOutput
+
+val AIKEN_FUNCTION_SIGNATURE_INDEX_NAME: ID<String, String> = ID.create("aiken.functionSignatures")
+
+fun aikenFunctionSignatureNameKey(functionName: String): String = "name|$functionName"
+
+fun aikenFunctionSignatureModuleKey(modulePath: String, functionName: String): String =
+    "module|$modulePath|$functionName"
+
+fun aikenFunctionSignatureReturnTypeKey(returnType: String): String = "return|$returnType"
+fun aikenFunctionSignatureGenericReturnAnyKey(): String = "return-generic|any"
+fun aikenFunctionSignatureGenericReturnHeadKey(typeHead: String): String = "return-generic-head|$typeHead"
+
+private const val AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR = '\u001e'
+private const val AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR = '\u001f'
+
+fun encodeAikenFunctionReturnTypeIndexValue(
+    modulePath: String,
+    functionName: String,
+    signature: String
+): String = listOf(modulePath, functionName, signature).joinToString(AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR.toString())
+
+data class AikenFunctionReturnTypeEntry(
+    val modulePath: String,
+    val functionName: String,
+    val signature: String
+)
+
+fun encodeAikenFunctionReturnTypeIndexValues(entries: List<AikenFunctionReturnTypeEntry>): String =
+    entries.joinToString(AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR.toString()) { entry ->
+        encodeAikenFunctionReturnTypeIndexValue(entry.modulePath, entry.functionName, entry.signature)
+    }
+
+fun decodeAikenFunctionReturnTypeIndexValues(value: String): List<AikenFunctionReturnTypeEntry> =
+    value.split(AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR)
+        .mapNotNull { encodedEntry ->
+            val parts = encodedEntry.split(AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR, limit = 3)
+            if (parts.size != 3) return@mapNotNull null
+            val (modulePath, functionName, signature) = parts
+            if (modulePath.isBlank() || functionName.isBlank() || signature.isBlank()) return@mapNotNull null
+            AikenFunctionReturnTypeEntry(modulePath, functionName, signature)
+        }
+
+fun aikenFunctionSignatureReturnType(signature: String): String? {
+    val openParenIndex = signature.indexOf('(')
+    if (openParenIndex < 0) return null
+    val closeParenIndex = AikenSyntaxText.findMatchingDelimiter(signature, openParenIndex, '(', ')') ?: return null
+    if (closeParenIndex < 0 || closeParenIndex >= signature.lastIndex) return null
+    val suffix = signature.substring(closeParenIndex + 1).trim()
+    if (!suffix.startsWith("->")) return null
+    return suffix.removePrefix("->").trim().takeIf { it.isNotEmpty() }
+}
+
+fun aikenFunctionSignatureGenericReturnKeys(returnType: String): Set<String> {
+    val normalizedReturnType = returnType.replace(Regex("\\s+"), " ").trim()
+    if (normalizedReturnType.isEmpty()) return emptySet()
+
+    return when {
+        isGenericTypeVariable(normalizedReturnType) -> setOf(aikenFunctionSignatureGenericReturnAnyKey())
+        hasGenericWildcardArgument(normalizedReturnType) ->
+            genericTypeHead(normalizedReturnType)
+                ?.let { head -> setOf(aikenFunctionSignatureGenericReturnHeadKey(head)) }
+                .orEmpty()
+        else -> emptySet()
+    }
+}
+
+private fun isGenericTypeVariable(typeText: String): Boolean =
+    typeText.isNotEmpty() &&
+        typeText.none { it == '<' || it == '>' || it == ',' || it == '(' || it == ')' || it == '[' || it == ']' || it == '{' || it == '}' || it == '.' || it == '/' || it.isWhitespace() } &&
+        typeText.first().isLowerCase()
+
+private fun genericTypeHead(typeText: String): String? =
+    typeText.substringBefore('<', "").trim().takeIf { it.isNotEmpty() }
+
+private fun hasGenericWildcardArgument(typeText: String): Boolean {
+    val openIndex = typeText.indexOf('<')
+    if (openIndex <= 0 || !typeText.endsWith(">")) return false
+    val inner = typeText.substring(openIndex + 1, typeText.length - 1)
+    val arguments = splitTopLevelTypeArguments(inner) ?: return false
+    return arguments.any { argument ->
+        val normalizedArgument = argument.trim()
+        normalizedArgument.isNotEmpty() &&
+            (isGenericTypeVariable(normalizedArgument) || hasGenericWildcardArgument(normalizedArgument))
+    }
+}
+
+private fun splitTopLevelTypeArguments(text: String): List<String>? {
+    if (text.isBlank()) return emptyList()
+    val result = ArrayList<String>()
+    var angleDepth = 0
+    var parenDepth = 0
+    var bracketDepth = 0
+    var braceDepth = 0
+    var segmentStart = 0
+
+    for (index in text.indices) {
+        when (text[index]) {
+            '<' -> angleDepth++
+            '>' -> angleDepth = (angleDepth - 1).coerceAtLeast(0)
+            '(' -> parenDepth++
+            ')' -> parenDepth = (parenDepth - 1).coerceAtLeast(0)
+            '[' -> bracketDepth++
+            ']' -> bracketDepth = (bracketDepth - 1).coerceAtLeast(0)
+            '{' -> braceDepth++
+            '}' -> braceDepth = (braceDepth - 1).coerceAtLeast(0)
+            ',' ->
+                if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+                    result += text.substring(segmentStart, index).trim()
+                    segmentStart = index + 1
+                }
+        }
+    }
+
+    if (angleDepth != 0 || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0) return null
+    result += text.substring(segmentStart).trim()
+    return result
+}
 
 /**
  * Indexes function signatures across all `.ak` files in a project.
@@ -19,13 +138,9 @@ import java.io.DataOutput
  * This enables Ctrl+P parameter info without LSP support.
  */
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
-    companion object {
-        val NAME: ID<String, String> = ID.create("aiken.functionSignatures")
-    }
+    override fun getName(): ID<String, String> = AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
 
-    override fun getName(): ID<String, String> = NAME
-
-    override fun getVersion(): Int = 1
+    override fun getVersion(): Int = 6
 
     override fun dependsOnFileContent(): Boolean = true
 
@@ -41,7 +156,38 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
     override fun getIndexer(): DataIndexer<String, String, FileContent> =
         DataIndexer { inputData ->
             val text = inputData.contentAsText
-            AikenFunctionSignatureExtractor.extract(text)
+            val modulePath = AikenModulePath.fromFile(inputData.file)
+            val result = LinkedHashMap<String, String>()
+            val returnTypeEntries = LinkedHashMap<String, MutableList<AikenFunctionReturnTypeEntry>>()
+
+            for (entry in AikenFunctionSignatureExtractor.extractEntries(text)) {
+                if (!entry.exported) continue
+                result[aikenFunctionSignatureNameKey(entry.name)] = entry.signature
+                if (!modulePath.isNullOrBlank()) {
+                    result[aikenFunctionSignatureModuleKey(modulePath, entry.name)] = entry.signature
+                    aikenFunctionSignatureReturnType(entry.signature)?.let { returnType ->
+                        returnTypeEntries.getOrPut(returnType) { ArrayList() } +=
+                            AikenFunctionReturnTypeEntry(modulePath, entry.name, entry.signature)
+                        for (genericKey in aikenFunctionSignatureGenericReturnKeys(returnType)) {
+                            returnTypeEntries.getOrPut(genericKey) { ArrayList() } +=
+                                AikenFunctionReturnTypeEntry(modulePath, entry.name, entry.signature)
+                        }
+                    }
+                }
+            }
+
+            for ((returnTypeOrGenericKey, entries) in returnTypeEntries) {
+                val key =
+                    if (returnTypeOrGenericKey.startsWith("return-generic|")) {
+                        returnTypeOrGenericKey
+                    } else {
+                        aikenFunctionSignatureReturnTypeKey(returnTypeOrGenericKey)
+                    }
+                result[key] =
+                    encodeAikenFunctionReturnTypeIndexValues(entries)
+            }
+
+            result
         }
 
     private object StringExternalizer : DataExternalizer<String> {
@@ -52,4 +198,3 @@ class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
         override fun read(input: DataInput): String = input.readUTF()
     }
 }
-

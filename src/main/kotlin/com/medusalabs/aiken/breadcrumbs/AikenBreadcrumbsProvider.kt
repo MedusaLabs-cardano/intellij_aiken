@@ -18,6 +18,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
 
     override fun acceptElement(element: PsiElement): Boolean {
         if (element is AikenBreadcrumbElement) return true
+        if (element is PsiFile) return false
         val file = element.containingFile ?: return false
         return file.fileType == AikenFileType
     }
@@ -30,6 +31,7 @@ class AikenBreadcrumbsProvider : BreadcrumbsProvider {
 
     override fun getParent(element: PsiElement): PsiElement? {
         if (element is AikenBreadcrumbElement) return element.parentElement
+        if (element is PsiFile) return null
         val file = element.containingFile ?: return null
         if (file.fileType != AikenFileType) return null
 

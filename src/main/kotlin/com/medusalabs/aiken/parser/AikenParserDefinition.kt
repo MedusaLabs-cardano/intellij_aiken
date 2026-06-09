@@ -16,25 +16,23 @@ import com.medusalabs.aiken.lang.AikenLanguage
 import com.medusalabs.aiken.psi.AikenNamedElement
 import com.medusalabs.aiken.psi.AikenPsiFile
 
-class AikenParserDefinition : ParserDefinition {
-    companion object {
-        val FILE: IFileElementType = IFileElementType(AikenLanguage)
-        private val WHITESPACE: TokenSet = TokenSet.create(TokenType.WHITE_SPACE, AikenTokenTypes.WHITESPACE)
-        private val COMMENTS: TokenSet = TokenSet.create(AikenTokenTypes.COMMENT)
-        private val STRINGS: TokenSet = TokenSet.create(AikenTokenTypes.STRING)
-    }
+val AIKEN_FILE_ELEMENT_TYPE: IFileElementType = IFileElementType(AikenLanguage)
+private val AIKEN_WHITESPACE_TOKENS: TokenSet = TokenSet.create(TokenType.WHITE_SPACE, AikenTokenTypes.WHITESPACE)
+private val AIKEN_COMMENT_TOKENS: TokenSet = TokenSet.create(AikenTokenTypes.COMMENT)
+private val AIKEN_STRING_TOKENS: TokenSet = TokenSet.create(AikenTokenTypes.STRING)
 
+class AikenParserDefinition : ParserDefinition {
     override fun createLexer(project: Project?): Lexer = AikenLexing.createLexer()
 
     override fun createParser(project: Project?) = FlatPsiParser()
 
-    override fun getFileNodeType(): IFileElementType = FILE
+    override fun getFileNodeType(): IFileElementType = AIKEN_FILE_ELEMENT_TYPE
 
-    override fun getWhitespaceTokens(): TokenSet = WHITESPACE
+    override fun getWhitespaceTokens(): TokenSet = AIKEN_WHITESPACE_TOKENS
 
-    override fun getCommentTokens(): TokenSet = COMMENTS
+    override fun getCommentTokens(): TokenSet = AIKEN_COMMENT_TOKENS
 
-    override fun getStringLiteralElements(): TokenSet = STRINGS
+    override fun getStringLiteralElements(): TokenSet = AIKEN_STRING_TOKENS
 
     override fun createElement(node: ASTNode): PsiElement =
         when (node.elementType) {

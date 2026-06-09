@@ -1,0 +1,566 @@
+package com.medusalabs.aiken.completion
+
+import com.intellij.codeInsight.AutoPopupController
+import com.intellij.codeInsight.completion.InsertionContext
+import com.intellij.codeInsight.lookup.LookupElement
+import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.util.TextRange
+import com.medusalabs.aiken.index.aikenFunctionSignatureReturnType
+
+internal object AikenTypedLookupFactory {
+    internal data class FunctionCallTemplate(
+        val text: String,
+        val caretOffset: Int?,
+        val shouldTriggerAutoPopup: Boolean
+    )
+
+    private data class StandardLookupSpec(
+        val text: String,
+        val kind: CompletionSymbolKind,
+        val typeText: String,
+        val insertionFamily: AikenTypedInsertionFamily,
+        val rankingCategory: AikenTypedCompletionCategory? = null,
+        val matchDistance: Int = 0,
+        val scopeDistance: Int = Int.MAX_VALUE,
+        val tailText: String? = null,
+        val lookupStrings: Set<String> = emptySet(),
+        val bold: Boolean = false
+    )
+
+    fun createTypeDirectedLookup(
+        text: String,
+        kind: CompletionSymbolKind,
+        typeText: String
+    ): LookupElement =
+        createStandardLookup(
+            StandardLookupSpec(
+                text = text,
+                kind = kind,
+                typeText = typeText,
+                insertionFamily = AikenTypedInsertionFamily.ReplaceIdentifier(text),
+                bold = kind == CompletionSymbolKind.KEYWORD
+            )
+        )
+
+    fun createConstructibleLookup(
+        constructible: AikenTypedExpectedTypeCandidate.Constructible,
+        typeText: String
+    ): LookupElement =
+            AikenCompletionSorting.annotateTyped(
+                if (
+                    constructible.autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL &&
+                    !constructible.modulePath.isNullOrBlank()
+                ) {
+                AikenConstructibleCompletionSupport.createAutoImportedLookup(constructible.toCompletionInfo(), typeText = typeText)
+                } else {
+                    AikenConstructibleCompletionSupport.createVisibleLookup(constructible.toCompletionInfo(), typeText = typeText)
+                },
+                AikenTypedCompletionCategory.CONSTRUCTIBLE,
+                constructible.matchDistance,
+                constructible.scopeDistance()
+            )
+
+    fun createAutoImportedConstructibleLookup(
+        constructible: AikenTypedExpectedTypeCandidate.Constructible,
+        typeText: String
+    ): LookupElement =
+        AikenCompletionSorting.annotateTyped(
+            AikenConstructibleCompletionSupport.createAutoImportedLookup(constructible.toCompletionInfo(), typeText = typeText),
+            AikenTypedCompletionCategory.CONSTRUCTIBLE,
+            constructible.matchDistance,
+            constructible.scopeDistance()
+        )
+
+    internal fun expectedTypeRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier ->
+                when (candidate.source) {
+                    AikenTypedCandidateSource.EXTRA -> AikenTypedCompletionCategory.EXTRA
+                    AikenTypedCandidateSource.RECORD_SIBLING_FIELD -> AikenTypedCompletionCategory.EXTRA
+                    AikenTypedCandidateSource.BINDING -> AikenTypedCompletionCategory.LOCAL_BINDING
+                    AikenTypedCandidateSource.CONST ->
+                        when (candidate.origin) {
+                            AikenTypedCandidateOrigin.LOCAL -> AikenTypedCompletionCategory.LOCAL_CONST
+                            AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_CONST
+                            AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_CONST
+                            else -> AikenTypedCompletionCategory.OTHER
+                        }
+                    AikenTypedCandidateSource.BUILTIN_INVARIANT -> AikenTypedCompletionCategory.BUILTIN_INVARIANT
+                    else -> AikenTypedCompletionCategory.OTHER
+                }
+            is AikenTypedExpectedTypeCandidate.Function ->
+                when (candidate.origin) {
+                    AikenTypedCandidateOrigin.LOCAL -> AikenTypedCompletionCategory.LOCAL_FUNCTION
+                    AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_FUNCTION
+                    AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_FUNCTION
+                    else -> AikenTypedCompletionCategory.OTHER
+                }
+            is AikenTypedExpectedTypeCandidate.ListLiteral -> AikenTypedCompletionCategory.LIST_LITERAL
+            is AikenTypedExpectedTypeCandidate.OptionSome -> AikenTypedCompletionCategory.OPTION_SOME
+            is AikenTypedExpectedTypeCandidate.Constructible -> AikenTypedCompletionCategory.CONSTRUCTIBLE
+            is AikenTypedExpectedTypeCandidate.PipeFunction -> error("Unsupported expected-type candidate: $candidate")
+        }
+
+    internal fun spreadRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier -> expectedTypeRankingCategory(candidate)
+            else -> error("Unsupported spread candidate: $candidate")
+        }
+
+    internal fun pipeRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.PipeFunction ->
+                when (candidate.origin) {
+                    AikenTypedCandidateOrigin.LOCAL -> AikenTypedCompletionCategory.LOCAL_FUNCTION
+                    AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_FUNCTION
+                    AikenTypedCandidateOrigin.QUALIFIED -> AikenTypedCompletionCategory.QUALIFIED_FUNCTION
+                    AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_FUNCTION
+                    else -> AikenTypedCompletionCategory.OTHER
+                }
+            else -> error("Unsupported pipe candidate: $candidate")
+        }
+
+    internal fun expectedTypeInsertionFamily(candidate: AikenTypedExpectedTypeCandidate): AikenTypedInsertionFamily =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier ->
+                AikenTypedInsertionFamily.ReplaceIdentifier(
+                    text = candidate.name,
+                    autoImportTarget = candidate.autoImportTarget()
+                )
+            is AikenTypedExpectedTypeCandidate.Function ->
+                AikenTypedInsertionFamily.FunctionCall(
+                    name = candidate.name,
+                    signature = candidate.signature,
+                    autoImportTarget = candidate.autoImportTarget()
+                )
+            is AikenTypedExpectedTypeCandidate.ListLiteral ->
+                AikenTypedInsertionFamily.ListLiteral
+            is AikenTypedExpectedTypeCandidate.OptionSome ->
+                AikenTypedInsertionFamily.OptionSome
+            is AikenTypedExpectedTypeCandidate.Constructible,
+            is AikenTypedExpectedTypeCandidate.PipeFunction ->
+                error("Unsupported expected-type candidate: $candidate")
+        }
+
+    internal fun spreadInsertionFamily(candidate: AikenTypedExpectedTypeCandidate): AikenTypedInsertionFamily =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier ->
+                AikenTypedInsertionFamily.SpreadIdentifier(
+                    text = candidate.name,
+                    autoImportTarget = candidate.autoImportTarget()
+                )
+            else -> error("Unsupported spread candidate: $candidate")
+        }
+
+    internal fun pipeInsertionFamily(candidate: AikenTypedExpectedTypeCandidate): AikenTypedInsertionFamily =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.PipeFunction ->
+                AikenTypedInsertionFamily.PipeCall(
+                    lookupText = candidate.lookupText,
+                    signature = candidate.signature,
+                    autoImportTarget = candidate.autoImportTarget(candidate.lookupText)
+                )
+            else -> error("Unsupported pipe candidate: $candidate")
+        }
+
+    fun createExpectedTypeLookup(
+        candidate: AikenTypedExpectedTypeCandidate,
+        expectedType: String
+    ): LookupElement =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = candidate.name,
+                        kind = candidate.kind,
+                        typeText = candidate.type,
+                        insertionFamily = expectedTypeInsertionFamily(candidate),
+                        rankingCategory = expectedTypeRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
+                        tailText = candidate.autoImportTailText(),
+                        bold = candidate.kind == CompletionSymbolKind.KEYWORD
+                    )
+                )
+            is AikenTypedExpectedTypeCandidate.Function ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = candidate.name,
+                        kind = CompletionSymbolKind.FUNCTION,
+                        typeText = functionPresentationType(candidate.signature, expectedType),
+                        insertionFamily = expectedTypeInsertionFamily(candidate),
+                        rankingCategory = expectedTypeRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
+                        tailText = candidate.autoImportTailText()
+                    )
+                )
+            is AikenTypedExpectedTypeCandidate.ListLiteral ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = "[]",
+                        kind = CompletionSymbolKind.TYPE,
+                        typeText = expectedType,
+                        insertionFamily = expectedTypeInsertionFamily(candidate),
+                        rankingCategory = expectedTypeRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance()
+                    )
+                )
+            is AikenTypedExpectedTypeCandidate.OptionSome ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = "Some()",
+                        kind = CompletionSymbolKind.TYPE,
+                        typeText = expectedType,
+                        insertionFamily = expectedTypeInsertionFamily(candidate),
+                        rankingCategory = expectedTypeRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance()
+                    )
+                )
+            is AikenTypedExpectedTypeCandidate.Constructible ->
+                if (
+                    candidate.autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL &&
+                    !candidate.modulePath.isNullOrBlank()
+                ) {
+                    createAutoImportedConstructibleLookup(candidate, expectedType)
+                } else {
+                    createConstructibleLookup(candidate, expectedType)
+                }
+            is AikenTypedExpectedTypeCandidate.PipeFunction ->
+                error("Unsupported expected-type candidate: $candidate")
+        }
+
+    fun createSpreadLookup(
+        candidate: AikenTypedExpectedTypeCandidate,
+        expectedType: String
+    ): LookupElement =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.Identifier ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = candidate.name,
+                        kind = candidate.kind,
+                        typeText = expectedType,
+                        insertionFamily = spreadInsertionFamily(candidate),
+                        rankingCategory = spreadRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
+                        tailText = candidate.autoImportTailText(),
+                        bold = candidate.kind == CompletionSymbolKind.KEYWORD
+                    )
+                )
+            else -> error("Unsupported spread candidate: $candidate")
+        }
+
+    fun createPipeLookup(candidate: AikenTypedExpectedTypeCandidate): LookupElement =
+        when (candidate) {
+            is AikenTypedExpectedTypeCandidate.PipeFunction ->
+                createStandardLookup(
+                    StandardLookupSpec(
+                        text = candidate.lookupText,
+                        kind = CompletionSymbolKind.FUNCTION,
+                        typeText = functionPresentationType(candidate.signature),
+                        insertionFamily = pipeInsertionFamily(candidate),
+                        rankingCategory = pipeRankingCategory(candidate),
+                        matchDistance = candidate.matchDistance,
+                        scopeDistance = candidate.scopeDistance(),
+                        tailText = candidate.autoImportTailText(),
+                        lookupStrings =
+                            if (candidate.origin == AikenTypedCandidateOrigin.QUALIFIED) {
+                                setOf(candidate.matchName)
+                            } else {
+                                emptySet()
+                            }
+                    )
+                )
+            else -> error("Unsupported pipe candidate: $candidate")
+        }
+
+    private fun createStandardLookup(spec: StandardLookupSpec): LookupElement {
+        val lookupIdentity =
+            buildString {
+                append(spec.text)
+                append('\u0000')
+                append(spec.kind.name)
+                append('\u0000')
+                append(spec.typeText)
+                append('\u0000')
+                append(spec.tailText.orEmpty())
+                append('\u0000')
+                append(spec.insertionFamily::class.simpleName.orEmpty())
+            }
+        var builder =
+            LookupElementBuilder
+                .create(lookupIdentity, spec.text)
+                .withIcon(iconFor(spec.kind))
+                .withTypeText(spec.typeText, true)
+                .withBoldness(spec.bold)
+                .withInsertHandler { insertionContext, _ ->
+                    applyInsertionFamily(insertionContext, spec.insertionFamily)
+                }
+
+        if (spec.lookupStrings.isNotEmpty()) {
+            builder = builder.withLookupStrings(spec.lookupStrings)
+        }
+        if (spec.tailText != null) {
+            builder = builder.withTailText(spec.tailText, true)
+        }
+
+        return if (spec.rankingCategory != null) {
+            val lookup = builder
+            AikenCompletionSorting.annotateTyped(lookup, spec.rankingCategory, spec.matchDistance, spec.scopeDistance)
+        } else {
+            builder
+        }
+    }
+
+    private fun functionPresentationType(
+        signature: String,
+        fallbackType: String = ""
+    ): String =
+        AikenTypeText.normalizeGenericVariablesForDisplay(
+            aikenFunctionSignatureReturnType(signature).orEmpty().ifBlank { fallbackType }
+        )
+
+    private fun applyInsertionFamily(
+        insertionContext: InsertionContext,
+        insertionFamily: AikenTypedInsertionFamily
+    ) {
+        AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+        when (insertionFamily) {
+            is AikenTypedInsertionFamily.ReplaceIdentifier -> {
+                replaceCurrentIdentifierPrefix(insertionContext, insertionFamily.text)
+                insertionContext.commitDocument()
+                schedulePostInsert(insertionContext, insertionFamily.autoImportTarget, shouldTriggerAutoPopup = false)
+            }
+            is AikenTypedInsertionFamily.SpreadIdentifier -> {
+                normalizeSpreadInsertion(insertionContext, insertionFamily.text)
+                insertionContext.commitDocument()
+                schedulePostInsert(insertionContext, insertionFamily.autoImportTarget, shouldTriggerAutoPopup = false)
+            }
+            is AikenTypedInsertionFamily.FunctionCall -> {
+                val callTemplate = functionCallTemplate(insertionFamily.name, insertionFamily.signature)
+                val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, callTemplate.text)
+                callTemplate.caretOffset?.let { caretOffset ->
+                    insertionContext.editor.caretModel.moveToOffset(insertedOffset + caretOffset)
+                }
+                insertionContext.commitDocument()
+                schedulePostInsert(
+                    insertionContext,
+                    insertionFamily.autoImportTarget,
+                    shouldTriggerAutoPopup = callTemplate.shouldTriggerAutoPopup
+                )
+            }
+            is AikenTypedInsertionFamily.PipeCall -> {
+                val callTemplate = pipeFunctionCallTemplate(insertionFamily.lookupText, insertionFamily.signature)
+                val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, callTemplate.text)
+                callTemplate.caretOffset?.let { caretOffset ->
+                    insertionContext.editor.caretModel.moveToOffset(insertedOffset + caretOffset)
+                }
+                insertionContext.commitDocument()
+                schedulePostInsert(
+                    insertionContext,
+                    insertionFamily.autoImportTarget,
+                    shouldTriggerAutoPopup = callTemplate.shouldTriggerAutoPopup
+                )
+            }
+            AikenTypedInsertionFamily.ListLiteral -> {
+                val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, "[]")
+                insertionContext.editor.caretModel.moveToOffset(insertedOffset + 1)
+                insertionContext.commitDocument()
+                AutoPopupController.getInstance(insertionContext.project).scheduleAutoPopup(insertionContext.editor)
+            }
+            AikenTypedInsertionFamily.OptionSome -> {
+                val insertedOffset = replaceCurrentIdentifierPrefix(insertionContext, "Some()")
+                insertionContext.editor.caretModel.moveToOffset(insertedOffset + "Some(".length)
+                insertionContext.commitDocument()
+                AutoPopupController.getInstance(insertionContext.project).scheduleAutoPopup(insertionContext.editor)
+            }
+        }
+    }
+
+    private fun schedulePostInsert(
+        insertionContext: InsertionContext,
+        autoImportTarget: AikenTypedAutoImportTarget?,
+        shouldTriggerAutoPopup: Boolean
+    ) {
+        if (autoImportTarget == null) {
+            if (shouldTriggerAutoPopup) {
+                AutoPopupController.getInstance(insertionContext.project).scheduleAutoPopup(insertionContext.editor)
+            }
+            return
+        }
+
+        val previousLaterRunnable = insertionContext.laterRunnable
+        insertionContext.setLaterRunnable {
+            previousLaterRunnable?.run()
+            WriteCommandAction.runWriteCommandAction(insertionContext.project) {
+                insertStandaloneUseImport(
+                    insertionContext.document,
+                    autoImportTarget.modulePath,
+                    autoImportTarget.symbolName
+                )
+                insertionContext.commitDocument()
+            }
+            if (shouldTriggerAutoPopup) {
+                AutoPopupController.getInstance(insertionContext.project).scheduleAutoPopup(insertionContext.editor)
+            }
+        }
+    }
+
+    internal fun functionCallTemplate(name: String, signature: String): FunctionCallTemplate {
+        val parameters = AikenFunctionSignatureText.parameters(signature)
+        if (parameters.isEmpty()) {
+            return FunctionCallTemplate(
+                text = "$name()",
+                caretOffset = null,
+                shouldTriggerAutoPopup = false
+            )
+        }
+
+        return FunctionCallTemplate(
+            text = "$name()",
+            caretOffset = name.length + 1,
+            shouldTriggerAutoPopup = !isBareGenericTypeParameter(parameters.firstOrNull()?.type)
+        )
+    }
+
+    internal fun pipeFunctionCallTemplate(lookupText: String, signature: String): FunctionCallTemplate {
+        val remainingParameters = AikenFunctionSignatureText.parameters(signature).drop(1)
+        if (remainingParameters.isEmpty()) {
+            return FunctionCallTemplate(
+                text = lookupText,
+                caretOffset = null,
+                shouldTriggerAutoPopup = false
+            )
+        }
+
+        return FunctionCallTemplate(
+            text = "$lookupText()",
+            caretOffset = lookupText.length + 1,
+            shouldTriggerAutoPopup = !isBareGenericTypeParameter(remainingParameters.firstOrNull()?.type)
+        )
+    }
+
+    internal fun isBareGenericTypeParameter(typeText: String?): Boolean {
+        val normalized = typeText?.trim().orEmpty()
+        if (normalized.isEmpty()) return false
+        return normalized.matches(Regex("[a-z][A-Za-z0-9_]*"))
+    }
+
+    private fun AikenTypedExpectedTypeCandidate.autoImportTailText(): String? =
+        modulePath?.takeIf { autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL }?.let { " from $it" }
+
+    private fun AikenTypedExpectedTypeCandidate.autoImportTarget(symbolName: String = autoImportSymbolName()): AikenTypedAutoImportTarget? =
+        modulePath
+            ?.takeIf { autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL }
+            ?.let { AikenTypedAutoImportTarget(it, symbolName) }
+
+    private fun AikenTypedExpectedTypeCandidate.autoImportSymbolName(): String =
+        when (this) {
+            is AikenTypedExpectedTypeCandidate.Identifier -> name
+            is AikenTypedExpectedTypeCandidate.Function -> name
+            is AikenTypedExpectedTypeCandidate.PipeFunction -> lookupText
+            is AikenTypedExpectedTypeCandidate.Constructible -> name
+            AikenTypedExpectedTypeCandidate.ListLiteral -> "[]"
+            AikenTypedExpectedTypeCandidate.OptionSome -> "Some()"
+        }
+
+    private fun AikenTypedExpectedTypeCandidate.Constructible.toCompletionInfo(): AikenConstructibleCompletionSupport.AikenConstructibleCompletionInfo =
+        AikenConstructibleCompletionSupport.AikenConstructibleCompletionInfo(
+            name = name,
+            resultType = resultType,
+            fields = fields,
+            supportsNamedSyntax = supportsNamedSyntax,
+            modulePath = modulePath,
+            needsImport = autoImportMode == AikenTypedCandidateAutoImportMode.SYMBOL
+        )
+
+    private fun replaceCurrentIdentifierPrefix(
+        insertionContext: InsertionContext,
+        replacementText: String
+    ): Int {
+        val document = insertionContext.document
+        val chars = document.charsSequence
+        var replaceStart = insertionContext.startOffset.coerceIn(0, chars.length)
+        while (replaceStart > 0 && isIdentifierChar(chars[replaceStart - 1])) {
+            replaceStart--
+        }
+        document.replaceString(replaceStart, insertionContext.tailOffset, replacementText)
+        return replaceStart
+    }
+
+    private fun normalizeSpreadInsertion(
+        insertionContext: InsertionContext,
+        insertedText: String
+    ) {
+        val document = insertionContext.document
+        val text = document.charsSequence
+        val insertedStart = insertionContext.startOffset.coerceIn(0, text.length)
+        val insertedEnd = insertionContext.tailOffset.coerceIn(insertedStart, text.length)
+        if (insertedEnd <= insertedStart) return
+
+        var normalizedStart = insertedStart
+        while (normalizedStart > 0 && isIdentifierChar(text[normalizedStart - 1])) {
+            normalizedStart--
+        }
+        if (normalizedStart < insertedStart) {
+            document.replaceString(normalizedStart, insertedEnd, insertedText)
+        } else {
+            val insertedRangeEnd = (insertedStart + insertedText.length).coerceAtMost(document.textLength)
+            if (insertedRangeEnd <= insertedStart || document.getText(TextRange(insertedStart, insertedRangeEnd)) != insertedText) {
+                normalizedStart = replaceCurrentIdentifierPrefix(insertionContext, insertedText)
+            }
+        }
+
+        val refreshedText = document.charsSequence
+        val normalizedEnd = (normalizedStart + insertedText.length).coerceAtMost(document.textLength)
+        val duplicateEnd = normalizedEnd + insertedText.length
+        if (
+            duplicateEnd <= document.textLength &&
+            document.getText(TextRange(normalizedEnd, duplicateEnd)) == insertedText &&
+            isCompletionBoundary(refreshedText.getOrNull(duplicateEnd))
+        ) {
+            document.deleteString(normalizedEnd, duplicateEnd)
+            insertionContext.editor.caretModel.moveToOffset(normalizedEnd)
+            return
+        }
+
+        var nextIndex = normalizedEnd
+        while (nextIndex < refreshedText.length && refreshedText[nextIndex].isWhitespace()) {
+            nextIndex++
+        }
+        val nextChar = refreshedText.getOrNull(nextIndex)
+        if (nextChar != null && !isCompletionBoundary(nextChar)) {
+            document.insertString(normalizedEnd, ", ")
+        }
+        insertionContext.editor.caretModel.moveToOffset(normalizedEnd)
+    }
+
+    private fun insertStandaloneUseImport(
+        document: com.intellij.openapi.editor.Document,
+        modulePath: String,
+        symbolName: String
+    ) {
+        val useLine = "use $modulePath.{$symbolName}"
+        document.insertString(0, "$useLine\n")
+    }
+
+    private fun iconFor(kind: CompletionSymbolKind) =
+        when (kind) {
+            CompletionSymbolKind.KEYWORD -> AllIcons.Nodes.Static
+            CompletionSymbolKind.TYPE -> AllIcons.Nodes.Class
+            CompletionSymbolKind.FUNCTION -> AllIcons.Nodes.Method
+            CompletionSymbolKind.FIELD -> AllIcons.Nodes.Field
+            CompletionSymbolKind.IDENTIFIER -> AllIcons.Nodes.Variable
+        }
+
+    private fun isCompletionBoundary(char: Char?): Boolean =
+        char == null || char.isWhitespace() || char == ',' || char == ']' || char == ')' || char == '}'
+
+    private fun isIdentifierChar(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '_'
+}

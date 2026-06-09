@@ -170,10 +170,11 @@ class AikenFoldingBuilder : BalancedPairFoldingBuilder(
         if (beforeI >= lineStart && (text[beforeI].isLetterOrDigit() || text[beforeI] == '_')) return false
 
         // And somewhere earlier on the same line, the word "when".
-        return containsWord(text, lineStart, i - 1, "when")
+        return containsWhenWord(text, lineStart, i - 1)
     }
 
-    private fun containsWord(text: CharSequence, start: Int, endExclusive: Int, word: String): Boolean {
+    private fun containsWhenWord(text: CharSequence, start: Int, endExclusive: Int): Boolean {
+        val word = "when"
         if (endExclusive - start < word.length) return false
 
         var i = start

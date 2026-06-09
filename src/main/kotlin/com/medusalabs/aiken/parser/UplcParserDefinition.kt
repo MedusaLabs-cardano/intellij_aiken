@@ -16,25 +16,23 @@ import com.medusalabs.aiken.lang.UplcLanguage
 import com.medusalabs.aiken.psi.UplcNamedElement
 import com.medusalabs.aiken.psi.UplcPsiFile
 
-class UplcParserDefinition : ParserDefinition {
-    companion object {
-        val FILE: IFileElementType = IFileElementType(UplcLanguage)
-        private val WHITESPACE: TokenSet = TokenSet.create(TokenType.WHITE_SPACE, UplcTokenTypes.WHITESPACE)
-        private val COMMENTS: TokenSet = TokenSet.create(UplcTokenTypes.COMMENT)
-        private val STRINGS: TokenSet = TokenSet.create(UplcTokenTypes.STRING)
-    }
+val UPLC_FILE_ELEMENT_TYPE: IFileElementType = IFileElementType(UplcLanguage)
+private val UPLC_WHITESPACE_TOKENS: TokenSet = TokenSet.create(TokenType.WHITE_SPACE, UplcTokenTypes.WHITESPACE)
+private val UPLC_COMMENT_TOKENS: TokenSet = TokenSet.create(UplcTokenTypes.COMMENT)
+private val UPLC_STRING_TOKENS: TokenSet = TokenSet.create(UplcTokenTypes.STRING)
 
+class UplcParserDefinition : ParserDefinition {
     override fun createLexer(project: Project?): Lexer = UplcLexing.createLexer()
 
     override fun createParser(project: Project?) = FlatPsiParser()
 
-    override fun getFileNodeType(): IFileElementType = FILE
+    override fun getFileNodeType(): IFileElementType = UPLC_FILE_ELEMENT_TYPE
 
-    override fun getWhitespaceTokens(): TokenSet = WHITESPACE
+    override fun getWhitespaceTokens(): TokenSet = UPLC_WHITESPACE_TOKENS
 
-    override fun getCommentTokens(): TokenSet = COMMENTS
+    override fun getCommentTokens(): TokenSet = UPLC_COMMENT_TOKENS
 
-    override fun getStringLiteralElements(): TokenSet = STRINGS
+    override fun getStringLiteralElements(): TokenSet = UPLC_STRING_TOKENS
 
     override fun createElement(node: ASTNode): PsiElement =
         when (node.elementType) {

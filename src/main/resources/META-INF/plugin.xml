@@ -10,14 +10,17 @@
         <li>Syntax highlighting</li>
         <li>Auto-formatting</li>
         <li>Full project indexing and navigation, including <code>std_lib</code></li>
+        <li><code>Go to Symbol</code> and structure view for top-level Aiken declarations</li>
         <li>Sticky lines / breadcrumbs for scope awareness</li>
         <li>Integrated suggestions (completion)</li>
       </ul>
-    ]]></description>
+	    ]]></description>
+    <resource-bundle>messages.AikenBundle</resource-bundle>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lang</depends>
     <depends>com.intellij.modules.lsp</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <fileType name="Aiken" language="Aiken" extensions="ak" implementationClass="com.medusalabs.aiken.lang.AikenFileType" fieldName="INSTANCE"/>
@@ -44,28 +47,44 @@
 
         <completion.contributor language="Aiken" implementationClass="com.medusalabs.aiken.completion.AikenCompletionContributor"/>
         <completion.contributor language="UPLC" implementationClass="com.medusalabs.aiken.completion.UplcCompletionContributor"/>
+        <typedHandler implementation="com.medusalabs.aiken.completion.AikenCompletionAutoPopupTypedHandler"/>
 
         <postStartupActivity implementation="com.medusalabs.aiken.lsp.AikenLspDiagnosticsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.project.AikenGitVcsMappingStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.project.AikenNodeEnvironmentStartupActivity"/>
+        <postStartupActivity implementation="com.medusalabs.aiken.project.AikenRunConfigurationsStartupActivity"/>
         <postStartupActivity implementation="com.medusalabs.aiken.whatsnew.AikenWhatsNewStartupActivity"/>
         <projectViewNodeDecorator implementation="com.medusalabs.aiken.lsp.AikenProjectViewDiagnosticsDecorator"/>
 
         <codeInsight.parameterInfo language="Aiken" implementationClass="com.medusalabs.aiken.parameterinfo.AikenParameterInfoHandler"/>
-
         <renamePsiElementProcessor implementation="com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor"/>
 
         <findUsagesHandlerFactory implementation="com.medusalabs.aiken.usages.AikenFindUsagesHandlerFactory"/>
+        <usageGroupingRuleProvider implementation="com.medusalabs.aiken.usages.AikenDeclarationUsageGroupingRuleProvider"/>
+        <useScopeEnlarger implementation="com.medusalabs.aiken.search.AikenUseScopeEnlarger"/>
         <lang.findUsagesProvider language="Aiken" implementationClass="com.medusalabs.aiken.usages.AikenFindUsagesProvider"/>
         <lang.findUsagesProvider language="UPLC" implementationClass="com.medusalabs.aiken.usages.UplcFindUsagesProvider"/>
-
+        <gotoSymbolContributor implementation="com.medusalabs.aiken.navigation.AikenGotoSymbolContributor"/>
+        <lang.psiStructureViewFactory language="Aiken" implementationClass="com.medusalabs.aiken.structure.AikenStructureViewFactory"/>
         <gotoDeclarationHandler implementation="com.medusalabs.aiken.navigation.AikenGotoDeclarationHandler"/>
+
         <gotoTargetPresentationProvider implementation="com.medusalabs.aiken.navigation.AikenGotoTargetPresentationProvider" order="first"/>
         <configurationType implementation="com.medusalabs.aiken.run.AikenRunConfigurationType"/>
         <newProjectWizard.languageGenerator implementation="com.medusalabs.aiken.project.AikenNewProjectWizard"/>
+        <projectConfigurable id="aiken.toolchain.settings"
+                             groupId="tools"
+                             bundle="messages.AikenBundle"
+                             key="aiken.settings.toolchain.display.name"
+                             instance="com.medusalabs.aiken.tooling.AikenToolchainConfigurable"
+                             nonDefaultProject="true"/>
 
-        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenIdentifierIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenImportIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenModuleIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenExportIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenFunctionSignatureIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenConstTypeIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenConstructibleIndex"/>
+        <fileBasedIndex implementation="com.medusalabs.aiken.index.AikenTopLevelSymbolIndex"/>
         <fileBasedIndex implementation="com.medusalabs.aiken.index.UplcIdentifierIndex"/>
 
         <indexedRootsProvider implementation="com.medusalabs.aiken.index.AikenBuildIndexableSetContributor"/>
@@ -80,6 +99,27 @@
 
         <!-- LSP integration -->
         <platform.lsp.serverSupportProvider implementation="com.medusalabs.aiken.lsp.AikenLspServerSupportProvider"/>
+
+        <intentionAction>
+            <language>Aiken</language>
+            <className>com.medusalabs.aiken.lsp.AikenRemoveAllUnusedImportsIntention</className>
+            <categoryKey>aiken.intentions.category</categoryKey>
+        </intentionAction>
+
+        <intentionAction>
+            <language>Aiken</language>
+            <className>com.medusalabs.aiken.lsp.AikenRemoveUnusedImportIntention</className>
+            <categoryKey>aiken.intentions.category</categoryKey>
+        </intentionAction>
+
+        <notificationGroup id="aiken.toolchain.notifications"
+                           displayType="BALLOON"
+                           bundle="messages.AikenBundle"
+                           key="aiken.notification.group.toolchain"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="org.jetbrains.plugins.terminal">
+        <localTerminalCustomizer implementation="com.medusalabs.aiken.terminal.AikenLocalTerminalCustomizer"/>
     </extensions>
 
     <applicationListeners>
@@ -87,11 +127,9 @@
                   topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
     </applicationListeners>
 
-    <actions>
+    <actions resource-bundle="messages.AikenBundle">
         <action id="com.medusalabs.aiken.actions.AikenNewFileAction"
                 class="com.medusalabs.aiken.actions.AikenNewFileAction"
-                text="Aiken File"
-                description="Create a new Aiken file"
                 icon="/icons/aiken.png">
             <add-to-group group-id="NewGroup" anchor="last"/>
         </action>

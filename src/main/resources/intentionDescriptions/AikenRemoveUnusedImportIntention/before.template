@@ -1,0 +1,5 @@
+use aiken/collection/list.{map}
+
+fn main() {
+  1
+}

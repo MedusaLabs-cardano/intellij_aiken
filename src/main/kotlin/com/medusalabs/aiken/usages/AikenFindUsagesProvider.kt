@@ -9,26 +9,25 @@ import com.intellij.psi.tree.TokenSet
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 
-class AikenFindUsagesProvider : FindUsagesProvider {
-    companion object {
-        private val IDENTIFIERS: TokenSet =
-            TokenSet.create(
-                AikenTokenTypes.IDENTIFIER,
-                AikenTokenTypes.TYPE,
-                AikenTokenTypes.FUNCTION,
-                AikenTokenTypes.FIELD
-            )
-        private val COMMENTS: TokenSet = TokenSet.create(AikenTokenTypes.COMMENT)
-        private val STRINGS: TokenSet = TokenSet.create(AikenTokenTypes.STRING)
-    }
+private val AIKEN_FIND_USAGES_IDENTIFIERS: TokenSet =
+    TokenSet.create(
+        AikenTokenTypes.IDENTIFIER,
+        AikenTokenTypes.TYPE,
+        AikenTokenTypes.FUNCTION,
+        AikenTokenTypes.FIELD
+    )
+private val AIKEN_FIND_USAGES_COMMENTS: TokenSet = TokenSet.create(AikenTokenTypes.COMMENT)
+private val AIKEN_FIND_USAGES_STRINGS: TokenSet = TokenSet.create(AikenTokenTypes.STRING)
 
-    override fun getWordsScanner(): WordsScanner = DefaultWordsScanner(AikenLexing.createLexer(), IDENTIFIERS, COMMENTS, STRINGS)
+class AikenFindUsagesProvider : FindUsagesProvider {
+    override fun getWordsScanner(): WordsScanner =
+        DefaultWordsScanner(AikenLexing.createLexer(), AIKEN_FIND_USAGES_IDENTIFIERS, AIKEN_FIND_USAGES_COMMENTS, AIKEN_FIND_USAGES_STRINGS)
 
     override fun canFindUsagesFor(psiElement: PsiElement): Boolean {
         val elementType = psiElement.elementTypeOrNull()
-        if (elementType != null && IDENTIFIERS.contains(elementType)) return true
+        if (elementType != null && AIKEN_FIND_USAGES_IDENTIFIERS.contains(elementType)) return true
         val parentType = psiElement.parent?.elementTypeOrNull() ?: return false
-        return IDENTIFIERS.contains(parentType)
+        return AIKEN_FIND_USAGES_IDENTIFIERS.contains(parentType)
     }
 
     override fun getHelpId(psiElement: PsiElement): String? = null
