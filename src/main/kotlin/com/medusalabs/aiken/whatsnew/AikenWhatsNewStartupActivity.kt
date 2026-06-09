@@ -18,12 +18,14 @@ import com.intellij.ui.JBColor
 import com.intellij.util.ui.UIUtil
 import java.awt.Color
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.Locale
 
 private val AIKEN_WHATS_NEW_LOGGER: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
 private val AIKEN_PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
 private const val AIKEN_WHATS_NEW_SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
 private const val AIKEN_WHATS_NEW_TAB_TITLE = "Aiken · What's New"
+private const val AIKEN_WHATS_NEW_LATEST_RESOURCE = "/whatsnew/latest/index.html"
 
 class AikenWhatsNewStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
@@ -31,9 +33,11 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
 
         val currentVersion = currentPluginVersion()
         if (currentVersion.isBlank()) return
-        subscribeToLafChanges(project)
 
         val props = PropertiesComponent.getInstance()
+        if (props.getValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY) == currentVersion) return
+
+        subscribeToLafChanges(project)
         val html = loadHtml(currentVersion) ?: return
 
         ApplicationManager.getApplication().invokeLater {
@@ -45,18 +49,83 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
     private fun loadHtml(version: String): String? {
         val escapedVersion = StringUtil.escapeXmlEntities(version)
         val themeVars = buildThemeCssVariables()
-        val template = readResource("/whatsnew/$version.html")
-            ?: readResource("/whatsnew/latest.html")
-            ?: return null
-        return template
+        val versionResourcePath = "/whatsnew/$version/index.html"
+        var baseResourcePath = versionResourcePath
+        var template = readResource(versionResourcePath)
+        if (template == null) {
+            baseResourcePath = AIKEN_WHATS_NEW_LATEST_RESOURCE
+            template = readResource(AIKEN_WHATS_NEW_LATEST_RESOURCE)
+        }
+        template ?: return null
+        val baseResourceDir = baseResourcePath.substringBeforeLast('/', missingDelimiterValue = "")
+        return inlineImageResources(template, baseResourceDir)
             .replace("{{VERSION}}", escapedVersion)
             .replace("{{IDE_THEME_VARS}}", themeVars)
     }
 
-    private fun readResource(path: String): String? {
+    private fun inlineImageResources(html: String, baseResourceDir: String): String {
+        val imageSourcePattern = Regex("""(<img\b[^>]*\bsrc=")([^"]+)(")""")
+        return imageSourcePattern.replace(html) { match ->
+            val prefix = match.groupValues[1]
+            val source = match.groupValues[2]
+            val suffix = match.groupValues[3]
+            if (source.startsWith("data:") || source.startsWith("http://") || source.startsWith("https://")) {
+                match.value
+            } else {
+                val resourcePath = resolveResourcePath(baseResourceDir, source)
+                val bytes = readResourceBytes(resourcePath)
+                if (bytes == null) {
+                    AIKEN_WHATS_NEW_LOGGER.warn("Failed to inline What's New image resource: $resourcePath")
+                    match.value
+                } else {
+                    val mimeType = imageMimeType(resourcePath)
+                    val encoded = Base64.getEncoder().encodeToString(bytes)
+                    "$prefix" + "data:$mimeType;base64,$encoded" + suffix
+                }
+            }
+        }
+    }
+
+    private fun resolveResourcePath(baseResourceDir: String, source: String): String {
+        if (source.startsWith('/')) return source
+        val parts = (baseResourceDir.trimEnd('/') + "/" + source).split('/')
+        val normalized = ArrayDeque<String>()
+        for (part in parts) {
+            when (part) {
+                "",
+                "." -> Unit
+                ".." -> if (normalized.isNotEmpty()) normalized.removeLast()
+                else -> normalized.addLast(part)
+            }
+        }
+        return "/" + normalized.joinToString("/")
+    }
+
+    private fun imageMimeType(path: String): String =
+        when (path.substringAfterLast('.', missingDelimiterValue = "").lowercase(Locale.US)) {
+            "jpg",
+            "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "svg" -> "image/svg+xml"
+            "webp" -> "image/webp"
+            else -> "image/png"
+        }
+
+    private fun readResourceBytes(path: String): ByteArray? {
         return try {
             javaClass.getResourceAsStream(path)?.use { stream ->
-                String(stream.readBytes(), StandardCharsets.UTF_8)
+                stream.readBytes()
+            }
+        } catch (t: Throwable) {
+                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                null
+            }
+    }
+
+    private fun readResource(path: String): String? {
+        return try {
+            readResourceBytes(path)?.let { bytes ->
+                String(bytes, StandardCharsets.UTF_8)
             }
         } catch (t: Throwable) {
                 AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)

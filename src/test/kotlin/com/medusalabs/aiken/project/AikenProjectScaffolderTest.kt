@@ -8,6 +8,9 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import javax.swing.JTextField
+import javax.swing.text.AbstractDocument
+import javax.swing.text.PlainDocument
 
 class AikenProjectScaffolderTest : AikenPlatformTestCase() {
     @Test
@@ -147,6 +150,39 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
 
         assertNull(myFixture.findFileInTempDir(".idea/runConfigurations/Run_checks.xml"))
         assertNotNull(myFixture.findFileInTempDir(".idea/runConfigurations/Build_blueprint.xml"))
+    }
+
+    @Test
+    fun wizardTokenInputDropsWhitespaceBeforePackageNormalization() {
+        assertEquals("myproject", normalizeWizardTokenInput("My Project"))
+        assertEquals("acmevendor", normalizeWizardTokenInput("Acme\tVendor"))
+        assertEquals("bad-name", normalizeWizardTokenInput("Bad @ Name"))
+    }
+
+    @Test
+    fun wizardTokenDocumentFilterBlocksWhitespaceDuringTypingAndPaste() {
+        val document = PlainDocument()
+        (document as AbstractDocument).documentFilter = AikenWizardTokenDocumentFilter()
+
+        document.insertString(0, "My ", null)
+        document.insertString(document.length, "Project", null)
+        assertEquals("myproject", document.getText(0, document.length))
+
+        document.remove(0, document.length)
+        document.insertString(0, "Acme Vendor", null)
+        assertEquals("acmevendor", document.getText(0, document.length))
+    }
+
+    @Test
+    fun wizardTokenDocumentFilterPreservesMiddleEditCaretPosition() {
+        val field = JTextField("myproject")
+        (field.document as AbstractDocument).documentFilter = AikenWizardTokenDocumentFilter()
+        field.caretPosition = 2
+
+        field.replaceSelection("New ")
+
+        assertEquals("mynewproject", field.text)
+        assertEquals(5, field.caretPosition)
     }
 
     @Suppress("SameParameterValue")

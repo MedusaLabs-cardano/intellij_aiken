@@ -28,26 +28,20 @@ class AikenLspCodeActionsSupport : LspCodeActionsSupport() {
     ): LspIntentionAction = createAction(lspServer, codeAction)
 
     private fun createAction(lspServer: LspServer, codeAction: CodeAction): LspIntentionAction {
-        val atomicUnusedImport = AikenUnusedImportsQuickFixSupport.isAtomicUnusedImportCodeAction(codeAction)
-        val textOverride =
-            if (atomicUnusedImport) {
-                AikenUnusedImportsQuickFixSupport.REMOVE_ALL_UNUSED_IMPORTS
-            } else {
-                null
-            }
-        val priorityOverride =
-            if (atomicUnusedImport) {
-                PriorityAction.Priority.TOP
-            } else {
-                null
-            }
+        if (AikenUnusedImportsQuickFixSupport.isAtomicUnusedImportCodeAction(codeAction)) {
+            return AikenPreparedLspIntentionAction(
+                lspServer,
+                codeAction,
+                textOverride = AikenUnusedImportsQuickFixSupport.REMOVE_ALL_UNUSED_IMPORTS,
+                priorityOverride = PriorityAction.Priority.TOP,
+                preferRemoveAllUnusedImports = true
+            )
+        }
 
         return AikenPreparedLspIntentionAction(
             lspServer,
             codeAction,
-            textOverride,
-            priorityOverride,
-            preferRemoveAllUnusedImports = atomicUnusedImport
+            textOverride = null
         )
     }
 }

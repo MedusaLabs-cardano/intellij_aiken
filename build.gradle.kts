@@ -1,4 +1,5 @@
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
+import org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask
 
 plugins {
     id("java")
@@ -7,7 +8,63 @@ plugins {
 }
 
 group = "com.medusalabs"
-version = "1.2"
+version = "2.0"
+
+fun escapeChangeNotesHtml(text: String): String =
+    text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
+fun inlineChangeNotesCode(text: String): String =
+    Regex("`([^`]*)`").replace(escapeChangeNotesHtml(text)) { match ->
+        "<code>${match.groupValues[1]}</code>"
+    }
+
+fun markdownChangeNotesToHtml(markdown: String): String {
+    val html = StringBuilder()
+    var inList = false
+
+    fun closeList() {
+        if (inList) {
+            html.appendLine("</ul>")
+            inList = false
+        }
+    }
+
+    markdown.lineSequence().forEach { rawLine ->
+        val line = rawLine.trim()
+        when {
+            line.isEmpty() -> closeList()
+            line.startsWith("### ") -> {
+                closeList()
+                html.appendLine("<h3>${inlineChangeNotesCode(line.removePrefix("### ").trim())}</h3>")
+            }
+            line.startsWith("## ") -> {
+                closeList()
+                html.appendLine("<h2>${inlineChangeNotesCode(line.removePrefix("## ").trim())}</h2>")
+            }
+            line.startsWith("# ") -> {
+                closeList()
+                html.appendLine("<h1>${inlineChangeNotesCode(line.removePrefix("# ").trim())}</h1>")
+            }
+            line.startsWith("- ") -> {
+                if (!inList) {
+                    html.appendLine("<ul>")
+                    inList = true
+                }
+                html.appendLine("<li>${inlineChangeNotesCode(line.removePrefix("- ").trim())}</li>")
+            }
+            else -> {
+                closeList()
+                html.appendLine("<p>${inlineChangeNotesCode(line)}</p>")
+            }
+        }
+    }
+
+    closeList()
+    return html.toString().trim()
+}
 
 repositories {
     mavenCentral()
@@ -37,9 +94,7 @@ intellijPlatform {
             sinceBuild = "252.25557"
         }
 
-        changeNotes = """
-            Improve navigation disambiguation and prioritize keyword completion
-        """.trimIndent()
+        changeNotes = markdownChangeNotesToHtml(file("update_en.md").readText())
     }
 
     publishing {
@@ -52,6 +107,10 @@ tasks {
     withType<JavaCompile> {
         sourceCompatibility = "21"
         targetCompatibility = "21"
+    }
+
+    withType<RunIdeTask> {
+        systemProperty("remote.x11.workaround", false)
     }
 }
 

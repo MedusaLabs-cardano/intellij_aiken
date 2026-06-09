@@ -29,7 +29,7 @@ class AikenLspCodeActionsSupportTest {
     private val server = FakeLspServer()
 
     @Test
-    fun promotesAtomicUnusedImportQuickFixToRemoveAllByDefault() {
+    fun promotesAtomicUnusedImportLspQuickFixToVisibleBulkCleanup() {
         val action =
             CodeAction("Remove redundant imports").apply {
                 kind = "quickfix"

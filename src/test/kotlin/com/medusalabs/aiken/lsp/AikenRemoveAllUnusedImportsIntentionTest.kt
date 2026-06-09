@@ -64,6 +64,62 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun singleRemoveAvailableWhenOnlyOneUnusedImportExists() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val source =
+            myFixture.addFileToProject(
+                "lib/main.ak",
+                """
+                use alpha.{<caret>first}
+
+                fn main() -> Int {
+                  1
+                }
+                """.trimIndent()
+            )
+        myFixture.configureFromExistingVirtualFile(source.virtualFile)
+        publishDiagnostics(source.virtualFile, listOf(unusedImportDiagnostic(0, 11, 16)))
+
+        val action = AikenRemoveUnusedImportIntention()
+
+        assertTrue(action.isAvailable(project, myFixture.editor, findElementAtCaret(myFixture.file)!!))
+        assertEquals(PriorityAction.Priority.NORMAL, action.priority)
+    }
+
+    @Test
+    fun singleRemoveAvailableAlongsideBulkWhenMultipleUnusedImportsExist() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val source =
+            myFixture.addFileToProject(
+                "lib/main.ak",
+                """
+                use alpha.{<caret>first}
+                use beta.{second}
+
+                fn main() -> Int {
+                  1
+                }
+                """.trimIndent()
+            )
+        myFixture.configureFromExistingVirtualFile(source.virtualFile)
+        publishDiagnostics(
+            source.virtualFile,
+            listOf(
+                unusedImportDiagnostic(0, 11, 16),
+                unusedImportDiagnostic(1, 10, 16)
+            )
+        )
+
+        val removeAll = AikenRemoveAllUnusedImportsIntention()
+        val removeSingle = AikenRemoveUnusedImportIntention()
+
+        assertTrue(removeAll.isAvailable(project, myFixture.editor, findElementAtCaret(myFixture.file)!!))
+        assertTrue(removeSingle.isAvailable(project, myFixture.editor, findElementAtCaret(myFixture.file)!!))
+        assertEquals(PriorityAction.Priority.TOP, removeAll.priority)
+        assertEquals(PriorityAction.Priority.NORMAL, removeSingle.priority)
+    }
+
+    @Test
     fun unavailableWhenCaretIsNotOnUnusedImportLine() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val source =

@@ -1,43 +1,113 @@
 # Aiken IntelliJ Plugin
 
-IntelliJ IDEA plugin that brings first‑class support for **Aiken** — a modern smart‑contract language for the Cardano platform.
+JetBrains IDE plugin for [Aiken](https://aiken-lang.org/), the smart-contract language for Cardano.
+
+The plugin provides project creation, managed Aiken toolchains, runners, semantic editor support, LSP diagnostics, and blueprint workflows directly inside IntelliJ-based IDEs.
 
 ## Features
-- **File types**: `.ak` (Aiken) and `.uplc` (UPLC)
-- **Syntax highlighting**
-- **Auto‑formatting** on save (`aiken fmt`)
-- **Project‑wide indexing & navigation**, including `std_lib` under `build`
-- **Go to Symbol** and **Structure View** for top-level Aiken declarations
-- **Sticky lines / breadcrumbs** for scope awareness
-- **Completion / suggestions**
-- **LSP integration** for diagnostics, hover and code actions
-- **Version-aware project scaffold** with project toolchain modes: use a global Aiken command or install a selected npm version locally
+
+### Project and Toolchain
+
+- Aiken entry in the IDE `New Project` wizard.
+- Project type, Aiken version, and compatible `stdlib` version selection.
+- Global toolchain mode for an existing `aiken` binary.
+- Project-local toolchain mode that installs `@aiken-lang/aiken` through npm.
+- Automatic synchronization between the selected local Aiken version and `aiken.toml`.
+- First-open initialization of default Aiken run configurations.
+- IDE terminal integration so project-local Aiken binaries take precedence when enabled.
+
+### Editor Support
+
+- `.ak` and `.uplc` file types.
+- Syntax highlighting.
+- Brace, folding, breadcrumbs, and sticky-line support.
+- Save formatting through `aiken fmt`.
+- `New -> Aiken File` templates for common modules, validators, and tests.
+
+### Code Intelligence
+
+- Semantic completion for expressions, type annotations, generic arguments, imports, module-qualified calls, records, destructuring, validators, handlers, `when`, `if`, pipes, and callable locals.
+- Expected-type aware ranking with scope-distance, import-state, alias, generic, and visibility handling.
+- Built-in Aiken types and constructors in relevant completion contexts.
+- Auto-import for selected indexed exports.
+- `Ctrl+P` parameter info for imported functions, aliases, callable locals, partial application, pipes, validators, and subvalidators.
+- Navigation, rename, and find usages for Aiken symbols across files and modules.
+- `Go to Symbol` and Structure View for top-level declarations.
+
+### LSP Integration
+
+- Diagnostics, hover, and code actions are provided by the Aiken language server.
+- LSP quick fixes are surfaced in the IDE.
+- Bulk `Remove all unused imports` is available on top of the ordinary unused-import quick fix.
+
+### Runners and Blueprint Workflows
+
+- Dedicated Aiken run configuration type.
+- `Run checks` for `aiken check` with grouped diagnostics and source navigation.
+- `Build blueprint` for `aiken build` with IDE output parsing.
+- `Parametrize blueprint` UI for applying validator parameters.
+- `Make artifacts` and `Clean artifacts` workflows.
+- Structured parameter editor for nested constructors, lists, maps, options, byte arrays, integers, booleans, and raw values.
 
 ## Requirements
-- **JDK 21**
-- **Gradle** (wrapper included)
-- **Node.js / npm** available in `PATH` or configured through the IDE Node.js settings for locally managed toolchains
 
-## Build
+- JDK 21.
+- Gradle wrapper from this repository.
+- Node.js and npm in `PATH`, or configured through IDE Node.js settings, when using locally managed Aiken toolchains.
+- A global `aiken` command in `PATH` when using global toolchain mode.
+
+## Development
+
+Build the plugin:
+
 ```bash
 ./gradlew -q build
 ```
 
-## Run the plugin in a sandbox IDE
+Run the plugin in a sandbox IDE:
+
 ```bash
 ./gradlew -q runIde
 ```
 
-## Build a distributable plugin
+Build a distributable plugin ZIP:
+
 ```bash
 ./gradlew -q buildPlugin
 ```
 
-The resulting ZIP will be under `build/distributions/`.
+The plugin ZIP is written to `build/distributions/`.
 
-## Notes
-- This repository uses the **IntelliJ Platform Gradle Plugin** (Kotlin DSL).
-- Aiken navigation, rename, find usages, completion and parameter info are implemented natively on top of IntelliJ references/search APIs.
-- Diagnostics, hover and code actions are LSP-owned by default.
-- Formatting currently uses `aiken fmt` as the source of truth; native formatter semantics are intentionally not implemented in the plugin.
-- New projects can either use a global `aiken` command or install `@aiken-lang/aiken` directly into `bin/` for a project-local toolchain.
+Run tests:
+
+```bash
+./gradlew test
+```
+
+For memory-heavy full test runs, use a larger Gradle/Kotlin heap:
+
+```bash
+./gradlew \
+  "-Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=1g" \
+  "-Dkotlin.daemon.jvmargs=-Xmx8g" \
+  test
+```
+
+## Architecture Notes
+
+- Native IDE behavior is implemented with IntelliJ PSI, references, search APIs, indices, completion contributors, parameter-info handlers, run configurations, and project services.
+- The Aiken compiler and LSP remain the source of truth for formatting, diagnostics, hover, and ordinary code actions.
+- Formatting intentionally delegates to `aiken fmt`; the plugin does not reimplement Aiken formatter semantics.
+- Semantic completion, navigation, rename, usages, parameter info, and Structure View are implemented natively for IDE responsiveness and richer context handling.
+- Project-map notes live in `PROJECT_MAP/` and mirror source paths for quicker navigation during development.
+
+## Release Notes
+
+- `update_en.md` contains the plain changelog for Marketplace and moderation.
+- `src/main/resources/whatsnew/latest/index.html` contains the visual in-IDE What's New page.
+
+## Feedback
+
+If you have feedback, suggestions, or found a bug, please open an issue on GitHub:
+
+https://github.com/MedusaLabs-cardano/intellij_aiken

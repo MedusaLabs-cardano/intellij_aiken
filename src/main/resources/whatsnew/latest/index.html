@@ -19,13 +19,21 @@
 
     {{IDE_THEME_VARS}}
 
+    img {
+      max-width: 100%;
+      max-height: 500px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+
     html {
       background: var(--jb-bg);
       color: var(--jb-fg);
     }
 
     body {
-      margin: 0;
+      margin: 0 auto;
       padding: 28px;
       max-width: 1120px;
       background: var(--jb-bg);
@@ -130,6 +138,49 @@
       font-size: 12px;
       opacity: 0.82;
       background: var(--jb-soft-bg);
+      display: grid;
+      grid-template-columns:  1fr;
+      justify-items: center;
+    }
+
+    .shot2 {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .shot2 img {
+      flex: 1 1 calc(50% - 5px);
+      max-width: calc(50% - 5px);
+    }
+
+    .shot-feature {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .shot-feature-stack {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .shot-feature img {
+      max-width: 100%;
+    }
+
+    @media (max-width: 760px) {
+      .shot2 img {
+        flex-basis: 100%;
+        max-width: 100%;
+      }
+
+      .shot-feature {
+        grid-template-columns: 1fr;
+      }
     }
 
     .note {
@@ -150,6 +201,10 @@
 <body>
   <h1>What's New in Aiken Plugin</h1>
   <h2>Version {{VERSION}}</h2>
+  <p class="note">
+    If you have feedback, suggestions, or found a bug, please open an issue on
+    <a href="https://github.com/MedusaLabs-cardano/intellij_aiken" target="_blank" rel="noopener noreferrer">GitHub</a>.
+  </p>
 
   <p class="hero">
     Aiken Plugin 2.0 is a major step forward. The plugin is no longer just editor support with formatting
@@ -177,8 +232,6 @@
     </div>
   </div>
 
-  <div class="shot">[Screenshot placeholder: Aiken 2.0 workflow inside JetBrains IDE]</div>
-
   <div class="spotlight">
     <b>Big picture:</b> <code>v2.0</code> upgrades the plugin from "editor support for Aiken files" to
     "a project-aware Aiken workspace inside the IDE".
@@ -194,7 +247,9 @@
       <li>Built-in workflows: <code>Run checks</code>, <code>Build blueprint</code>, <code>Parametrize blueprint</code>, <code>Make artifacts</code>, and <code>Clean artifacts</code>.</li>
       <li>This removes the need to manage the full Aiken workflow manually from the terminal.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Aiken run configuration list]</div>
+    <div class="shot">
+      <img src="images/runners.png" alt="Aiken run configuration templates listed in the IDE run configuration dialog">
+    </div>
   </div>
 
   <div class="runner">
@@ -204,7 +259,9 @@
       <li>Warnings and errors are grouped into dedicated sections and linked back to source files.</li>
       <li>Runner behavior was hardened across different Aiken versions, including older output formats.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Run checks with tests, warnings, and source navigation]</div>
+    <div class="shot">
+      <img src="images/runner_checks.png" alt="Run checks output grouped into IDE test and diagnostic tree nodes">
+    </div>
   </div>
 
   <div class="runner">
@@ -213,17 +270,24 @@
       <li><code>build</code> now has a proper build-style UX with diagnostics, file navigation, and clickable output.</li>
       <li>Warnings and errors are surfaced as build diagnostics instead of pretending to be test nodes.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Build blueprint integrated output]</div>
+    <div class="shot">
+      <img src="images/runner_build.png" alt="Build blueprint output displayed as IDE build diagnostics with source navigation">
+    </div>
   </div>
 
   <div class="runner">
     <p class="runner-title">Blueprint workflows</p>
     <ul>
       <li><code>Parametrize blueprint</code> adds an IDE workflow for applying parameters to blueprints.</li>
+      <li>The parameter editor understands nested constructors, lists, maps, options, byte arrays, integers, booleans, and raw values.</li>
+      <li>Blueprints with more than one matching validator can now be handled without dropping to raw CLI output.</li>
       <li><code>Make artifacts</code> adds a dedicated workflow for generating useful build outputs.</li>
       <li><code>Clean artifacts</code> completes the lifecycle with predictable cleanup.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Parametrize blueprint and artifact generation workflows]</div>
+    <div class="shot shot2">
+      <img src="images/runner_parameters.png" alt="Blueprint parameter editor showing nested parameter values">
+      <img src="images/runner_artifacts.png" alt="Make artifacts run configuration output for generated Aiken artifacts">
+    </div>
   </div>
 
   <hr class="divider"/>
@@ -235,8 +299,11 @@
       <li>Aiken now has its own entry in the IDE's <code>New Project</code> flow.</li>
       <li>You can choose project type, Aiken version, and a compatible <code>stdlib</code> version.</li>
       <li>The wizard supports both <code>Use global Aiken</code> and <code>Install locally (recommended)</code>.</li>
+      <li>Projects opened in the IDE for the first time can also receive default Aiken run configurations automatically.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Aiken New Project Wizard with version selection]</div>
+    <div class="shot">
+      <img src="images/scaffold.png" alt="New Project wizard configured for an Aiken project">
+    </div>
   </div>
 
   <div class="runner">
@@ -246,7 +313,9 @@
       <li>Local Aiken is installed directly into the project and synchronized with the compiler version declared in <code>aiken.toml</code>.</li>
       <li>The wizard also filters <code>stdlib</code> choices through a bundled compatibility matrix.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Local vs global toolchain and stdlib compatibility selection]</div>
+    <div class="shot">
+      <img src="images/scaffold_local_version.png" alt="Aiken project wizard showing local toolchain version selection">
+    </div>
   </div>
 
   <hr class="divider"/>
@@ -259,16 +328,38 @@
       <li><code>Go to Declaration</code>, <code>Find Usages</code>, and <code>Rename</code> are more accurate for imports, aliases, shadowing, cross-module references, and callable locals.</li>
       <li>The new indexing model introduces explicit module, export, and top-level symbol knowledge.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Improved navigation and usage search across modules]</div>
+    <div class="shot">
+      <img src="images/demo_find_usage.png" alt="Find Usages results for an Aiken symbol grouped in the IDE usage view">
+    </div>
   </div>
 
   <div class="runner">
     <p class="runner-title">Completion and parameter info</p>
     <ul>
-      <li>Completion is now much more semantic, especially for imports, aliases, qualified exports, and typed positions.</li>
-      <li><code>Ctrl+P</code> / parameter info now handles more realistic Aiken call forms, including pipes, callable locals, partial application, and grouped callables.</li>
+      <li>Completion is now much more semantic, especially for expected types, scopes, imports, aliases, destructuring, qualified exports, and typed positions.</li>
+      <li>Record construction, record destructuring, <code>let</code>/<code>expect</code> patterns, validators, subvalidators, and module-qualified calls are handled as dedicated scenarios.</li>
+      <li>Suggestions are quieter where auto-popup would be noisy, and accepting functions no longer forces named arguments.</li>
+      <li><code>Ctrl+P</code> / parameter info now handles more realistic Aiken call forms, including pipes, callable locals, partial application, grouped callables, validators, and subvalidators.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Semantic completion and richer parameter info]</div>
+    <div class="shot shot-feature">
+      <div class="shot-feature-stack">
+        <img src="images/demo_suggester_update_record.png" alt="Completion suggestions inside an Aiken record update expression">
+        <img src="images/demo_suggester_pipe_parameters.png" alt="Parameter info and completion for an Aiken pipe call">
+      </div>
+      <img src="images/demo_suggester_deconstruction.png" alt="Completion suggestions for Aiken record destructuring">
+    </div>
+  </div>
+
+  <div class="runner">
+    <p class="runner-title">Imports and modules</p>
+    <ul>
+      <li><code>use</code> completion now understands indexed modules, nested module paths, aliases, and duplicate export names.</li>
+      <li>Auto-import works from ordinary completion when selecting an export that is not imported yet.</li>
+      <li>Qualified completion is predictable: type a module qualifier first, then choose from that module's contents.</li>
+    </ul>
+    <div class="shot">
+      <img src="images/demo_suggester_use.png" alt="Aiken use statement completion with module exports">
+    </div>
   </div>
 
   <div class="runner">
@@ -278,7 +369,10 @@
       <li><code>Structure View</code> was added for quick file-level browsing.</li>
       <li>These features are built on the same stronger symbol model that now powers navigation and completion.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Go to Symbol and Structure View]</div>
+    <div class="shot shot2">
+      <img src="images/demo_find_usage_inline.png" alt="Inline Aiken symbol navigation and usage lookup from the editor">
+      <img src="images/demo_structure_view.png" alt="Aiken Structure View showing file-level declarations">
+    </div>
   </div>
 
   <hr class="divider"/>
@@ -290,7 +384,10 @@
       <li>LSP integration remains the source of diagnostics, hover, and code actions.</li>
       <li>Unused import quick fixes are now friendlier: alongside the per-import action, the IDE can also offer <code>Remove all unused imports</code>.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: Remove all unused imports quick fix]</div>
+    <div class="shot shot2">
+      <img src="images/demo_remove_all_unused_imports.png" alt="Quick fix popup offering to remove all unused Aiken imports">
+      <img src="images/demo_remove_unused_import.png" alt="Context actions offering targeted removal of one unused Aiken import">
+    </div>
   </div>
 
   <div class="runner">
@@ -300,7 +397,10 @@
       <li>You can create a validator file, a test file, or a common Aiken file directly from the IDE.</li>
       <li>Validator templates stay aligned with the active Aiken toolchain.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: New Aiken File action and template picker]</div>
+    <div class="shot shot2">
+      <img src="images/demo_new_file_option.png" alt="IDE New menu showing the Aiken File action">
+      <img src="images/demo_new_file_dialog.png" alt="New Aiken File dialog with validator, test, and common file choices">
+    </div>
   </div>
 
   <div class="runner">
@@ -309,7 +409,6 @@
       <li>When a project uses a local toolchain, newly opened IDE terminal sessions can resolve <code>aiken</code> to the project-local binary automatically.</li>
       <li>This keeps the terminal workflow aligned with the runners and the configured project toolchain.</li>
     </ul>
-    <div class="shot">[Screenshot placeholder: IDE terminal using project-local Aiken]</div>
   </div>
 
   <div class="note">

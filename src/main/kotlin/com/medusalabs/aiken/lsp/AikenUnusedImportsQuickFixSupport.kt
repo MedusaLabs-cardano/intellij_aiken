@@ -18,6 +18,7 @@ import org.eclipse.lsp4j.jsonrpc.messages.Either
 object AikenUnusedImportsQuickFixSupport {
     const val UNUSED_IMPORT_VALUE = "aiken::check::unused:import::value"
     const val UNUSED_IMPORT_MODULE = "aiken::check::unused::import::module"
+    const val REMOVE_UNUSED_IMPORT = "Remove unused import"
     const val REMOVE_ALL_UNUSED_IMPORTS = "Remove all unused imports"
     private const val LSP_REMOVE_UNUSED_IMPORTS = "Remove redundant imports"
     internal const val CODE_ACTION_REQUEST_TIMEOUT_MS = 10_000
@@ -79,6 +80,23 @@ object AikenUnusedImportsQuickFixSupport {
         return AikenPreparedLspIntentionAction(server, codeAction, REMOVE_ALL_UNUSED_IMPORTS)
     }
 
+    fun requestRemoveUnusedImportAction(
+        project: Project,
+        file: VirtualFile,
+        diagnostic: Diagnostic
+    ): IntentionAction? {
+        val server = findServer(project, file) ?: return null
+        val request = CodeActionParams(server.getDocumentIdentifier(file), diagnostic.range, buildContext(listOf(diagnostic)))
+        val actions = requestCodeActions(server, request) ?: return null
+
+        val codeAction =
+            actions.asSequence()
+                .mapNotNull(::asCodeAction)
+                .firstOrNull(::isAtomicUnusedImportCodeAction)
+                ?: return null
+        return AikenPreparedLspIntentionAction(server, codeAction, REMOVE_UNUSED_IMPORT)
+    }
+
     fun applyRemoveAllUnusedImportsIfAvailable(
         project: Project,
         editor: Editor,
@@ -97,6 +115,27 @@ object AikenUnusedImportsQuickFixSupport {
                 ?: return false
         val action =
             requestRemoveAllUnusedImportsAction(project, virtualFile, unusedDiagnostics, anchor)
+                ?: return false
+        return applyResolvedAction(action, project, editor, file)
+    }
+
+    fun applyRemoveUnusedImportIfAvailable(
+        project: Project,
+        editor: Editor,
+        file: PsiFile
+    ): Boolean {
+        val virtualFile = file.virtualFile ?: return false
+        val service = project.getService(AikenLspDiagnosticsProjectViewService::class.java) ?: return false
+        val unusedDiagnostics = collectUnusedImportDiagnostics(service.getDiagnostics(virtualFile))
+        val anchor =
+            findUnusedImportDiagnosticAtOffset(
+                editor.document,
+                unusedDiagnostics,
+                editor.caretModel.offset
+            )
+                ?: return false
+        val action =
+            requestRemoveUnusedImportAction(project, virtualFile, anchor)
                 ?: return false
         return applyResolvedAction(action, project, editor, file)
     }

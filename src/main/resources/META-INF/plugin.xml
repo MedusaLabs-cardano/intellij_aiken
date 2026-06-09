@@ -106,6 +106,12 @@
             <categoryKey>aiken.intentions.category</categoryKey>
         </intentionAction>
 
+        <intentionAction>
+            <language>Aiken</language>
+            <className>com.medusalabs.aiken.lsp.AikenRemoveUnusedImportIntention</className>
+            <categoryKey>aiken.intentions.category</categoryKey>
+        </intentionAction>
+
         <notificationGroup id="aiken.toolchain.notifications"
                            displayType="BALLOON"
                            bundle="messages.AikenBundle"

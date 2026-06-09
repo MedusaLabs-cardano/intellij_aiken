@@ -5,6 +5,8 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.SystemInfo
 import com.medusalabs.aiken.run.AikenCliCompatibility
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URISyntaxException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -15,6 +17,8 @@ import java.util.concurrent.TimeUnit
 
 internal object AikenStdlibCatalog {
     private const val BUNDLED_CATALOG_RESOURCE = "configs/aiken-stdlib-catalog.txt"
+    private const val STDLIB_TAGS_URL = "https://api.github.com/repos/aiken-lang/stdlib/tags?per_page=100"
+    private const val STDLIB_README_URL = "https://raw.githubusercontent.com/aiken-lang/stdlib/main/README.md"
     private const val FETCH_TIMEOUT_SECONDS = 5L
     private val LOG = Logger.getInstance(AikenStdlibCatalog::class.java)
     @Volatile
@@ -260,7 +264,7 @@ internal object AikenStdlibCatalog {
         val future = CompletableFuture<Catalog>()
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                val catalog = loadCatalogBlocking()
+                val catalog = loadCatalogBlocking(preferRemote = true)
                 cachedCatalog = catalog
                 future.complete(catalog)
             } catch (t: Throwable) {
@@ -271,7 +275,13 @@ internal object AikenStdlibCatalog {
         return future.orTimeout(FETCH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
     }
 
-    internal fun loadCatalogBlocking(stdlibRoot: Path? = null): Catalog {
+    internal fun loadCatalogBlocking(stdlibRoot: Path? = null, preferRemote: Boolean = false): Catalog {
+        if (preferRemote) {
+            loadRemoteCatalog()?.let {
+                LOG.info("Loaded stdlib catalog from aiken-lang/stdlib GitHub repository")
+                return it
+            }
+        }
         loadBundledCatalog()?.let {
             LOG.info("Loaded stdlib catalog from bundled resource $BUNDLED_CATALOG_RESOURCE")
             return it
@@ -280,6 +290,26 @@ internal object AikenStdlibCatalog {
         LOG.info("Loading stdlib catalog from development extras/stdlib fallback at $resolvedStdlibRoot")
         val tags = loadTags(resolvedStdlibRoot)
         val rules = parseCompatibilityRules(Files.readString(resolvedStdlibRoot.resolve("README.md"), StandardCharsets.UTF_8))
+        return Catalog(
+            tags = filterSupportedTags(sortTags(tags), rules),
+            compatibilityRules = rules
+        )
+    }
+
+    internal fun parseGitHubTagsResponse(response: String): List<String> =
+        Regex(""""name"\s*:\s*"([^"]+)"""")
+            .findAll(response)
+            .mapNotNull { match -> canonicalizeTag(match.groupValues[1]) }
+            .distinct()
+            .toList()
+
+    internal fun buildRemoteCatalog(tagsResponse: String, readme: String): Catalog {
+        val tags = parseGitHubTagsResponse(tagsResponse)
+        if (tags.isEmpty()) {
+            throw IllegalStateException("GitHub stdlib tag response contained no semantic tags")
+        }
+
+        val rules = parseCompatibilityRules(readme)
         return Catalog(
             tags = filterSupportedTags(sortTags(tags), rules),
             compatibilityRules = rules
@@ -330,8 +360,22 @@ internal object AikenStdlibCatalog {
             throw IllegalStateException("Couldn't find stdlib compatibility matrix in README.md")
         }
 
+        val tableHeaderIndex =
+            lines.drop(startIndex + 1).indexOfFirst { line ->
+                val normalized = line.lowercase()
+                '|' in line &&
+                    "stdlib" in normalized &&
+                    "aiken" in normalized &&
+                    "plutus" in normalized
+            }.takeIf { it >= 0 }?.let { startIndex + 1 + it }
+                ?: throw IllegalStateException("Couldn't find stdlib compatibility table header in README.md")
+        val tableStartIndex =
+            (tableHeaderIndex + 1).takeIf { it < lines.size && isMarkdownTableSeparator(lines[it]) }
+                ?.plus(1)
+                ?: throw IllegalStateException("Couldn't find stdlib compatibility table separator in README.md")
+
         val rules = ArrayList<CompatibilityRule>()
-        for (line in lines.drop(startIndex + 3)) {
+        for (line in lines.drop(tableStartIndex)) {
             val trimmed = line.trim()
             if (trimmed.isEmpty()) break
             if ('|' !in trimmed) break
@@ -358,6 +402,13 @@ internal object AikenStdlibCatalog {
         return rules
     }
 
+    private fun isMarkdownTableSeparator(line: String): Boolean {
+        val columns = line.trim().split('|').map { it.trim() }.filter { it.isNotEmpty() }
+        return columns.isNotEmpty() && columns.all { column ->
+            column.all { it == '-' || it == ':' }
+        }
+    }
+
     internal fun detectGlobalAikenVersion(command: String): String? {
         val trimmed = command.trim()
         if (trimmed.isEmpty()) return null
@@ -375,6 +426,37 @@ internal object AikenStdlibCatalog {
         } catch (t: Throwable) {
             LOG.warn("Failed to load bundled stdlib catalog snapshot from $BUNDLED_CATALOG_RESOURCE", t)
             null
+        }
+    }
+
+    private fun loadRemoteCatalog(): Catalog? {
+        return try {
+            buildRemoteCatalog(
+                tagsResponse = fetchText(STDLIB_TAGS_URL),
+                readme = fetchText(STDLIB_README_URL)
+            )
+        } catch (t: Throwable) {
+            LOG.warn("Failed to load stdlib catalog from GitHub; falling back to bundled snapshot", t)
+            null
+        }
+    }
+
+    private fun fetchText(url: String): String {
+        val connection = URI(url).toURL().openConnection() as HttpURLConnection
+        connection.connectTimeout = TimeUnit.SECONDS.toMillis(FETCH_TIMEOUT_SECONDS).toInt()
+        connection.readTimeout = TimeUnit.SECONDS.toMillis(FETCH_TIMEOUT_SECONDS).toInt()
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Accept", "application/vnd.github+json, text/plain;q=0.9, */*;q=0.1")
+        connection.setRequestProperty("User-Agent", "Aiken-IntelliJ-Plugin")
+
+        val status = connection.responseCode
+        if (status !in 200..299) {
+            val message = connection.errorStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
+            throw IllegalStateException("GET $url failed with HTTP $status. $message")
+        }
+
+        return connection.inputStream.use { stream ->
+            stream.readBytes().toString(StandardCharsets.UTF_8)
         }
     }
 

@@ -1419,9 +1419,10 @@ class AikenRunConfiguration(
                 cellSelectionEnabled = false
                 rowHeight = JBUI.scale(32)
                 tree.rowHeight = rowHeight
-                intercellSpacing = JBUI.size(0, 2)
+                intercellSpacing = JBUI.size(0, 1)
                 showVerticalLines = false
-                showHorizontalLines = false
+                showHorizontalLines = true
+                gridColor = applyRowSeparatorColor()
                 isOpaque = false
                 background = UIUtil.TRANSPARENT_COLOR
                 selectionBackground = UIUtil.TRANSPARENT_COLOR
@@ -1483,9 +1484,10 @@ class AikenRunConfiguration(
                 parameterTreeTable.autoResizeMode = JTable.AUTO_RESIZE_OFF
                 parameterTreeTable.rowHeight = JBUI.scale(32)
                 currentTree().rowHeight = parameterTreeTable.rowHeight
-                parameterTreeTable.intercellSpacing = JBUI.size(0, 2)
+                parameterTreeTable.intercellSpacing = JBUI.size(0, 1)
                 parameterTreeTable.showVerticalLines = false
-                parameterTreeTable.showHorizontalLines = false
+                parameterTreeTable.showHorizontalLines = true
+                parameterTreeTable.gridColor = applyRowSeparatorColor()
                 parameterTreeTable.isOpaque = false
                 parameterTreeTable.background = UIUtil.TRANSPARENT_COLOR
                 parameterTreeTable.selectionBackground = UIUtil.TRANSPARENT_COLOR
@@ -2954,6 +2956,16 @@ class AikenRunConfiguration(
                             ColorUtil.toAlpha(separator, 144)
                         }
                     }
+        }
+
+        private fun applyRowSeparatorColor(): Color {
+            val base = UIManager.getColor("Component.borderColor")
+                ?: JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()
+            return if (isDarkUiTheme()) {
+                ColorUtil.toAlpha(base, 96)
+            } else {
+                ColorUtil.toAlpha(base, 72)
+            }
         }
 
         private fun applyInputBorderColor(): Color {
@@ -4586,16 +4598,26 @@ class AikenRunConfiguration(
                 val buildSucceeded = run.exitCode == 0 && diagnostics.errors.isEmpty()
                 if (buildSucceeded) {
                     bumpApplyBuildRevision()
+                    val successEventId = "$buildRootId-success"
                     val successEvent =
                         MessageEventImpl(
-                            "$buildRootId-success",
+                            successEventId,
                             MessageEvent.Kind.INFO,
                             "Build",
                             "Build Succeeded",
-                            "Aiken build finished successfully."
+                            null
                         )
                     successEvent.setParentId(buildRootId)
                     buildView.onEvent(buildRootId, successEvent)
+                    buildView.onEvent(
+                        successEventId,
+                        OutputBuildEventImpl(
+                            "$successEventId-output",
+                            successEventId,
+                            "Aiken build finished successfully.\n",
+                            true
+                        )
+                    )
                     buildView.onEvent(
                         buildRootId,
                         FinishBuildEventImpl(

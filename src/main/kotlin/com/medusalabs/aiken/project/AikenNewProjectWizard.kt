@@ -29,6 +29,10 @@ import com.medusalabs.aiken.ui.AdaptiveWrapText
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
+import javax.swing.text.AbstractDocument
+import javax.swing.text.AttributeSet
+import javax.swing.text.BadLocationException
+import javax.swing.text.DocumentFilter
 import javax.swing.DefaultComboBoxModel
 import javax.swing.Icon
 import javax.swing.JTextField
@@ -59,6 +63,22 @@ private fun Panel.aikenWizardWrappedCommentRow(text: String): Row =
             .resizableColumn()
             .align(AlignX.FILL)
     }
+
+internal fun normalizeWizardTokenInput(raw: String): String =
+    AikenProjectScaffolder.normalizeToken(raw.filterNot(Char::isWhitespace))
+
+internal class AikenWizardTokenDocumentFilter : DocumentFilter() {
+    @Throws(BadLocationException::class)
+    override fun insertString(fb: FilterBypass, offset: Int, string: String?, attr: AttributeSet?) {
+        replace(fb, offset, 0, string, attr)
+    }
+
+    @Throws(BadLocationException::class)
+    override fun replace(fb: FilterBypass, offset: Int, length: Int, text: String?, attrs: AttributeSet?) {
+        val normalized = normalizeWizardTokenInput(text.orEmpty())
+        fb.replace(offset, length, normalized, attrs)
+    }
+}
 
 class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
     override val name: String = "Aiken"
@@ -96,9 +116,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
         private lateinit var stdlibVersionRow: Row
         private lateinit var stdlibStatusRow: Row
         private lateinit var npmWarningRow: Row
-        private var normalizingVendor = false
         private var normalizingName = false
-        private var lastValidVendor = vendorField.text.trim().ifBlank { "my_org" }
         private var lastValidProjectName = "my_project"
         private var npmAvailability = AikenNodeToolchain.describeNpmAvailability(toolchainProject())
         private var versionsFuture: CompletableFuture<AikenNodeToolchain.VersionCatalog>? = null
@@ -111,7 +129,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
         private var detectingGlobalAikenVersion = false
 
         init {
-            val normalizedInitialName = AikenProjectScaffolder.normalizeToken(baseData.name)
+            val normalizedInitialName = normalizeWizardTokenInput(baseData.name)
             if (normalizedInitialName.isNotBlank()) {
                 lastValidProjectName = normalizedInitialName
             }
@@ -126,7 +144,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
 
             baseData.nameProperty.afterChange { raw ->
                 if (normalizingName) return@afterChange
-                val normalized = AikenProjectScaffolder.normalizeToken(raw)
+                val normalized = normalizeWizardTokenInput(raw)
                 val effective = normalized.ifBlank { lastValidProjectName }
                 if (effective.isNotBlank()) {
                     lastValidProjectName = effective
@@ -140,13 +158,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
                     }
                 }
             }
-            vendorField.document.addDocumentListener(
-                object : DocumentListener {
-                    override fun insertUpdate(e: DocumentEvent?) = normalizeVendor()
-                    override fun removeUpdate(e: DocumentEvent?) = normalizeVendor()
-                    override fun changedUpdate(e: DocumentEvent?) = normalizeVendor()
-                }
-            )
+            (vendorField.document as? AbstractDocument)?.documentFilter = AikenWizardTokenDocumentFilter()
             aikenVersionCombo.isEditable = true
             stdlibVersionCombo.isEditable = true
             toolchainModeCombo.selectedItem = defaultToolchainMode()
@@ -214,17 +226,17 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
                     .align(AlignX.FILL)
             }
             globalAikenCommentRow = builder.aikenWizardWrappedCommentRow("Command name or full path. Used when `Use global Aiken` is selected.")
+            versionsStatusRow = builder.row("") {
+                cell(versionsStatusLabel)
+                    .resizableColumn()
+                    .align(AlignX.FILL)
+            }
             aikenVersionRow = builder.row("Aiken version:") {
                 cell(aikenVersionCombo)
                     .resizableColumn()
                     .align(AlignX.FILL)
             }
             aikenVersionCommentRow = builder.aikenWizardWrappedCommentRow("Loaded from npm package `@aiken-lang/aiken` and installed locally into the project.")
-            versionsStatusRow = builder.row("") {
-                cell(versionsStatusLabel)
-                    .resizableColumn()
-                    .align(AlignX.FILL)
-            }
             stdlibVersionRow = builder.row("stdlib version:") {
                 cell(stdlibVersionCombo)
                     .resizableColumn()
@@ -275,24 +287,6 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
             ensureAikenProjectModule(project, targetDirectoryPath)
         }
 
-        private fun normalizeVendor() {
-            if (normalizingVendor) return
-            val raw = vendorField.text
-            val normalized = AikenProjectScaffolder.normalizeToken(raw)
-            val effective = normalized.ifBlank { lastValidVendor }
-            if (effective.isNotBlank()) {
-                lastValidVendor = effective
-            }
-            if (effective == raw) return
-            normalizingVendor = true
-            try {
-                vendorField.text = effective
-                vendorField.caretPosition = vendorField.text.length
-            } finally {
-                normalizingVendor = false
-            }
-        }
-
         private fun validateAllOrNull(vendorValue: String): ValidationInfo? =
             try {
                 AikenProjectScaffolder.requireValidToken("Vendor", vendorValue.trim())
@@ -333,7 +327,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
 
         private fun defaultVendor(): String {
             val raw = System.getProperty("user.name").orEmpty().lowercase(Locale.US).trim()
-            val normalized = AikenProjectScaffolder.normalizeToken(raw)
+            val normalized = normalizeWizardTokenInput(raw)
             return normalized.ifBlank { "my_org" }
         }
 
@@ -549,7 +543,7 @@ class AikenNewProjectWizard : LanguageGeneratorNewProjectWizard {
                     compatibilityVersion == null && selectedToolchainMode() == AikenToolchainMode.LOCAL && !versionsLoaded ->
                         "Waiting for the selected Aiken version to resolve before filtering stdlib tags."
                     compatibilityVersion != null ->
-                        "Showing ${tagsToShow.size} stdlib tag(s) compatible with Aiken $compatibilityVersion."
+                        "Stdlib tag(s) compatible with Aiken $compatibilityVersion."
                     else ->
                         "Showing bundled stdlib tags."
                 }
