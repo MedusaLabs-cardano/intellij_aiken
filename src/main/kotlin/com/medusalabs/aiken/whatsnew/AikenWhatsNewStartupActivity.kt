@@ -60,7 +60,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
         val baseResourceDir = baseResourcePath.substringBeforeLast('/', missingDelimiterValue = "")
         return inlineImageResources(template, baseResourceDir)
             .replace("{{VERSION}}", escapedVersion)
-            .replace("{{IDE_THEME_VARS}}", themeVars)
+            .replace("/*{{IDE_THEME_VARS}}*/", themeVars)
     }
 
     private fun inlineImageResources(html: String, baseResourceDir: String): String {
@@ -80,7 +80,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 } else {
                     val mimeType = imageMimeType(resourcePath)
                     val encoded = Base64.getEncoder().encodeToString(bytes)
-                    "$prefix" + "data:$mimeType;base64,$encoded" + suffix
+                    prefix + "data:$mimeType;base64,$encoded" + suffix
                 }
             }
         }

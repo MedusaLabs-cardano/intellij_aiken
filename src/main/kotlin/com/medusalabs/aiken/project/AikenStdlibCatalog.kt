@@ -3,6 +3,7 @@ package com.medusalabs.aiken.project
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.SystemInfo
+import com.intellij.openapi.util.io.FileUtil
 import com.medusalabs.aiken.run.AikenCliCompatibility
 import java.io.File
 import java.net.HttpURLConnection
@@ -120,7 +121,7 @@ internal object AikenStdlibCatalog {
         fun specificityFor(version: AikenCliCompatibility.SemanticVersion): RequirementSpecificity? =
             alternatives
                 .filter { it.matches(version) }
-                .mapNotNull { it.specificity() }
+                .map { it.specificity() }
                 .maxOrNull()
 
         companion object {
@@ -214,7 +215,7 @@ internal object AikenStdlibCatalog {
         EQ
     }
 
-    private fun VersionRange.specificity(): RequirementSpecificity? {
+    private fun VersionRange.specificity(): RequirementSpecificity {
         var exact = false
         var lowerBound: AikenCliCompatibility.SemanticVersion? = null
         var upperBound: AikenCliCompatibility.SemanticVersion? = null
@@ -289,7 +290,8 @@ internal object AikenStdlibCatalog {
         val resolvedStdlibRoot = stdlibRoot ?: locateStdlibRoot()
         LOG.info("Loading stdlib catalog from development extras/stdlib fallback at $resolvedStdlibRoot")
         val tags = loadTags(resolvedStdlibRoot)
-        val rules = parseCompatibilityRules(Files.readString(resolvedStdlibRoot.resolve("README.md"), StandardCharsets.UTF_8))
+        val readme = FileUtil.loadFile(resolvedStdlibRoot.resolve("README.md").toFile(), StandardCharsets.UTF_8)
+        val rules = parseCompatibilityRules(readme)
         return Catalog(
             tags = filterSupportedTags(sortTags(tags), rules),
             compatibilityRules = rules
