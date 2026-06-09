@@ -171,8 +171,8 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
             JBColor(Color(0xD0, 0xD7, 0xDE), Color(0x55, 0x5A, 0x60))
         )
 
-        val sans = """-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif"""
-        val mono = """"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace"""
+        val sans = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\""
+        val mono = "\"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo"
 
         return buildString {
             appendLine(":root {")
