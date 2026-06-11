@@ -180,6 +180,22 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
         }
     }
 
+    @Test
+    fun warningDiagnosticsAreNotReportedAsWolfProblems() {
+        val warning = unusedImportDiagnostic(0, 11, 16)
+        val error =
+            Diagnostic(
+                Range(Position(1, 2), Position(1, 6)),
+                "Parse error",
+                DiagnosticSeverity.Error,
+                "aiken"
+            )
+        val service = project.getService(AikenLspDiagnosticsProjectViewService::class.java)
+
+        assertTrue(service.diagnosticsForWolfProblemsForTest(listOf(warning)).isEmpty())
+        assertEquals(listOf(error), service.diagnosticsForWolfProblemsForTest(listOf(warning, error)))
+    }
+
     private fun publishDiagnostics(
         file: com.intellij.openapi.vfs.VirtualFile,
         diagnostics: List<Diagnostic>
@@ -198,6 +214,19 @@ class AikenRemoveAllUnusedImportsIntentionTest : AikenPlatformTestCase() {
         ).apply {
             code = Either.forLeft(AikenUnusedImportsQuickFixSupport.UNUSED_IMPORT_VALUE)
         }
+
+    private fun AikenLspDiagnosticsProjectViewService.diagnosticsForWolfProblemsForTest(
+        diagnostics: List<Diagnostic>
+    ): List<Diagnostic> {
+        val method =
+            AikenLspDiagnosticsProjectViewService::class.java.getDeclaredMethod(
+                "diagnosticsForWolfProblems",
+                List::class.java
+            )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        return method.invoke(this, diagnostics) as List<Diagnostic>
+    }
 
     private class SequencedIntentionAction : IntentionAction {
         val events = mutableListOf<String>()

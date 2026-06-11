@@ -83,7 +83,7 @@ object AikenTopLevelSymbolExtractor {
                     AikenTokenTypes.FIELD -> {
                         val name = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                         if (name.isNotBlank()) {
-                            results += AikenTopLevelSymbolEntry(name, expected!!, lexer.tokenStart)
+                            results += AikenTopLevelSymbolEntry(name, expected, lexer.tokenStart)
                         }
                         if (expected == AikenTopLevelSymbolKind.TYPE) {
                             pendingTypeBody = true

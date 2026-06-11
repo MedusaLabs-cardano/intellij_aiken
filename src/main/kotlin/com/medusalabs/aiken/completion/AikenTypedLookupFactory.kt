@@ -85,17 +85,25 @@ internal object AikenTypedLookupFactory {
                             AikenTypedCandidateOrigin.LOCAL -> AikenTypedCompletionCategory.LOCAL_CONST
                             AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_CONST
                             AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_CONST
-                            else -> AikenTypedCompletionCategory.OTHER
+                            AikenTypedCandidateOrigin.EXTRA,
+                            AikenTypedCandidateOrigin.QUALIFIED,
+                            AikenTypedCandidateOrigin.BUILTIN -> AikenTypedCompletionCategory.OTHER
                         }
                     AikenTypedCandidateSource.BUILTIN_INVARIANT -> AikenTypedCompletionCategory.BUILTIN_INVARIANT
-                    else -> AikenTypedCompletionCategory.OTHER
+                    AikenTypedCandidateSource.FUNCTION,
+                    AikenTypedCandidateSource.PIPE_FUNCTION,
+                    AikenTypedCandidateSource.LIST_LITERAL,
+                    AikenTypedCandidateSource.OPTION_SOME,
+                    AikenTypedCandidateSource.CONSTRUCTIBLE -> AikenTypedCompletionCategory.OTHER
                 }
             is AikenTypedExpectedTypeCandidate.Function ->
                 when (candidate.origin) {
                     AikenTypedCandidateOrigin.LOCAL -> AikenTypedCompletionCategory.LOCAL_FUNCTION
                     AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_FUNCTION
                     AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_FUNCTION
-                    else -> AikenTypedCompletionCategory.OTHER
+                    AikenTypedCandidateOrigin.EXTRA,
+                    AikenTypedCandidateOrigin.QUALIFIED,
+                    AikenTypedCandidateOrigin.BUILTIN -> AikenTypedCompletionCategory.OTHER
                 }
             is AikenTypedExpectedTypeCandidate.ListLiteral -> AikenTypedCompletionCategory.LIST_LITERAL
             is AikenTypedExpectedTypeCandidate.OptionSome -> AikenTypedCompletionCategory.OPTION_SOME
@@ -106,7 +114,11 @@ internal object AikenTypedLookupFactory {
     internal fun spreadRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
         when (candidate) {
             is AikenTypedExpectedTypeCandidate.Identifier -> expectedTypeRankingCategory(candidate)
-            else -> error("Unsupported spread candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Function,
+            is AikenTypedExpectedTypeCandidate.PipeFunction,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported spread candidate: $candidate")
         }
 
     internal fun pipeRankingCategory(candidate: AikenTypedExpectedTypeCandidate): AikenTypedCompletionCategory =
@@ -117,9 +129,14 @@ internal object AikenTypedLookupFactory {
                     AikenTypedCandidateOrigin.IMPORTED -> AikenTypedCompletionCategory.IMPORTED_FUNCTION
                     AikenTypedCandidateOrigin.QUALIFIED -> AikenTypedCompletionCategory.QUALIFIED_FUNCTION
                     AikenTypedCandidateOrigin.UNIMPORTED -> AikenTypedCompletionCategory.UNIMPORTED_FUNCTION
-                    else -> AikenTypedCompletionCategory.OTHER
+                    AikenTypedCandidateOrigin.EXTRA,
+                    AikenTypedCandidateOrigin.BUILTIN -> AikenTypedCompletionCategory.OTHER
                 }
-            else -> error("Unsupported pipe candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Identifier,
+            is AikenTypedExpectedTypeCandidate.Function,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported pipe candidate: $candidate")
         }
 
     internal fun expectedTypeInsertionFamily(candidate: AikenTypedExpectedTypeCandidate): AikenTypedInsertionFamily =
@@ -151,7 +168,11 @@ internal object AikenTypedLookupFactory {
                     text = candidate.name,
                     autoImportTarget = candidate.autoImportTarget()
                 )
-            else -> error("Unsupported spread candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Function,
+            is AikenTypedExpectedTypeCandidate.PipeFunction,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported spread candidate: $candidate")
         }
 
     internal fun pipeInsertionFamily(candidate: AikenTypedExpectedTypeCandidate): AikenTypedInsertionFamily =
@@ -162,7 +183,11 @@ internal object AikenTypedLookupFactory {
                     signature = candidate.signature,
                     autoImportTarget = candidate.autoImportTarget(candidate.lookupText)
                 )
-            else -> error("Unsupported pipe candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Identifier,
+            is AikenTypedExpectedTypeCandidate.Function,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported pipe candidate: $candidate")
         }
 
     fun createExpectedTypeLookup(
@@ -253,7 +278,11 @@ internal object AikenTypedLookupFactory {
                         bold = candidate.kind == CompletionSymbolKind.KEYWORD
                     )
                 )
-            else -> error("Unsupported spread candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Function,
+            is AikenTypedExpectedTypeCandidate.PipeFunction,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported spread candidate: $candidate")
         }
 
     fun createPipeLookup(candidate: AikenTypedExpectedTypeCandidate): LookupElement =
@@ -277,7 +306,11 @@ internal object AikenTypedLookupFactory {
                             }
                     )
                 )
-            else -> error("Unsupported pipe candidate: $candidate")
+            is AikenTypedExpectedTypeCandidate.Identifier,
+            is AikenTypedExpectedTypeCandidate.Function,
+            AikenTypedExpectedTypeCandidate.ListLiteral,
+            AikenTypedExpectedTypeCandidate.OptionSome,
+            is AikenTypedExpectedTypeCandidate.Constructible -> error("Unsupported pipe candidate: $candidate")
         }
 
     private fun createStandardLookup(spec: StandardLookupSpec): LookupElement {
@@ -330,7 +363,7 @@ internal object AikenTypedLookupFactory {
         insertionContext: InsertionContext,
         insertionFamily: AikenTypedInsertionFamily
     ) {
-        AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+        AikenAutoPopupGuard.cancelPendingRequests()
         when (insertionFamily) {
             is AikenTypedInsertionFamily.ReplaceIdentifier -> {
                 replaceCurrentIdentifierPrefix(insertionContext, insertionFamily.text)

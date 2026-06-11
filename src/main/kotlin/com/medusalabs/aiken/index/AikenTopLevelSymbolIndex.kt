@@ -13,7 +13,7 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
-val AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME: ID<String, Int> = ID.create("aiken.topLevelSymbols")
+val aikenTopLevelSymbolIndexName: ID<String, Int> = ID.create("aiken.topLevelSymbols")
 
 fun aikenTopLevelSymbolNameKey(kind: AikenTopLevelSymbolKind, symbolName: String): String =
     "name|${kind.name.lowercase()}|$symbolName"
@@ -22,7 +22,7 @@ fun aikenTopLevelSymbolModuleKey(kind: AikenTopLevelSymbolKind, modulePath: Stri
     "module|${kind.name.lowercase()}|$modulePath|$symbolName"
 
 class AikenTopLevelSymbolIndex : FileBasedIndexExtension<String, Int>() {
-    override fun getName(): ID<String, Int> = AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+    override fun getName(): ID<String, Int> = aikenTopLevelSymbolIndexName
 
     override fun getVersion(): Int = 1
 

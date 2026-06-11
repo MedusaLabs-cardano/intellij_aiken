@@ -13,14 +13,14 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
-val AIKEN_CONSTRUCTIBLE_INDEX_NAME: ID<String, String> = ID.create("aiken.constructibles")
+val aikenConstructibleIndexName: ID<String, String> = ID.create("aiken.constructibles")
 fun aikenConstructibleResultTypeKey(resultType: String): String = "result|$resultType"
-private const val AIKEN_CONSTRUCTIBLE_ENTRY_SEPARATOR: Char = '\u001C'
-private const val AIKEN_CONSTRUCTIBLE_FIELD_SEPARATOR: Char = '\u001D'
-private const val AIKEN_CONSTRUCTIBLE_PART_SEPARATOR: Char = '\u001E'
-private const val AIKEN_CONSTRUCTIBLE_FIELD_PART_SEPARATOR: Char = '\u001F'
-private const val AIKEN_CONSTRUCTIBLE_RETURN_TYPE_ENTRY_SEPARATOR: Char = '\u001A'
-private const val AIKEN_CONSTRUCTIBLE_RETURN_TYPE_FIELD_SEPARATOR: Char = '\u001B'
+private const val aikenConstructibleEntrySeparator: Char = '\u001C'
+private const val aikenConstructibleFieldSeparator: Char = '\u001D'
+private const val aikenConstructiblePartSeparator: Char = '\u001E'
+private const val aikenConstructibleFieldPartSeparator: Char = '\u001F'
+private const val aikenConstructibleReturnTypeEntrySeparator: Char = '\u001A'
+private const val aikenConstructibleReturnTypeFieldSeparator: Char = '\u001B'
 
 data class AikenConstructibleReturnTypeEntry(
     val modulePath: String,
@@ -29,15 +29,15 @@ data class AikenConstructibleReturnTypeEntry(
 )
 
 fun encodeAikenConstructibleReturnTypeIndexValues(entries: List<AikenConstructibleReturnTypeEntry>): String =
-    entries.joinToString(AIKEN_CONSTRUCTIBLE_RETURN_TYPE_ENTRY_SEPARATOR.toString()) { entry ->
-        listOf(entry.modulePath, entry.ownerName, entry.resultTypeName).joinToString(AIKEN_CONSTRUCTIBLE_RETURN_TYPE_FIELD_SEPARATOR.toString())
+    entries.joinToString(aikenConstructibleReturnTypeEntrySeparator.toString()) { entry ->
+        listOf(entry.modulePath, entry.ownerName, entry.resultTypeName).joinToString(aikenConstructibleReturnTypeFieldSeparator.toString())
     }
 
 fun decodeAikenConstructibleReturnTypeIndexValues(value: String): List<AikenConstructibleReturnTypeEntry> =
     value
-        .split(AIKEN_CONSTRUCTIBLE_RETURN_TYPE_ENTRY_SEPARATOR)
+        .split(aikenConstructibleReturnTypeEntrySeparator)
         .mapNotNull { encodedEntry ->
-            val parts = encodedEntry.split(AIKEN_CONSTRUCTIBLE_RETURN_TYPE_FIELD_SEPARATOR, limit = 3)
+            val parts = encodedEntry.split(aikenConstructibleReturnTypeFieldSeparator, limit = 3)
             if (parts.size != 3) return@mapNotNull null
             val (modulePath, ownerName, resultTypeName) = parts
             if (modulePath.isBlank() || ownerName.isBlank() || resultTypeName.isBlank()) return@mapNotNull null
@@ -46,14 +46,14 @@ fun decodeAikenConstructibleReturnTypeIndexValues(value: String): List<AikenCons
 
 fun decodeAikenConstructibleIndexValue(value: String): List<AikenConstructibleEntry> =
     value
-        .split(AIKEN_CONSTRUCTIBLE_ENTRY_SEPARATOR)
+        .split(aikenConstructibleEntrySeparator)
         .asSequence()
         .filter { it.isNotBlank() }
         .mapNotNull(::decodeConstructibleEntry)
         .toList()
 
 class AikenConstructibleIndex : FileBasedIndexExtension<String, String>() {
-    override fun getName(): ID<String, String> = AIKEN_CONSTRUCTIBLE_INDEX_NAME
+    override fun getName(): ID<String, String> = aikenConstructibleIndexName
 
     override fun getVersion(): Int = 3
 
@@ -107,7 +107,7 @@ class AikenConstructibleIndex : FileBasedIndexExtension<String, String>() {
 }
 
 private fun encodeConstructibleEntries(entries: List<AikenConstructibleEntry>): String =
-    entries.joinToString(AIKEN_CONSTRUCTIBLE_ENTRY_SEPARATOR.toString()) { entry ->
+    entries.joinToString(aikenConstructibleEntrySeparator.toString()) { entry ->
         listOf(
             entry.ownerName,
             entry.resultTypeName,
@@ -115,14 +115,14 @@ private fun encodeConstructibleEntries(entries: List<AikenConstructibleEntry>): 
             entry.offset.toString(),
             entry.supportsNamedSyntax.toString(),
             entry.exported.toString(),
-            entry.fields.joinToString(AIKEN_CONSTRUCTIBLE_FIELD_SEPARATOR.toString()) { field ->
-                listOf(field.name, field.type, field.offset.toString()).joinToString(AIKEN_CONSTRUCTIBLE_FIELD_PART_SEPARATOR.toString())
+            entry.fields.joinToString(aikenConstructibleFieldSeparator.toString()) { field ->
+                listOf(field.name, field.type, field.offset.toString()).joinToString(aikenConstructibleFieldPartSeparator.toString())
             }
-        ).joinToString(AIKEN_CONSTRUCTIBLE_PART_SEPARATOR.toString())
+        ).joinToString(aikenConstructiblePartSeparator.toString())
     }
 
 private fun decodeConstructibleEntry(raw: String): AikenConstructibleEntry? {
-    val parts = raw.split(AIKEN_CONSTRUCTIBLE_PART_SEPARATOR)
+    val parts = raw.split(aikenConstructiblePartSeparator)
     if (parts.size < 7) return null
 
     val kind = runCatching { AikenConstructibleKind.valueOf(parts[2]) }.getOrNull() ?: return null
@@ -131,11 +131,11 @@ private fun decodeConstructibleEntry(raw: String): AikenConstructibleEntry? {
     val exported = parts[5].toBooleanStrictOrNull() ?: return null
     val fields =
         parts[6]
-            .split(AIKEN_CONSTRUCTIBLE_FIELD_SEPARATOR)
+            .split(aikenConstructibleFieldSeparator)
             .asSequence()
             .filter { it.isNotBlank() }
             .mapNotNull { fieldRaw ->
-                val fieldParts = fieldRaw.split(AIKEN_CONSTRUCTIBLE_FIELD_PART_SEPARATOR)
+                val fieldParts = fieldRaw.split(aikenConstructibleFieldPartSeparator)
                 if (fieldParts.size < 3) return@mapNotNull null
                 val fieldOffset = fieldParts[2].toIntOrNull() ?: return@mapNotNull null
                 AikenConstructibleFieldEntry(

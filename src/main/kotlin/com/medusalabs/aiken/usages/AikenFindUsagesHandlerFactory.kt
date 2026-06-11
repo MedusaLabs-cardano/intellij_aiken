@@ -4,8 +4,8 @@ import com.intellij.find.findUsages.FindUsagesHandler
 import com.intellij.find.findUsages.FindUsagesHandlerFactory
 import com.intellij.find.findUsages.FindUsagesOptions
 import com.intellij.lexer.Lexer
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
@@ -23,7 +23,7 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.ID
 import com.medusalabs.aiken.highlight.lexer.UplcLexing
 import com.medusalabs.aiken.highlight.lexer.UplcTokenTypes
-import com.medusalabs.aiken.index.UPLC_IDENTIFIER_INDEX_NAME
+import com.medusalabs.aiken.index.uplcIdentifierIndexName
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
 import com.medusalabs.aiken.navigation.AikenDeclarationResolver
@@ -47,43 +47,41 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
         element: PsiElement,
         processor: Processor<in UsageInfo>,
         options: FindUsagesOptions
-    ): Boolean {
-        return runReadAction {
-            val resolved = AikenDeclarationResolver.resolve(element) ?: element
-            val name = resolved.text
-            if (name.isEmpty()) return@runReadAction true
-            val declarationRange = resolved.textRange
-            val declarationFile = resolved.containingFile?.virtualFile
-            if (!processor.process(UsageInfo(resolved))) return@runReadAction false
+    ): Boolean = ReadAction.computeBlocking<Boolean, RuntimeException> {
+        val resolved = AikenDeclarationResolver.resolve(element) ?: element
+        val name = resolved.text
+        if (name.isEmpty()) return@computeBlocking true
+        val declarationRange = resolved.textRange
+        val declarationFile = resolved.containingFile?.virtualFile
+        if (!processor.process(UsageInfo(resolved))) return@computeBlocking false
 
-            if (resolved.containingFile?.fileType == AikenFileType) {
-                return@runReadAction super.processElementUsages(resolved, processor, options)
-            } else {
-                val type = resolved.node?.elementType ?: return@runReadAction true
-                val config = UsageConfig.fromElement(type) ?: return@runReadAction true
-                val project = resolved.project
-                val effectiveSearchScope =
-                    LegacyIndexedSearchScope.create(project, AikenSearchScopes.forElement(resolved), options.searchScope)
-                val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
-                val targetFiles = collectTargetFiles(project, resolved, config, name, effectiveSearchScope)
-                if (targetFiles.isEmpty()) return@runReadAction true
-                val psiManager = PsiManager.getInstance(project)
-                val psiDocumentManager = PsiDocumentManager.getInstance(project)
-                for (vf in targetFiles) {
-                    val psiFile = psiManager.findFile(vf) ?: continue
-                    val document = psiDocumentManager.getDocument(psiFile) ?: continue
-                    val limit = if (vf == resolved.containingFile?.virtualFile) limitInFile else null
-                    val ranges = collectRanges(document, config, name, limit)
-                    for (range in ranges.distinct()) {
-                        if (!effectiveSearchScope.contains(psiFile, range)) continue
-                        if (vf == declarationFile && declarationRange == range) continue
-                        if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return@runReadAction false
-                    }
+        if (resolved.containingFile?.fileType == AikenFileType) {
+            return@computeBlocking super.processElementUsages(resolved, processor, options)
+        } else {
+            val type = resolved.node?.elementType ?: return@computeBlocking true
+            val config = UsageConfig.fromElement(type) ?: return@computeBlocking true
+            val project = resolved.project
+            val effectiveSearchScope =
+                LegacyIndexedSearchScope.create(project, AikenSearchScopes.forElement(resolved), options.searchScope)
+            val limitInFile: TextRange? = config.limitFactory?.invoke(resolved, name)
+            val targetFiles = collectTargetFiles(project, resolved, config, name, effectiveSearchScope)
+            if (targetFiles.isEmpty()) return@computeBlocking true
+            val psiManager = PsiManager.getInstance(project)
+            val psiDocumentManager = PsiDocumentManager.getInstance(project)
+            for (vf in targetFiles) {
+                val psiFile = psiManager.findFile(vf) ?: continue
+                val document = psiDocumentManager.getDocument(psiFile) ?: continue
+                val limit = if (vf == resolved.containingFile?.virtualFile) limitInFile else null
+                val ranges = collectRanges(document, config, name, limit)
+                for (range in ranges.distinct()) {
+                    if (!effectiveSearchScope.contains(psiFile, range)) continue
+                    if (vf == declarationFile && declarationRange == range) continue
+                    if (!processor.process(UsageInfo(psiFile, range.startOffset, range.endOffset))) return@computeBlocking false
                 }
             }
-
-            true
         }
+
+        true
     }
 
     private fun collectTargetFiles(
@@ -163,28 +161,28 @@ private class AikenFindUsagesHandler(element: PsiElement) : FindUsagesHandler(el
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.FUNCTION),
                         fileType = UplcFileType,
-                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
+                        indexId = uplcIdentifierIndexName,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.TYPE -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.TYPE),
                         fileType = UplcFileType,
-                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
+                        indexId = uplcIdentifierIndexName,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.FIELD -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.FIELD),
                         fileType = UplcFileType,
-                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
+                        indexId = uplcIdentifierIndexName,
                         scope = UsageScope.ALL_PROJECT_FILES
                     )
                     UplcTokenTypes.IDENTIFIER -> UsageConfig(
                         lexerFactory = { UplcLexing.createLexer() },
                         tokenTypes = setOf(UplcTokenTypes.IDENTIFIER),
                         fileType = UplcFileType,
-                        indexId = UPLC_IDENTIFIER_INDEX_NAME,
+                        indexId = uplcIdentifierIndexName,
                         scope = UsageScope.CURRENT_FILE
                     )
                     else -> null

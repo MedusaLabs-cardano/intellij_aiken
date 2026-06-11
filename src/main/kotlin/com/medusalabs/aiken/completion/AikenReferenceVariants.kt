@@ -15,7 +15,7 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
+import com.medusalabs.aiken.index.aikenExportIndexName
 import com.medusalabs.aiken.index.AikenConstTypeExtractor
 import com.medusalabs.aiken.index.AikenPublicExportExtractor
 import com.medusalabs.aiken.index.AikenTopLevelSymbolEntry
@@ -636,7 +636,7 @@ object AikenReferenceVariants {
         return try {
             val scope = AikenSearchScopes.forElement(anchor)
             val index = FileBasedIndex.getInstance()
-            for (value in index.getValues(AIKEN_EXPORT_INDEX_NAME, modulePath, scope)) {
+            for (value in index.getValues(aikenExportIndexName, modulePath, scope)) {
                 names += decodeAikenExportIndexValue(value)
             }
             names.toList()
@@ -962,14 +962,14 @@ object AikenReferenceVariants {
                 .withTypeText("module", true)
                 .withTailText(" from $modulePath", true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+                    AikenAutoPopupGuard.cancelPendingRequests()
                     val replacementText = "$canonicalQualifier."
                     val insertedOffset = replaceCurrentQualifiedPrefix(insertionContext, replacementText)
                     if (imported) {
                         insertionContext.commitDocument()
                         insertionContext.editor.caretModel.moveToOffset(insertedOffset + replacementText.length)
                         AutoPopupController.getInstance(insertionContext.project)
-                            .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                            .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
                     } else {
                         val insertedRangeMarker =
                             insertionContext.document.createRangeMarker(
@@ -1000,7 +1000,7 @@ object AikenReferenceVariants {
                                     }
                                 insertionContext.editor.caretModel.moveToOffset(caretOffset)
                                 AutoPopupController.getInstance(insertionContext.project)
-                                    .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                                    .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
                             } finally {
                                 insertedRangeMarker.dispose()
                             }
@@ -1155,7 +1155,7 @@ object AikenReferenceVariants {
                 .withTypeText(spec.typeText, true)
                 .withTailText(spec.tailText, true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+                    AikenAutoPopupGuard.cancelPendingRequests()
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
         return AikenCompletionSorting.annotate(
@@ -1222,7 +1222,7 @@ object AikenReferenceVariants {
                         insertionContext.editor.caretModel.moveToOffset(caretOffset)
                         if (insertionFamily.triggerMemberAutoPopup) {
                             AutoPopupController.getInstance(insertionContext.project)
-                                .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                                .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
                         }
                     } finally {
                         insertedRangeMarker.dispose()
@@ -1260,7 +1260,7 @@ object AikenReferenceVariants {
                             }
                         insertionContext.editor.caretModel.moveToOffset(caretOffset)
                         AutoPopupController.getInstance(insertionContext.project)
-                            .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                            .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
                     } finally {
                         insertedRangeMarker.dispose()
                     }

@@ -15,7 +15,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 @Service(Service.Level.PROJECT)
-@Suppress("UnstableApiUsage")
 class AikenLspDiagnosticsProjectViewService(private val project: Project) {
     enum class FileSeverity(val rank: Int) {
         ERROR(3),
@@ -55,7 +54,7 @@ class AikenLspDiagnosticsProjectViewService(private val project: Project) {
             return
         }
 
-        val problems = buildProblems(file, diagnostics, wolf)
+        val problems = buildProblems(file, diagnosticsForWolfProblems(diagnostics), wolf)
 
         if (problems.isEmpty()) {
             wolf.clearProblems(file)
@@ -100,6 +99,9 @@ class AikenLspDiagnosticsProjectViewService(private val project: Project) {
             DiagnosticSeverity.Information -> FileSeverity.INFO
             DiagnosticSeverity.Hint -> FileSeverity.INFO
         }
+
+    private fun diagnosticsForWolfProblems(diagnostics: List<Diagnostic>): List<Diagnostic> =
+        diagnostics.filter { it.severity == DiagnosticSeverity.Error }
 
     private fun scheduleProjectViewRefresh() {
         if (!refreshQueued.compareAndSet(false, true)) return

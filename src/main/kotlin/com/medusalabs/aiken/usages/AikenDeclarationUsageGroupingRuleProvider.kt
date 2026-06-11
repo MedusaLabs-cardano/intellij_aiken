@@ -10,7 +10,6 @@ import com.intellij.usages.PsiElementUsageTarget
 import com.intellij.usages.Usage
 import com.intellij.usages.UsageGroup
 import com.intellij.usages.UsageTarget
-import com.intellij.usages.impl.rules.UsageGroupingRulesDefaultRanks
 import com.intellij.usages.rules.PsiElementUsage
 import com.intellij.usages.rules.UsageGroupingRule
 import com.intellij.usages.rules.UsageGroupingRuleProvider
@@ -28,7 +27,7 @@ class AikenDeclarationUsageGroupingRuleProvider : UsageGroupingRuleProvider {
 private class AikenDeclarationUsageGroupingRule(
     private val project: Project
 ) : UsageGroupingRule {
-    override fun getRank(): Int = UsageGroupingRulesDefaultRanks.BEFORE_ALL.absoluteRank
+    override fun getRank(): Int = AIKEN_DECLARATION_GROUPING_RANK
 
     override fun getParentGroupsFor(usage: Usage, targets: Array<UsageTarget>): List<UsageGroup> {
         val usageElement = (usage as? PsiElementUsage)?.element ?: return emptyList()
@@ -70,6 +69,8 @@ private class AikenDeclarationUsageGroupingRule(
 
     private fun isAikenFamilyFileType(fileType: FileType?): Boolean = fileType == AikenFileType || fileType == UplcFileType
 }
+
+private const val AIKEN_DECLARATION_GROUPING_RANK = 10_000
 
 private class AikenDeclarationUsageGroup(
     private val targetElement: PsiElement

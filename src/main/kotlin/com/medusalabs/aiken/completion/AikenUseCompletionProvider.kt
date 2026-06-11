@@ -16,8 +16,8 @@ import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.util.ProcessingContext
 import com.intellij.util.indexing.FileBasedIndex
-import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+import com.medusalabs.aiken.index.aikenExportIndexName
+import com.medusalabs.aiken.index.aikenTopLevelSymbolIndexName
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.aikenTopLevelSymbolModuleKey
 import com.medusalabs.aiken.index.decodeAikenExportIndexValue
@@ -430,7 +430,7 @@ private data class AikenImportCatalog(
         val scope = moduleScope ?: return null
 
         for ((symbolKind, exportKind) in lookupKinds) {
-            val values = index.getValues(AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME, aikenTopLevelSymbolModuleKey(symbolKind, module, symbolName), scope)
+            val values = index.getValues(aikenTopLevelSymbolIndexName, aikenTopLevelSymbolModuleKey(symbolKind, module, symbolName), scope)
             if (values.isNotEmpty()) return exportKind
         }
         return null
@@ -464,7 +464,7 @@ private data class AikenImportCatalog(
                 val entities = LinkedHashMap<String, List<String>>(moduleNames.size)
                 for (module in moduleNames.sorted()) {
                     val names = LinkedHashSet<String>()
-                    for (value in index.getValues(AIKEN_EXPORT_INDEX_NAME, module, scope)) {
+                    for (value in index.getValues(aikenExportIndexName, module, scope)) {
                         names += decodeAikenExportIndexValue(value)
                     }
                     entities[module] = names.sorted()

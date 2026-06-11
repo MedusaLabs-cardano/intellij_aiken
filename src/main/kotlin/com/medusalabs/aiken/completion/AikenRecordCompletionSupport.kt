@@ -13,8 +13,8 @@ import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_CONSTRUCTIBLE_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+import com.medusalabs.aiken.index.aikenConstructibleIndexName
+import com.medusalabs.aiken.index.aikenTopLevelSymbolIndexName
 import com.medusalabs.aiken.index.AikenConstructibleEntry
 import com.medusalabs.aiken.index.AikenConstructibleExtractor
 import com.medusalabs.aiken.index.AikenConstructibleKind
@@ -96,7 +96,7 @@ object AikenRecordCompletionSupport {
                         insertionContext.setLaterRunnable {
                             previousLaterRunnable?.run()
                             AutoPopupController.getInstance(insertionContext.project)
-                                .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                                .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
                         }
                     }
             lookups += builder
@@ -238,7 +238,7 @@ object AikenRecordCompletionSupport {
         val index = FileBasedIndex.getInstance()
         try {
             for (modulePath in importedModules) {
-                for (value in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, modulePath, scope)) {
+                for (value in index.getValues(aikenConstructibleIndexName, modulePath, scope)) {
                     entries +=
                         decodeAikenConstructibleIndexValue(value).map { entry ->
                             VisibleConstructibleEntry(modulePath, entry, isCurrentFile = false)
@@ -331,7 +331,7 @@ object AikenRecordCompletionSupport {
 
         try {
             index.processValues(
-                AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
+                aikenTopLevelSymbolIndexName,
                 aikenTopLevelSymbolNameKey(AikenTopLevelSymbolKind.TYPE, ownerName),
                 null,
                 ValueProcessor<Int> { file, _ ->

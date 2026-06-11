@@ -2,6 +2,7 @@ package com.medusalabs.aiken.run
 
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.SettingsEditor
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.TextBrowseFolderListener
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.ScrollPaneFactory
@@ -16,7 +17,6 @@ import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
 import javax.swing.JComponent
-import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.BoxLayout
@@ -40,15 +40,15 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val buildSilentWarningsCheck = JBCheckBox("Hide warnings output")
     private val buildWatchCheck = JBCheckBox("Re-run on file changes")
 
-    private val checkWarningsHandlingCombo = JComboBox(CheckWarningsHandling.entries.toTypedArray())
+    private val checkWarningsHandlingCombo = ComboBox(CheckWarningsHandling.entries.toTypedArray())
     private val checkWatchCheck = JBCheckBox("Re-run on file changes")
 
     private val buildUplcCheck = JBCheckBox("Dump textual UPLC")
     private val buildEnvField = JBTextField()
     private val buildOutField = JBTextField()
-    private val buildTraceFilterCombo = JComboBox(AikenTraceFilter.entries.toTypedArray())
-    private val buildTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
-    private val buildOutputModeCombo = JComboBox(AikenBuildOutputMode.entries.toTypedArray())
+    private val buildTraceFilterCombo = ComboBox(AikenTraceFilter.entries.toTypedArray())
+    private val buildTraceLevelCombo = ComboBox(AikenTraceLevel.entries.toTypedArray())
+    private val buildOutputModeCombo = ComboBox(AikenBuildOutputMode.entries.toTypedArray())
 
     private val addressInField = JBTextField()
     private val addressModuleField = JBTextField()
@@ -71,7 +71,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyValidatorField = JBTextField()
     private val applyDefaultCborParametersField = JBTextField()
     private val applyAutoUntilNoParametersCheck = JBCheckBox("Auto-repeat until no parameters remain")
-    private val applyOutputModeCombo = JComboBox(AikenApplyOutputMode.entries.toTypedArray())
+    private val applyOutputModeCombo = ComboBox(AikenApplyOutputMode.entries.toTypedArray())
     private val applyAutoRepeatPanel = JPanel().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
         isOpaque = false
@@ -79,25 +79,25 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val applyAutoRepeatComment = JLabel("If disabled, run Parametrize blueprint separately for each parameter.")
 
     private val checkSkipTestsCheck = JBCheckBox("Skip tests")
-    private val checkOutputModeCombo = JComboBox(AikenCheckOutputMode.entries.toTypedArray())
+    private val checkOutputModeCombo = ComboBox(AikenCheckOutputMode.entries.toTypedArray())
     private val checkDebugCheck = JBCheckBox("Pretty-print failing test UPLC")
     private val checkSeedField = JBTextField()
     private val checkMaxSuccessField = JBTextField()
-    private val checkPropertyCoverageCombo = JComboBox(AikenPropertyCoverage.entries.toTypedArray())
+    private val checkPropertyCoverageCombo = ComboBox(AikenPropertyCoverage.entries.toTypedArray())
     private val checkMatchTestsField = JBTextField()
     private val checkExactMatchCheck = JBCheckBox("Exact test name match")
     private val checkEnvField = JBTextField()
-    private val checkTraceFilterCombo = JComboBox(AikenTraceFilter.entries.toTypedArray())
-    private val checkTraceLevelCombo = JComboBox(AikenTraceLevel.entries.toTypedArray())
+    private val checkTraceFilterCombo = ComboBox(AikenTraceFilter.entries.toTypedArray())
+    private val checkTraceLevelCombo = ComboBox(AikenTraceLevel.entries.toTypedArray())
 
     init {
         val projectDirectoryDescriptor =
             FileChooserDescriptorFactory.createSingleFolderDescriptor()
-                .withTitle("Select project directory")
+                .withTitle("Select Project Directory")
                 .withDescription("Directory passed to `aiken ... [DIRECTORY]` and used as working directory.")
         projectDirectoryField.addBrowseFolderListener(TextBrowseFolderListener(projectDirectoryDescriptor, null))
 
-        (projectDirectoryField.textField as? JBTextField)?.emptyText?.text = "e.g. /home/user/my-aiken-project"
+        (projectDirectoryField.textField as? JBTextField)?.emptyText?.text = "Current project directory"
         extraArgsField.emptyText.text = "e.g. --help"
 
         buildEnvField.emptyText.text = "e.g. preprod"

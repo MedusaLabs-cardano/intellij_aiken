@@ -1,9 +1,10 @@
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 import org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.20"
+    id("org.jetbrains.kotlin.jvm") version "2.3.0"
     id("org.jetbrains.intellij.platform") version "2.10.2"
 }
 
@@ -80,8 +81,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     intellijPlatform {
-        intellijIdeaUltimate("2025.2.4")
+        intellijIdeaUltimate("2026.1")
         bundledPlugin("org.jetbrains.plugins.terminal")
+        pluginVerifier()
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         // Keep dependency surface minimal; custom lexer handles syntax
@@ -91,7 +93,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "252.25557"
+            sinceBuild = "261"
         }
 
         changeNotes = markdownChangeNotesToHtml(file("update_en.md").readText())
@@ -100,6 +102,13 @@ intellijPlatform {
     publishing {
         token.set(System.getenv("PUBLISH_TOKEN"))
     }
+
+    pluginVerification {
+        verificationReportsFormats.set(
+            listOf(VerifyPluginTask.VerificationReportsFormats.MARKDOWN)
+        )
+    }
+
 }
 
 tasks {
@@ -112,10 +121,29 @@ tasks {
     withType<RunIdeTask> {
         systemProperty("remote.x11.workaround", false)
     }
+
+    withType<VerifyPluginTask> {
+        val configuredIdePath =
+            providers.gradleProperty("pluginVerifierIdePath")
+                .orElse(providers.environmentVariable("PLUGIN_VERIFIER_IDE_PATH"))
+                .orNull
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        val toolboxIdePath =
+            providers.systemProperty("user.home")
+                .map { "$it/.local/share/JetBrains/Toolbox/apps/intellij-idea" }
+                .orNull
+                ?.takeIf { file(it).exists() }
+        val idePath = configuredIdePath ?: toolboxIdePath
+        if (idePath != null) {
+            ides.setFrom(file(idePath))
+        }
+    }
 }
 
 kotlin {
     compilerOptions {
+        jvmDefault.set(org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode.NO_COMPATIBILITY)
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
 }

@@ -14,7 +14,7 @@ internal object AikenWhenCompletionSupport {
             .withTailText(" { ... }", true)
             .withTypeText("when", true)
             .withInsertHandler { insertionContext, _ ->
-                AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+                AikenAutoPopupGuard.cancelPendingRequests()
 
                 val document = insertionContext.document
                 val tailOffset = insertionContext.tailOffset

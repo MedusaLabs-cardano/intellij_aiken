@@ -13,9 +13,9 @@ import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
 import com.medusalabs.aiken.highlight.lexer.AikenLexing
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_CONSTRUCTIBLE_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+import com.medusalabs.aiken.index.aikenConstructibleIndexName
+import com.medusalabs.aiken.index.aikenFunctionSignatureIndexName
+import com.medusalabs.aiken.index.aikenTopLevelSymbolIndexName
 import com.medusalabs.aiken.index.AikenConstTypeExtractor
 import com.medusalabs.aiken.index.AikenConstructibleEntry
 import com.medusalabs.aiken.index.AikenConstructibleExtractor
@@ -353,7 +353,7 @@ object AikenTypeDirectedCompletionSupport {
                         is AikenTypedExpectedTypeCandidate.Function -> true
                         AikenTypedExpectedTypeCandidate.ListLiteral -> true
                         AikenTypedExpectedTypeCandidate.OptionSome -> true
-                        else -> false
+                        is AikenTypedExpectedTypeCandidate.PipeFunction -> false
                     }
                 }
                 .map { candidate ->
@@ -371,7 +371,7 @@ object AikenTypeDirectedCompletionSupport {
                             is AikenTypedExpectedTypeCandidate.Function -> AikenTypedCompletionCategory.PATTERN_FUNCTION
                             AikenTypedExpectedTypeCandidate.ListLiteral,
                             AikenTypedExpectedTypeCandidate.OptionSome -> AikenTypedCompletionCategory.PATTERN_TEMPLATE
-                            else -> AikenTypedCompletionCategory.OTHER
+                            is AikenTypedExpectedTypeCandidate.PipeFunction -> AikenTypedCompletionCategory.OTHER
                         }
                     AikenCompletionSorting.annotateTyped(
                         lookup,
@@ -2583,7 +2583,7 @@ object AikenTypeDirectedCompletionSupport {
             val modulePathsFromResultType = LinkedHashSet<String>()
             for (compatibleType in expectedProfile.compatibleTypes.keys) {
                 val key = aikenConstructibleResultTypeKey(compatibleType)
-                for (value in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, key, scope)) {
+                for (value in index.getValues(aikenConstructibleIndexName, key, scope)) {
                     for (entry in decodeAikenConstructibleReturnTypeIndexValues(value)) {
                         if (entry.ownerName == ownerName) {
                             modulePathsFromResultType += entry.modulePath
@@ -2597,7 +2597,7 @@ object AikenTypeDirectedCompletionSupport {
                 addAll(modulePathsFromResultType)
             }
             for (modulePath in modulePaths) {
-                for (value in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, modulePath, scope)) {
+                for (value in index.getValues(aikenConstructibleIndexName, modulePath, scope)) {
                     for (entry in decodeAikenConstructibleIndexValue(value)) {
                         addEntry(modulePath, entry)
                     }
@@ -2919,7 +2919,7 @@ object AikenTypeDirectedCompletionSupport {
         val index = FileBasedIndex.getInstance()
         val scope = AikenSearchScopes.forElement(anchor)
         for (target in importedTargets) {
-            index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureModuleKey(target.modulePath, target.symbolName), scope)
+            index.getValues(aikenFunctionSignatureIndexName, aikenFunctionSignatureModuleKey(target.modulePath, target.symbolName), scope)
                 .firstOrNull()
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
@@ -2953,7 +2953,7 @@ object AikenTypeDirectedCompletionSupport {
         val scope = AikenSearchScopes.forElement(anchor)
         for (target in importedTargets) {
             val signature =
-                index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureModuleKey(target.modulePath, target.symbolName), scope)
+                index.getValues(aikenFunctionSignatureIndexName, aikenFunctionSignatureModuleKey(target.modulePath, target.symbolName), scope)
                     .firstOrNull()
                     ?.trim()
                     .orEmpty()
@@ -3427,7 +3427,7 @@ object AikenTypeDirectedCompletionSupport {
 
         try {
             index.processValues(
-                AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
+                aikenTopLevelSymbolIndexName,
                 aikenTopLevelSymbolNameKey(AikenTopLevelSymbolKind.TYPE, typeName),
                 null,
                 ValueProcessor<Int> { file, _ ->

@@ -1,6 +1,5 @@
 package com.medusalabs.aiken.completion
 
-import com.intellij.codeInsight.AutoPopupController
 import com.intellij.codeInsight.lookup.LookupManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
@@ -12,11 +11,7 @@ import com.intellij.psi.PsiFile
 internal object AikenAutoPopupGuard {
     private val suppressedExactPrefixKey = Key.create<String>("aiken.autopopup.suppressed.exact.prefix")
 
-    fun cancelPendingRequests(
-        project: Project
-    ) {
-        AutoPopupController.getInstance(project).cancelAllRequests()
-    }
+    fun cancelPendingRequests() = Unit
 
     fun suppressActiveLookupOnExactMatch(
         project: Project,
@@ -32,7 +27,7 @@ internal object AikenAutoPopupGuard {
             }
         if (!hasExactMatch) return false
 
-        cancelPendingRequests(project)
+        cancelPendingRequests()
         hideActiveLookupNow(project, editor)
         return true
     }
@@ -58,7 +53,15 @@ internal object AikenAutoPopupGuard {
                         allowBareTypes = resolution.policy.bareTypesAllowed,
                         offsetExclusive = editor.caretModel.offset
                     ).hasExactMatch(prefix)
-                else -> {
+                AikenCompletionScenario.NoSuggestions,
+                AikenCompletionScenario.TypeReference,
+                AikenCompletionScenario.RecordFieldName,
+                is AikenCompletionScenario.RecordFieldValue,
+                AikenCompletionScenario.RecordSpread,
+                AikenCompletionScenario.ListItem,
+                AikenCompletionScenario.PipeTarget,
+                AikenCompletionScenario.FunctionArgument,
+                AikenCompletionScenario.OrdinaryExpression -> {
                     val ordinaryMatches =
                         AikenReferenceVariants.forElement(
                             element = anchor,
@@ -80,7 +83,7 @@ internal object AikenAutoPopupGuard {
         if (!matches) return false
 
         editor.putUserData(suppressedExactPrefixKey, prefix)
-        cancelPendingRequests(project)
+        cancelPendingRequests()
         hideActiveLookupNow(project, editor)
         return true
     }

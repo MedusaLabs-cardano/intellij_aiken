@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+
 package com.medusalabs.aiken.terminal
 
 import com.intellij.openapi.project.Project
@@ -8,9 +10,9 @@ class AikenLocalTerminalCustomizer : LocalTerminalCustomizer() {
     override fun customizeCommandAndEnvironment(
         project: Project,
         workingDirectory: String?,
-        command: Array<String>,
+        command: Array<out String>,
         envs: MutableMap<String, String>
-    ): Array<String> {
+    ): Array<out String> {
         AikenNodeToolchain.applyProjectLocalAikenToTerminalEnvironment(project, envs)
         return command
     }

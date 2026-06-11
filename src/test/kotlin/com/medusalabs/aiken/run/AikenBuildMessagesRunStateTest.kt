@@ -3,15 +3,20 @@ package com.medusalabs.aiken.run
 import com.intellij.build.BuildTextConsoleView
 import com.intellij.build.FilePosition
 import com.intellij.build.events.BuildEvent
-import com.intellij.build.events.FileMessageEvent
+import com.intellij.build.events.EventResult
+import com.intellij.build.events.MessageEvent
+import com.intellij.execution.process.ProcessOutputTypes
+import com.intellij.execution.ui.ConsoleView
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.Key
 import com.medusalabs.aiken.AikenPlatformTestCase
 import org.junit.Test
 import java.io.File
+import java.lang.reflect.Proxy
 
 class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     @Test
-    fun extractsBuildFilePositionFromDiagnosticBlock() {
+    fun extractsDiagnosticLocationFromDiagnosticBlock() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val source =
             myFixture.addFileToProject(
@@ -27,8 +32,8 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
 
         val configuration = buildConfiguration()
         val workDir = source.virtualFile.parent.parent.path
-        val filePosition =
-            configuration.extractDiagnosticFilePositionForTest(
+        val location =
+            configuration.extractDiagnosticLocationForTest(
                 """
                 ⚠ I came across an unused variable: n
                   ╭─[validators/placeholder.ak:10:3]
@@ -37,11 +42,11 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
                 workDir
             )
 
-        requireNotNull(filePosition)
-        val targetFile = requireNotNull(filePosition.file)
+        requireNotNull(location)
+        val targetFile = File(location.stringField("absolutePath"))
         assertEquals(File(source.virtualFile.path).canonicalFile, targetFile.canonicalFile)
-        assertEquals(9, filePosition.startLine)
-        assertEquals(2, filePosition.startColumn)
+        assertEquals(10, location.intField("line"))
+        assertEquals(3, location.nullableIntField("column"))
     }
 
     @Test
@@ -57,6 +62,63 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         assertTrue(visibleText, visibleText.contains("warning"))
         assertTrue(visibleText, visibleText.contains("help: No big deal."))
         assertFalse(visibleText, visibleText.contains("\u001B["))
+    }
+
+    @Test
+    fun buildRunnerAnsiPrinterDecodesAnsiOutputText() {
+        val console = BuildTextConsoleView(project, false, emptyList())
+        Disposer.register(testRootDisposable, console)
+
+        console.component
+        buildConfiguration().printAnsiConsoleOutputForTest(
+            console,
+            "\u001B[33mwarning\u001B[0m\n",
+            ProcessOutputTypes.STDOUT
+        )
+        console.flushDeferredText()
+
+        val visibleText = requireNotNull(console.editor).document.text
+        assertTrue(visibleText, visibleText.contains("warning"))
+        assertFalse(visibleText, visibleText.contains("\u001B["))
+    }
+
+    @Test
+    fun buildTextConsoleDecodesAnsiFileMessageEventDetails() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val source =
+            myFixture.addFileToProject(
+                "validators/placeholder.ak",
+                """
+                validator placeholder {
+                  mint(_redeemer: Data, _policy_id: Data, _self: Data) {
+                    todo
+                  }
+                }
+                """.trimIndent()
+            )
+        val console = BuildTextConsoleView(project, false, emptyList())
+        Disposer.register(testRootDisposable, console)
+        val event =
+            createFileMessageEvent(
+                position = FilePosition(File(source.virtualFile.path), 2, 4)
+            )
+
+        console.component
+        console.onEvent("build-root", event)
+        console.flushDeferredText()
+
+        val visibleText = requireNotNull(console.editor).document.text
+        assertTrue(visibleText, visibleText.contains("I found a todo left in the code."))
+        assertTrue(visibleText, visibleText.contains("An expression of type Bool is expected here."))
+        assertFalse(visibleText, visibleText.contains("\u001B["))
+    }
+
+    @Test
+    fun buildFinishEventClosesRootBuildNode() {
+        val event = createFinishEvent()
+
+        assertEquals("build-root", event.id)
+        assertNull(event.parentId)
     }
 
     @Test
@@ -88,7 +150,7 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     }
 
     @Test
-    fun buildDiagnosticMessageEventCreatesFileNavigatableForLocatedMessage() {
+    fun buildDiagnosticFilePositionUsesResolvedDiagnosticLocation() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val source =
             myFixture.addFileToProject(
@@ -104,25 +166,21 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
 
         val configuration = buildConfiguration()
         val workDir = source.virtualFile.parent.parent.path
-        configuration.projectDirectory = workDir
-        val event =
-            configuration.createBuildMessageEventForTest(
-                buildRootId = "aiken-build",
-                sectionName = "warnings",
-                index = 0,
-                block =
-                    """
-                    ⚠ I came across an unused variable: n
-                      ╭─[validators/placeholder.ak:10:3]
-                      help: No big deal.
-                    """.trimIndent(),
-                kind = com.intellij.build.events.MessageEvent.Kind.WARNING
+
+        val filePosition =
+            configuration.extractDiagnosticFilePositionForTest(
+                """
+                ⚠ I came across an unused variable: n
+                  ╭─[validators/placeholder.ak:10:3]
+                  help: No big deal.
+                """.trimIndent(),
+                workDir
             )
 
-        val fileEvent = event as? FileMessageEvent
-        requireNotNull(fileEvent)
-        assertNotNull(fileEvent.getNavigatable(project))
-        assertEquals("aiken-build", event.parentId)
+        requireNotNull(filePosition)
+        assertEquals(File(source.virtualFile.path).canonicalFile, requireNotNull(filePosition.file).canonicalFile)
+        assertEquals(9, filePosition.startLine)
+        assertEquals(2, filePosition.startColumn)
     }
 
     private fun buildConfiguration(): AikenRunConfiguration {
@@ -134,18 +192,75 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return factory.createTemplateConfiguration(project)
     }
 
-    private fun AikenRunConfiguration.extractDiagnosticFilePositionForTest(
-        block: String,
-        workDir: String?
-    ): FilePosition? {
+    private fun createFinishEvent(): BuildEvent {
+        val result =
+            Proxy.newProxyInstance(
+                EventResult::class.java.classLoader,
+                arrayOf(EventResult::class.java)
+            ) { _, _, _ -> null } as EventResult
+        val eventClass = Class.forName("com.medusalabs.aiken.run.AikenFinishBuildEvent")
+        val constructor = eventClass.getDeclaredConstructor(Any::class.java, String::class.java, EventResult::class.java)
+        constructor.isAccessible = true
+        return constructor.newInstance("build-root", "Build Succeeded", result) as BuildEvent
+    }
+
+    private fun createFileMessageEvent(
+        position: FilePosition
+    ): BuildEvent {
+        val diagnosticDescription =
+            "\u001B[33mI found a todo left in the code.\u001B[0m\n" +
+                "\u001B[35mAn expression of type Bool is expected here.\u001B[0m"
+        val eventClass = Class.forName("com.medusalabs.aiken.run.AikenFileMessageBuildEvent")
+        val constructor =
+            eventClass.getDeclaredConstructor(
+                Any::class.java,
+                Any::class.java,
+                MessageEvent.Kind::class.java,
+                String::class.java,
+                String::class.java,
+                String::class.java,
+                FilePosition::class.java
+            )
+        constructor.isAccessible = true
+        return constructor.newInstance(
+            "event-id",
+            "build-root",
+            MessageEvent.Kind.WARNING,
+            "warnings",
+            "[warning 1] I found a todo left in the code.",
+            diagnosticDescription,
+            position
+        ) as BuildEvent
+    }
+
+    private fun AikenRunConfiguration.printAnsiConsoleOutputForTest(
+        console: ConsoleView,
+        text: String,
+        outputType: Key<*>
+    ) {
         val method =
             AikenRunConfiguration::class.java.getDeclaredMethod(
-                "extractDiagnosticFilePosition",
+                "printAnsiConsoleOutput",
+                ConsoleView::class.java,
+                String::class.java,
+                Key::class.java
+            )
+        method.isAccessible = true
+        method.invoke(this, console, text, outputType)
+    }
+
+    private fun AikenRunConfiguration.extractDiagnosticLocationForTest(
+        block: String,
+        workDir: String?
+    ): Any? {
+        val method =
+            AikenRunConfiguration::class.java.getDeclaredMethod(
+                "extractDiagnosticLocation",
                 String::class.java,
                 String::class.java
             )
         method.isAccessible = true
-        return method.invoke(this, block, workDir) as? FilePosition
+        return method.invoke(this, block, workDir)
     }
 
     private fun AikenRunConfiguration.createBuildDiagnosticMessageFilterForTest(
@@ -161,23 +276,32 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return method.invoke(this, workDir) as com.intellij.execution.filters.Filter
     }
 
-    private fun AikenRunConfiguration.createBuildMessageEventForTest(
-        buildRootId: Any,
-        sectionName: String,
-        index: Int,
+    private fun AikenRunConfiguration.extractDiagnosticFilePositionForTest(
         block: String,
-        kind: com.intellij.build.events.MessageEvent.Kind
-    ): BuildEvent {
+        workDir: String?
+    ): FilePosition? {
         val method =
             AikenRunConfiguration::class.java.getDeclaredMethod(
-                "createBuildMessageEvent",
-                Any::class.java,
+                "extractDiagnosticFilePosition",
                 String::class.java,
-                Int::class.javaPrimitiveType,
-                String::class.java,
-                com.intellij.build.events.MessageEvent.Kind::class.java
+                String::class.java
             )
         method.isAccessible = true
-        return method.invoke(this, buildRootId, sectionName, index, block, kind) as BuildEvent
+        return method.invoke(this, block, workDir) as FilePosition?
+    }
+
+    private fun Any.stringField(name: String): String =
+        declaredFieldValue(name) as String
+
+    private fun Any.intField(name: String): Int =
+        declaredFieldValue(name) as Int
+
+    private fun Any.nullableIntField(name: String): Int? =
+        declaredFieldValue(name) as Int?
+
+    private fun Any.declaredFieldValue(name: String): Any? {
+        val field = javaClass.getDeclaredField(name)
+        field.isAccessible = true
+        return field.get(this)
     }
 }

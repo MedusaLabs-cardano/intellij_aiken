@@ -14,7 +14,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
 
-private val AIKEN_GIT_STARTUP_LOG: Logger = Logger.getInstance(AikenGitVcsMappingStartupActivity::class.java)
+private val aikenGitStartupLog: Logger = Logger.getInstance(AikenGitVcsMappingStartupActivity::class.java)
 
 fun ensureAikenProjectModule(project: Project, basePath: String) {
     if (ModuleManager.getInstance(project).modules.isNotEmpty()) return
@@ -37,7 +37,7 @@ fun ensureAikenProjectModule(project: Project, basePath: String) {
 
 private fun ensureGitRootMapping(project: Project, basePath: String) {
     val vcsManager = ProjectLevelVcsManager.getInstance(project)
-    val existingMappings = vcsManager.directoryMappings
+    val existingMappings = vcsManager.getDirectoryMappings()
     if (existingMappings.any { it.directory == basePath && it.vcs == "Git" }) {
         return
     }
@@ -46,7 +46,7 @@ private fun ensureGitRootMapping(project: Project, basePath: String) {
         .filterNot { it.directory == basePath }
         .toMutableList()
     updatedMappings += VcsDirectoryMapping(basePath, "Git")
-    vcsManager.directoryMappings = updatedMappings
+    vcsManager.setDirectoryMappings(updatedMappings)
     project.save()
 }
 
@@ -64,7 +64,7 @@ class AikenGitVcsMappingStartupActivity : ProjectActivity {
             ensureAikenProjectModule(project, basePath)
             ensureGitRootMapping(project, basePath)
         } catch (t: Throwable) {
-            AIKEN_GIT_STARTUP_LOG.warn("Failed to initialize module/VCS state for Aiken project at $basePath", t)
+            aikenGitStartupLog.warn("Failed to initialize module/VCS state for Aiken project at $basePath", t)
         }
     }
 }

@@ -14,7 +14,7 @@ import com.medusalabs.aiken.completion.AikenSyntaxText
 import com.medusalabs.aiken.completion.AikenValidatorNamespaceSupport
 import com.medusalabs.aiken.highlight.lexer.AikenTokenTypes
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
+import com.medusalabs.aiken.index.aikenFunctionSignatureIndexName
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureNameKey
 import com.medusalabs.aiken.project.AikenModulePath
@@ -22,12 +22,12 @@ import com.medusalabs.aiken.project.AikenSearchScopes
 import com.medusalabs.aiken.scope.AikenLocalScopeAnalyzer
 import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 
-private const val AIKEN_PIPE_IMPLICIT_ARGUMENT_MARKER = "\u0000PIPE"
-private val AIKEN_CALLABLE_BINDING_TARGET_PATTERN =
+private const val aikenPipeImplicitArgumentMarker = "\u0000PIPE"
+private val aikenCallableBindingTargetPattern =
     Regex("""(?:=|->)\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?""")
-private val AIKEN_CALLABLE_BRANCH_TARGET_PATTERN =
+private val aikenCallableBranchTargetPattern =
     Regex("""\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?(?=\s*[(}])""")
-private val AIKEN_CALLABLE_BINDING_IGNORED_KEYWORDS =
+private val aikenCallableBindingIgnoredKeywords =
     setOf("when", "if", "fn", "expect", "let", "todo", "fail", "trace")
 
 class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParameterInfoHandler.SignatureItem> {
@@ -206,7 +206,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
 
         val fallbackIndexed =
             adaptSignaturesForCallShape(
-                index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureNameKey(call.calleeName), scope)
+                index.getValues(aikenFunctionSignatureIndexName, aikenFunctionSignatureNameKey(call.calleeName), scope)
                     .asSequence()
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
@@ -440,7 +440,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
     ): Set<String> =
         keys
             .asSequence()
-            .flatMap { key -> index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, key, scope).asSequence() }
+            .flatMap { key -> index.getValues(aikenFunctionSignatureIndexName, key, scope).asSequence() }
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .toSet()
@@ -556,11 +556,11 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
     private fun collectCallableTargetsFromLocalBinding(file: PsiFile, call: CallContext): Set<CallableTarget> {
         val bindingSlice = findLocalBindingSlice(file, call) ?: return emptySet()
         val targets = LinkedHashSet<CallableTarget>()
-        AIKEN_CALLABLE_BINDING_TARGET_PATTERN
+        aikenCallableBindingTargetPattern
             .findAll(bindingSlice)
             .mapNotNull { callableTargetFromMatch(bindingSlice, it) }
             .forEach(targets::add)
-        AIKEN_CALLABLE_BRANCH_TARGET_PATTERN
+        aikenCallableBranchTargetPattern
             .findAll(bindingSlice)
             .mapNotNull { callableTargetFromMatch(bindingSlice, it) }
             .forEach(targets::add)
@@ -570,7 +570,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
     private fun callableTargetFromMatch(bindingSlice: String, match: MatchResult): CallableTarget? {
         val first = match.groupValues[1]
         val second = match.groupValues[2].ifBlank { null }
-        if (first in AIKEN_CALLABLE_BINDING_IGNORED_KEYWORDS) return null
+        if (first in aikenCallableBindingIgnoredKeywords) return null
 
         val returnedCallableDepth = countImmediateCallSuffixes(bindingSlice, match.range.last + 1)
 
@@ -698,7 +698,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
         if (callChain == null) {
             val rightSignatures =
                 resolveCallableExpressionSignatures(index, scope, anchorFile, sameFileSignatures, fileText, rightExpression)
-            return applyCallArguments(rightSignatures, listOf(AIKEN_PIPE_IMPLICIT_ARGUMENT_MARKER))
+            return applyCallArguments(rightSignatures, listOf(aikenPipeImplicitArgumentMarker))
         }
 
         val baseSignatures =
@@ -728,7 +728,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
         val signatures = LinkedHashSet<String>()
 
         if (insertPipeCandidates.isNotEmpty()) {
-            var inserted = applyCallArguments(insertPipeCandidates, listOf(AIKEN_PIPE_IMPLICIT_ARGUMENT_MARKER) + firstArguments)
+            var inserted = applyCallArguments(insertPipeCandidates, listOf(aikenPipeImplicitArgumentMarker) + firstArguments)
             for (arguments in callChain.argumentLists.drop(1)) {
                 inserted = applyCallArguments(inserted, arguments)
                 if (inserted.isEmpty()) break
@@ -739,7 +739,7 @@ class AikenParameterInfoHandler : ParameterInfoHandler<PsiElement, AikenParamete
         if (applyAfterCallCandidates.isNotEmpty()) {
             var applied = applyCallArguments(applyAfterCallCandidates, firstArguments)
             if (applied.isNotEmpty()) {
-                applied = applyCallArguments(applied, listOf(AIKEN_PIPE_IMPLICIT_ARGUMENT_MARKER))
+                applied = applyCallArguments(applied, listOf(aikenPipeImplicitArgumentMarker))
                 for (arguments in callChain.argumentLists.drop(1)) {
                     applied = applyCallArguments(applied, arguments)
                     if (applied.isEmpty()) break

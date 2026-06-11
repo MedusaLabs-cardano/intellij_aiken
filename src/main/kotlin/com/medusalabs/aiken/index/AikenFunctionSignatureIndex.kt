@@ -15,7 +15,7 @@ import com.medusalabs.aiken.signature.AikenFunctionSignatureExtractor
 import java.io.DataInput
 import java.io.DataOutput
 
-val AIKEN_FUNCTION_SIGNATURE_INDEX_NAME: ID<String, String> = ID.create("aiken.functionSignatures")
+val aikenFunctionSignatureIndexName: ID<String, String> = ID.create("aiken.functionSignatures")
 
 fun aikenFunctionSignatureNameKey(functionName: String): String = "name|$functionName"
 
@@ -26,14 +26,14 @@ fun aikenFunctionSignatureReturnTypeKey(returnType: String): String = "return|$r
 fun aikenFunctionSignatureGenericReturnAnyKey(): String = "return-generic|any"
 fun aikenFunctionSignatureGenericReturnHeadKey(typeHead: String): String = "return-generic-head|$typeHead"
 
-private const val AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR = '\u001e'
-private const val AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR = '\u001f'
+private const val aikenFunctionReturnTypeEntrySeparator = '\u001e'
+private const val aikenFunctionReturnTypeFieldSeparator = '\u001f'
 
 fun encodeAikenFunctionReturnTypeIndexValue(
     modulePath: String,
     functionName: String,
     signature: String
-): String = listOf(modulePath, functionName, signature).joinToString(AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR.toString())
+): String = listOf(modulePath, functionName, signature).joinToString(aikenFunctionReturnTypeFieldSeparator.toString())
 
 data class AikenFunctionReturnTypeEntry(
     val modulePath: String,
@@ -42,14 +42,14 @@ data class AikenFunctionReturnTypeEntry(
 )
 
 fun encodeAikenFunctionReturnTypeIndexValues(entries: List<AikenFunctionReturnTypeEntry>): String =
-    entries.joinToString(AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR.toString()) { entry ->
+    entries.joinToString(aikenFunctionReturnTypeEntrySeparator.toString()) { entry ->
         encodeAikenFunctionReturnTypeIndexValue(entry.modulePath, entry.functionName, entry.signature)
     }
 
 fun decodeAikenFunctionReturnTypeIndexValues(value: String): List<AikenFunctionReturnTypeEntry> =
-    value.split(AIKEN_FUNCTION_RETURN_TYPE_ENTRY_SEPARATOR)
+    value.split(aikenFunctionReturnTypeEntrySeparator)
         .mapNotNull { encodedEntry ->
-            val parts = encodedEntry.split(AIKEN_FUNCTION_RETURN_TYPE_FIELD_SEPARATOR, limit = 3)
+            val parts = encodedEntry.split(aikenFunctionReturnTypeFieldSeparator, limit = 3)
             if (parts.size != 3) return@mapNotNull null
             val (modulePath, functionName, signature) = parts
             if (modulePath.isBlank() || functionName.isBlank() || signature.isBlank()) return@mapNotNull null
@@ -138,7 +138,7 @@ private fun splitTopLevelTypeArguments(text: String): List<String>? {
  * This enables Ctrl+P parameter info without LSP support.
  */
 class AikenFunctionSignatureIndex : FileBasedIndexExtension<String, String>() {
-    override fun getName(): ID<String, String> = AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
+    override fun getName(): ID<String, String> = aikenFunctionSignatureIndexName
 
     override fun getVersion(): Int = 6
 

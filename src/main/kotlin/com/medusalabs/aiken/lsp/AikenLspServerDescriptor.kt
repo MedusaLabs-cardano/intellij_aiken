@@ -6,6 +6,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.Lsp4jClient
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import com.intellij.platform.lsp.api.LspServerNotificationsHandler
+import com.intellij.platform.lsp.api.customization.LspCodeActionsCustomizer
 import com.intellij.platform.lsp.api.customization.LspCustomization
 import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.lang.UplcFileType
@@ -14,7 +15,10 @@ import org.eclipse.lsp4j.PublishDiagnosticsParams
 
 class AikenLspServerDescriptor(project: Project) :
     ProjectWideLspServerDescriptor(project, "Aiken Language Server") {
-    private val customization = AikenLspCustomization()
+    private val customization =
+        object : LspCustomization() {
+            override val codeActionsCustomizer: LspCodeActionsCustomizer = AikenLspCodeActionsSupport()
+        }
 
     override fun isSupportedFile(file: VirtualFile): Boolean {
         val ft = file.fileType

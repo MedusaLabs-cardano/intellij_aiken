@@ -207,7 +207,6 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
         editor: Editor,
         triggerChar: Char
     ) {
-        autoPopupController.cancelAllRequests()
         val activeLookup = LookupManager.getActiveLookup(editor)
         if (activeLookup != null) {
             LookupManager.hideActiveLookup(project)
@@ -219,7 +218,7 @@ class AikenCompletionAutoPopupTypedHandler : TypedHandlerDelegate(), DumbAware {
             }
             return
         }
-        autoPopupController.autoPopupMemberLookup(editor, CompletionType.BASIC, null)
+        autoPopupController.scheduleAutoPopup(editor, CompletionType.BASIC, null)
     }
 
     private fun isInsideCommentOrString(

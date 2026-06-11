@@ -1,17 +1,23 @@
 package com.medusalabs.aiken.run
 
-import com.intellij.build.BuildView
-import com.intellij.build.BuildViewManager
 import com.intellij.build.DefaultBuildDescriptor
 import com.intellij.build.FilePosition
+import com.intellij.build.FileNavigatable
+import com.intellij.build.BuildDescriptor
+import com.intellij.build.BuildView
+import com.intellij.build.BuildViewManager
+import com.intellij.build.events.BuildEvent
+import com.intellij.build.events.EventResult
+import com.intellij.build.events.Failure
+import com.intellij.build.events.FailureResult
+import com.intellij.build.events.FileMessageEvent
+import com.intellij.build.events.FileMessageEventResult
+import com.intellij.build.events.FinishBuildEvent
 import com.intellij.build.events.MessageEvent
-import com.intellij.build.events.impl.FileMessageEventImpl
-import com.intellij.build.events.impl.FailureResultImpl
-import com.intellij.build.events.impl.FinishBuildEventImpl
-import com.intellij.build.events.impl.MessageEventImpl
-import com.intellij.build.events.impl.OutputBuildEventImpl
-import com.intellij.build.events.impl.StartBuildEventImpl
-import com.intellij.build.events.impl.SuccessResultImpl
+import com.intellij.build.events.MessageEventResult
+import com.intellij.build.events.StartBuildEvent
+import com.intellij.build.events.SuccessResult
+import com.intellij.build.events.Warning
 import com.intellij.execution.Executor
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.DefaultExecutionResult
@@ -24,6 +30,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.configurations.LocatableConfigurationBase
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RuntimeConfigurationError
+import com.intellij.execution.process.AnsiEscapeDecoder
 import com.intellij.execution.process.KillableColoredProcessHandler
 import com.intellij.execution.process.KillableProcessHandler
 import com.intellij.execution.process.NopProcessHandler
@@ -47,6 +54,7 @@ import com.intellij.execution.testframework.AbstractTestProxy
 import com.intellij.execution.testframework.actions.AbstractRerunFailedTestsAction
 import com.intellij.execution.testframework.TestConsoleProperties
 import com.intellij.execution.ui.ConsoleView
+import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.execution.ui.ExecutionConsole
 import com.intellij.execution.filters.LazyFileHyperlinkInfo
 import com.intellij.execution.filters.TextConsoleBuilderFactory
@@ -59,6 +67,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.ComponentContainer
+import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -77,6 +86,7 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.execution.testframework.Filter
+import com.intellij.pom.Navigatable
 import com.intellij.util.execution.ParametersListUtil
 import com.intellij.util.concurrency.AppExecutorUtil
 import org.jdom.Element
@@ -123,6 +133,7 @@ import com.intellij.util.ui.ColumnInfo
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
+import com.intellij.terminal.TerminalExecutionConsoleBuilder
 import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
@@ -157,9 +168,9 @@ import java.awt.Font
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 
-private const val APPLY_EDITOR_LEFT_INSET = 10
-private const val DIAGNOSTICS_ROOT_ID = "aiken-root"
-private const val DIAGNOSTIC_TITLE_MAX_LENGTH = 120
+private const val applyEditorLeftInset = 10
+private const val diagnosticsRootId = "aiken-root"
+private const val diagnosticTitleMaxLength = 120
 
 private class NoTreeSelectionModel : DefaultTreeSelectionModel() {
     override fun setSelectionPath(path: TreePath?) = Unit
@@ -179,6 +190,90 @@ private fun isDarkUiTheme(): Boolean {
     val background = UIUtil.getPanelBackground()
     val luminance = (0.299 * background.red + 0.587 * background.green + 0.114 * background.blue) / 255.0
     return luminance < 0.5
+}
+
+private open class AikenBuildEvent(
+    private val eventId: Any,
+    private val eventParentId: Any?,
+    private val eventMessage: String,
+    private val eventDescription: String? = null,
+    private val eventHint: String? = null,
+    private val timestamp: Long = System.currentTimeMillis()
+) : BuildEvent {
+    override fun getId(): Any = eventId
+    override fun getParentId(): Any? = eventParentId
+    override fun getEventTime(): Long = timestamp
+    override fun getMessage(): String = eventMessage
+    override fun getHint(): String? = eventHint
+    override fun getDescription(): String? = eventDescription
+}
+
+private class AikenStartBuildEvent(
+    private val descriptor: BuildDescriptor,
+    message: String
+) : AikenBuildEvent(descriptor.id, null, message, null, null, descriptor.startTime), StartBuildEvent {
+    override fun getBuildDescriptor(): BuildDescriptor = descriptor
+}
+
+private class AikenFinishBuildEvent(
+    buildId: Any,
+    message: String,
+    private val eventResult: EventResult
+) : AikenBuildEvent(buildId, null, message), FinishBuildEvent {
+    override fun getResult(): EventResult = eventResult
+}
+
+private class AikenSuccessResult : SuccessResult {
+    override fun isUpToDate(): Boolean = false
+    override fun getWarnings(): List<Warning> = emptyList()
+}
+
+private class AikenFailureResult : FailureResult {
+    override fun getFailures(): List<Failure> = emptyList()
+}
+
+private open class AikenMessageEventResult(
+    private val messageKind: MessageEvent.Kind,
+    private val detailsText: String?
+) : MessageEventResult {
+    override fun getKind(): MessageEvent.Kind = messageKind
+    override fun getDetails(): String? = detailsText
+}
+
+private class AikenFileMessageEventResult(
+    messageKind: MessageEvent.Kind,
+    detailsText: String?,
+    private val position: FilePosition
+) : AikenMessageEventResult(messageKind, detailsText), FileMessageEventResult {
+    override fun getFilePosition(): FilePosition = position
+}
+
+private open class AikenMessageBuildEvent(
+    eventId: Any,
+    parentId: Any,
+    private val messageKind: MessageEvent.Kind,
+    private val messageGroup: String,
+    title: String,
+    description: String?
+) : AikenBuildEvent(eventId, parentId, title, description), MessageEvent {
+    override fun getKind(): MessageEvent.Kind = messageKind
+    override fun getGroup(): String = messageGroup
+    override fun getNavigatable(project: Project): Navigatable? = null
+    override fun getResult(): MessageEventResult = AikenMessageEventResult(messageKind, description)
+}
+
+private class AikenFileMessageBuildEvent(
+    eventId: Any,
+    parentId: Any,
+    messageKind: MessageEvent.Kind,
+    messageGroup: String,
+    title: String,
+    description: String?,
+    private val position: FilePosition
+) : AikenMessageBuildEvent(eventId, parentId, messageKind, messageGroup, title, description), FileMessageEvent {
+    override fun getFilePosition(): FilePosition = position
+    override fun getNavigatable(project: Project): Navigatable = FileNavigatable(project, position)
+    override fun getResult(): FileMessageEventResult = AikenFileMessageEventResult(kind, description, position)
 }
 
 @Suppress("SameParameterValue")
@@ -495,7 +590,7 @@ class AikenRunConfiguration(
                 if (command == AikenRunCommand.APPLY && applyOutputMode == AikenApplyOutputMode.TTY) {
                     val handler = startedHandler
                     if (handler != null && TerminalExecutionConsole.isAcceptable(handler)) {
-                        return TerminalExecutionConsole(project, handler)
+                        return createTerminalExecutionConsole(handler)
                     }
                 }
                 return super.createConsole(executor)
@@ -1575,7 +1670,11 @@ class AikenRunConfiguration(
                         is ApplyBoolNode,
                         is ApplyOptionNode,
                         is ApplyAnyOfNode -> true
-                        else -> false
+                        is ApplySingleConstructorNode,
+                        is ApplyTupleNode,
+                        is ApplyListNode,
+                        is ApplyMapEntryNode,
+                        is ApplyMapNode -> false
                     }
                 }
 
@@ -1608,7 +1707,11 @@ class AikenRunConfiguration(
                                 }
                             }
                         }
-                        else -> Unit
+                        is ApplySingleConstructorNode,
+                        is ApplyTupleNode,
+                        is ApplyListNode,
+                        is ApplyMapEntryNode,
+                        is ApplyMapNode -> Unit
                     }
                 }
 
@@ -1631,7 +1734,11 @@ class AikenRunConfiguration(
                         is ApplyBoolNode -> createBooleanEditor(node, node.value, "True", "False")
                         is ApplyOptionNode -> createBooleanEditor(node, node.isNone, "None")
                         is ApplyAnyOfNode -> createComboEditor(node)
-                        else -> null
+                        is ApplySingleConstructorNode,
+                        is ApplyTupleNode,
+                        is ApplyListNode,
+                        is ApplyMapEntryNode,
+                        is ApplyMapNode -> null
                     }
                 }
             }
@@ -1856,7 +1963,14 @@ class AikenRunConfiguration(
                         decodeApplyDataFromHex(raw) == null -> "Expected decodable CBOR"
                         else -> null
                     }
-                    else -> null
+                    is ApplyBoolNode,
+                    is ApplyOptionNode,
+                    is ApplySingleConstructorNode,
+                    is ApplyAnyOfNode,
+                    is ApplyTupleNode,
+                    is ApplyListNode,
+                    is ApplyMapEntryNode,
+                    is ApplyMapNode -> null
                 }
 
             private fun updateTextNodeValue(node: ApplyUiNode, raw: String) {
@@ -1864,7 +1978,14 @@ class AikenRunConfiguration(
                     is ApplyIntegerNode -> node.rawValue = raw
                     is ApplyBytesNode -> node.rawValue = raw
                     is ApplyOpaqueNode -> node.rawValue = raw
-                    else -> Unit
+                    is ApplyBoolNode,
+                    is ApplyOptionNode,
+                    is ApplySingleConstructorNode,
+                    is ApplyAnyOfNode,
+                    is ApplyTupleNode,
+                    is ApplyListNode,
+                    is ApplyMapEntryNode,
+                    is ApplyMapNode -> Unit
                 }
             }
 
@@ -1975,7 +2096,15 @@ class AikenRunConfiguration(
                                         }
                                     }
                                 }
-                                else -> Unit
+                                is ApplyIntegerNode,
+                                is ApplyBytesNode,
+                                is ApplyOpaqueNode,
+                                is ApplySingleConstructorNode,
+                                is ApplyAnyOfNode,
+                                is ApplyTupleNode,
+                                is ApplyListNode,
+                                is ApplyMapEntryNode,
+                                is ApplyMapNode -> Unit
                             }
                             updateLabel()
                             stopCellEditing()
@@ -2057,7 +2186,15 @@ class AikenRunConfiguration(
                     ApplyTreeAction.ADD -> when (node) {
                         is ApplyListNode -> refreshTree(node.addItem())
                         is ApplyMapNode -> refreshTree(node.addEntry())
-                        else -> Unit
+                        is ApplyIntegerNode,
+                        is ApplyBytesNode,
+                        is ApplyOpaqueNode,
+                        is ApplyBoolNode,
+                        is ApplyOptionNode,
+                        is ApplySingleConstructorNode,
+                        is ApplyAnyOfNode,
+                        is ApplyTupleNode,
+                        is ApplyMapEntryNode -> Unit
                     }
                     ApplyTreeAction.REMOVE -> {
                         when {
@@ -2423,7 +2560,11 @@ class AikenRunConfiguration(
                 field.text =
                     when (data) {
                         is ApplyData.RawCbor -> data.bytes.toHex()
-                        else -> encodeDataAsHex(data)
+                        is ApplyData.Integer,
+                        is ApplyData.Bytes,
+                        is ApplyData.List,
+                        is ApplyData.Map,
+                        is ApplyData.Constr -> encodeDataAsHex(data)
                     }
                 return true
             }
@@ -3230,7 +3371,7 @@ class AikenRunConfiguration(
                     override fun getMaximumSize(): Dimension =
                         if (depth == 0) preferredSize else Dimension(Int.MAX_VALUE, preferredSize.height)
                 }.apply {
-                border = JBUI.Borders.empty(0, APPLY_EDITOR_LEFT_INSET, 6, 6)
+                border = JBUI.Borders.empty(0, applyEditorLeftInset, 6, 6)
                 alignmentX = Component.LEFT_ALIGNMENT
                 putClientProperty(APPLY_EDITOR_COMPONENT_KEY, true)
                 putClientProperty(APPLY_EDITOR_DEPTH_KEY, depth)
@@ -4178,7 +4319,7 @@ class AikenRunConfiguration(
             handler.addProcessListener(
                 object : ProcessListener {
                     @Suppress("UNUSED_PARAMETER")
-                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                    override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                         runOutput.append(event.text)
                     }
 
@@ -4250,7 +4391,7 @@ class AikenRunConfiguration(
 
             val console =
                 if (TerminalExecutionConsole.isAcceptable(handler)) {
-                    TerminalExecutionConsole(project, handler)
+                    createTerminalExecutionConsole(handler)
                 } else {
                     TextConsoleBuilderFactory.getInstance().createBuilder(project).console.also { it.attachToProcess(handler) }
                 }
@@ -4510,42 +4651,50 @@ class AikenRunConfiguration(
 
     }
 
+    private fun createTerminalExecutionConsole(handler: ProcessHandler): ConsoleView =
+        TerminalExecutionConsoleBuilder(project).build().also { console ->
+            console.attachToProcess(handler)
+        }
+
+    private fun printAnsiConsoleOutput(console: ConsoleView, text: String, outputType: Key<*>) {
+        AnsiEscapeDecoder().escapeText(text, outputType) { chunk, attributes ->
+            console.print(chunk, ConsoleViewContentType.getConsoleViewType(attributes))
+        }
+    }
+
     private inner class AikenBuildMessagesRunState(
         private val executionEnvironment: ExecutionEnvironment
     ) : RunProfileState {
         override fun execute(executor: Executor, runner: ProgramRunner<*>): com.intellij.execution.ExecutionResult {
             val processHandler = AikenAsyncProcessHandler()
-            val buildDescriptor = createBuildDescriptor(executionEnvironment)
             val workDir = resolveProjectDirectory()
             val diagnosticFilter = createBuildDiagnosticMessageFilter(workDir)
             val baseConsoleBuilder = TextConsoleBuilderFactory.getInstance().createBuilder(project)
             baseConsoleBuilder.addFilter(diagnosticFilter)
             val baseConsole = baseConsoleBuilder.console
-            val buildConsole = BuildView(project, baseConsole, buildDescriptor, "Aiken", BuildViewManager(project))
-            buildConsole.addMessageFilter(diagnosticFilter)
-            buildConsole.attachToProcess(processHandler)
-            AppExecutorUtil.getAppExecutorService().execute {
-                runBuildWithIdeIntegration(processHandler, executionEnvironment, buildDescriptor, buildConsole)
-            }
-            return DefaultExecutionResult(buildConsole, processHandler)
-        }
-
-        private fun createBuildDescriptor(environment: ExecutionEnvironment): DefaultBuildDescriptor {
-            val workDir = resolveProjectDirectory().orEmpty()
             val buildId = "aiken-build-${System.currentTimeMillis()}"
-            return DefaultBuildDescriptor(
-                buildId,
-                "Aiken Build",
-                workDir,
-                System.currentTimeMillis()
-            ).withExecutionEnvironment(environment)
+            val buildDescriptor =
+                DefaultBuildDescriptor(
+                    buildId,
+                    "Aiken Build",
+                    workDir.orEmpty(),
+                    System.currentTimeMillis()
+                ).withExecutionEnvironment(executionEnvironment)
+            val console = BuildView(project, baseConsole, buildDescriptor, "Aiken", BuildViewManager(project))
+            console.addMessageFilter(diagnosticFilter)
+            console.attachToProcess(processHandler)
+            console.onEvent(buildId, AikenStartBuildEvent(buildDescriptor, "Running aiken build"))
+            AppExecutorUtil.getAppExecutorService().execute {
+                runBuildWithIdeIntegration(processHandler, console, baseConsole, buildId)
+            }
+            return DefaultExecutionResult(console, processHandler)
         }
 
         private fun runBuildWithIdeIntegration(
             handler: AikenAsyncProcessHandler,
-            environment: ExecutionEnvironment,
-            buildDescriptor: DefaultBuildDescriptor,
-            buildView: BuildView
+            buildView: BuildView,
+            outputConsole: ConsoleView,
+            buildId: Any
         ) {
             handler.startNotify()
             val executable = resolveAikenExecutable()
@@ -4555,15 +4704,13 @@ class AikenRunConfiguration(
             val restartRequested = AtomicBoolean(false)
             val watchConnection =
                 if (ideWatchEnabled) {
-                    installIdeIntegratedWatch(environment, workDir, handler, restartRequested, restartMessage = "build")
+                    installIdeIntegratedWatch(executionEnvironment, workDir, handler, restartRequested, restartMessage = "build")
                 } else {
                     null
             }
             var lastExitCode = 0
-            val buildRootId = buildDescriptor.id
 
             try {
-                buildView.onEvent(buildRootId, StartBuildEventImpl(buildDescriptor, "Running aiken build"))
                 val args = buildCommandParameters(support = commandSupport)
                 val run =
                     runManagedCommandCollectingOutput(
@@ -4576,15 +4723,8 @@ class AikenRunConfiguration(
                     )
                 lastExitCode = run.exitCode
                 if (run.output.isNotBlank()) {
-                    buildView.onEvent(
-                        buildRootId,
-                        OutputBuildEventImpl(
-                            "$buildRootId-output-${System.nanoTime()}",
-                            buildRootId,
-                            ensureTrailingNewline(run.output),
-                            true
-                        )
-                    )
+                    val normalizedOutput = ensureTrailingNewline(run.output)
+                    printAnsiConsoleOutput(outputConsole, normalizedOutput, ProcessOutputTypes.STDOUT)
                 }
 
                 val diagnostics =
@@ -4593,68 +4733,25 @@ class AikenRunConfiguration(
                     } else {
                         diagnosticsForFailedRun(run.output, treatWarningsAsErrors = denyWarnings)
                     }
-                emitBuildMessages(buildView, buildRootId, diagnostics)
-
                 val buildSucceeded = run.exitCode == 0 && diagnostics.errors.isEmpty()
+                emitBuildMessages(buildView, buildId, diagnostics, workDir)
                 if (buildSucceeded) {
                     bumpApplyBuildRevision()
-                    val successEventId = "$buildRootId-success"
-                    val successEvent =
-                        MessageEventImpl(
-                            successEventId,
-                            MessageEvent.Kind.INFO,
-                            "Build",
-                            "Build Succeeded",
-                            null
-                        )
-                    successEvent.setParentId(buildRootId)
-                    buildView.onEvent(buildRootId, successEvent)
-                    buildView.onEvent(
-                        successEventId,
-                        OutputBuildEventImpl(
-                            "$successEventId-output",
-                            successEventId,
-                            "Aiken build finished successfully.\n",
-                            true
-                        )
-                    )
-                    buildView.onEvent(
-                        buildRootId,
-                        FinishBuildEventImpl(
-                            buildRootId,
-                            null,
-                            System.currentTimeMillis(),
-                            "Build finished",
-                            SuccessResultImpl()
-                        )
-                    )
+                    printAnsiConsoleOutput(outputConsole, "Aiken build finished successfully.\n", ProcessOutputTypes.STDOUT)
+                    buildView.onEvent(buildId, AikenFinishBuildEvent(buildId, "Build Succeeded", AikenSuccessResult()))
                 } else {
-                    buildView.onEvent(
-                        buildRootId,
-                        FinishBuildEventImpl(
-                            buildRootId,
-                            null,
-                            System.currentTimeMillis(),
-                            "Build failed",
-                            FailureResultImpl("Build failed")
-                        )
-                    )
+                    buildView.onEvent(buildId, AikenFinishBuildEvent(buildId, "Build failed", AikenFailureResult()))
                 }
                 finishOrWatch(handler, ideWatchEnabled, restartRequested, run.exitCode, idleMessage = "build")
             } catch (e: Exception) {
-                handler.notifyTextAvailable(
+                printAnsiConsoleOutput(
+                    outputConsole,
                     "Aiken build integration failed: ${e.message}\n",
                     ProcessOutputTypes.STDERR
                 )
                 buildView.onEvent(
-                    buildRootId,
-                    FinishBuildEventImpl(
-                        buildRootId,
-                        null,
-                        System.currentTimeMillis(),
-                        "Build integration failed: ${e.message}",
-                        FailureResultImpl(e.message ?: "Build integration failed")
-                    )
+                    buildId,
+                    AikenFinishBuildEvent(buildId, "Build integration failed: ${e.message}", AikenFailureResult())
                 )
                 finishOrWatch(handler, ideWatchEnabled, restartRequested, if (lastExitCode != 0) lastExitCode else -1, idleMessage = "build")
             } finally {
@@ -4664,29 +4761,42 @@ class AikenRunConfiguration(
 
         private fun emitBuildMessages(
             buildView: BuildView,
-            buildRootId: Any,
-            diagnostics: DiagnosticsSections
+            buildId: Any,
+            diagnostics: DiagnosticsSections,
+            workDir: String?
         ) {
             diagnostics.warnings.forEachIndexed { index, block ->
-                emitBuildMessage(buildView, buildRootId, "warnings", index, block, MessageEvent.Kind.WARNING)
+                emitBuildMessage(buildView, buildId, "warnings", index, block, MessageEvent.Kind.WARNING, workDir)
             }
             diagnostics.errors.forEachIndexed { index, block ->
-                emitBuildMessage(buildView, buildRootId, "errors", index, block, MessageEvent.Kind.ERROR)
+                emitBuildMessage(buildView, buildId, "errors", index, block, MessageEvent.Kind.ERROR, workDir)
             }
         }
 
         private fun emitBuildMessage(
             buildView: BuildView,
-            buildRootId: Any,
+            buildId: Any,
             sectionName: String,
             index: Int,
             block: String,
-            kind: MessageEvent.Kind
+            kind: MessageEvent.Kind,
+            workDir: String?
         ) {
-            buildView.onEvent(
-                buildRootId,
-                createBuildMessageEvent(buildRootId, sectionName, index, block, kind)
-            )
+            val title = buildDiagnosticNodeTitle(sectionName, index, block)
+            val filePosition = extractDiagnosticFilePosition(block, workDir)
+            val eventId = "aiken-$sectionName-$index-${System.nanoTime()}"
+            val description = block.trim()
+            if (filePosition != null) {
+                buildView.onEvent(
+                    buildId,
+                    AikenFileMessageBuildEvent(eventId, buildId, kind, sectionName, title, description, filePosition)
+                )
+            } else {
+                buildView.onEvent(
+                    buildId,
+                    AikenMessageBuildEvent(eventId, buildId, kind, sectionName, title, description)
+                )
+            }
         }
     }
 
@@ -7027,7 +7137,7 @@ class AikenRunConfiguration(
             "testSuiteStarted",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to DIAGNOSTICS_ROOT_ID,
+                "nodeId" to diagnosticsRootId,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
         )
@@ -7059,7 +7169,7 @@ class AikenRunConfiguration(
             linkedMapOf(
                 "name" to testsRootDisplayName,
                 "nodeId" to testsRootId,
-                "parentNodeId" to DIAGNOSTICS_ROOT_ID
+                "parentNodeId" to diagnosticsRootId
             )
         )
 
@@ -7144,7 +7254,7 @@ class AikenRunConfiguration(
             "testSuiteFinished",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to DIAGNOSTICS_ROOT_ID
+                "nodeId" to diagnosticsRootId
             )
         )
     }
@@ -7162,7 +7272,7 @@ class AikenRunConfiguration(
             "testSuiteStarted",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to DIAGNOSTICS_ROOT_ID,
+                "nodeId" to diagnosticsRootId,
                 "parentNodeId" to TreeNodeEvent.ROOT_NODE_ID
             )
         )
@@ -7190,7 +7300,7 @@ class AikenRunConfiguration(
             "testSuiteFinished",
             linkedMapOf(
                 "name" to rootDisplayName,
-                "nodeId" to DIAGNOSTICS_ROOT_ID
+                "nodeId" to diagnosticsRootId
             )
         )
     }
@@ -7212,7 +7322,7 @@ class AikenRunConfiguration(
             linkedMapOf(
                 "name" to sectionDisplayName,
                 "nodeId" to sectionId,
-                "parentNodeId" to DIAGNOSTICS_ROOT_ID
+                "parentNodeId" to diagnosticsRootId
             )
         )
 
@@ -7461,26 +7571,6 @@ class AikenRunConfiguration(
         }
     }
 
-    private fun createBuildMessageEvent(
-        buildRootId: Any,
-        sectionName: String,
-        index: Int,
-        block: String,
-        kind: MessageEvent.Kind
-    ): com.intellij.build.events.BuildEvent {
-        val title = buildDiagnosticNodeTitle(sectionName, index, block)
-        val filePosition = extractDiagnosticFilePosition(block, resolveProjectDirectory())
-        val eventId = "$buildRootId-$sectionName-$index"
-        val event =
-            if (filePosition != null) {
-                FileMessageEventImpl(eventId, kind, sectionName, title, block, filePosition)
-            } else {
-                MessageEventImpl(eventId, kind, sectionName, title, block)
-            }
-        event.setParentId(buildRootId)
-        return event
-    }
-
     private fun extractBuildMessageLocationMatch(text: String): BuildMessageLocationMatch? {
         val bracketMatch = DIAGNOSTIC_LOCATION_REGEX.find(text)
         if (bracketMatch != null) {
@@ -7508,7 +7598,7 @@ class AikenRunConfiguration(
     }
 
     private fun shrinkMiddle(text: String): String {
-        val maxLength = DIAGNOSTIC_TITLE_MAX_LENGTH
+        val maxLength = diagnosticTitleMaxLength
         if (text.length <= maxLength) return text
 
         val keep = maxLength - 1

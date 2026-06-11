@@ -1,6 +1,7 @@
 package com.medusalabs.aiken.refactor
 
 import com.intellij.find.findUsages.FindUsagesOptions
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.LocalSearchScope
 import com.intellij.usageView.UsageInfo
@@ -10,6 +11,10 @@ import com.medusalabs.aiken.lang.AikenFileType
 import com.medusalabs.aiken.rename.AikenRenamePsiElementProcessor
 import com.medusalabs.aiken.usages.AikenFindUsagesHandlerFactory
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class AikenScopedSearchTest : AikenPlatformTestCase() {
     @Test
@@ -138,7 +143,6 @@ class AikenScopedSearchTest : AikenPlatformTestCase() {
         val target = findElementAtCaret(myFixture.file) ?: error("Usage target not found at caret")
         val handler =
             AikenFindUsagesHandlerFactory().createFindUsagesHandler(target, false)
-                ?: error("Find usages handler was not created")
         val options = FindUsagesOptions(project)
         options.isUsages = true
         options.isSearchForTextOccurrences = false
@@ -169,5 +173,58 @@ class AikenScopedSearchTest : AikenPlatformTestCase() {
         assertTrue(usageFiles.toString(), usageFiles.any { it.endsWith("/lib/math.ak") })
         assertTrue(usageFiles.toString(), usageFiles.any { it.endsWith("/lib/main.ak") })
         assertFalse(usageFiles.toString(), usageFiles.any { it.endsWith("/lib/other.ak") })
+    }
+
+    @Test
+    fun findUsagesHandlerCanRunFromBackgroundThread() {
+        val file =
+            myFixture.configureByText(
+                AikenFileType,
+                """
+                pub fn ad<caret>d(left: Int, right: Int) -> Int {
+                  left
+                }
+
+                fn main() -> Int {
+                  add(1, 2)
+                }
+                """.trimIndent()
+            )
+
+        val target = findElementAtCaret(file) ?: error("Find usages target not found at caret")
+        val handler =
+            AikenFindUsagesHandlerFactory().createFindUsagesHandler(target, false)
+        val options = FindUsagesOptions(project)
+        options.isUsages = true
+        options.isSearchForTextOccurrences = false
+        options.searchScope = GlobalSearchScope.fileScope(project, file.virtualFile)
+
+        val usages = Collections.synchronizedList(ArrayList<UsageInfo>())
+        val failure = AtomicReference<Throwable?>()
+        val completed = AtomicReference<Boolean?>()
+        val latch = CountDownLatch(1)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                completed.set(
+                    handler.processElementUsages(
+                        target,
+                        Processor { usage ->
+                            usages += usage
+                            true
+                        },
+                        options
+                    )
+                )
+            } catch (t: Throwable) {
+                failure.set(t)
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        assertTrue("Background Find Usages did not finish", latch.await(10, TimeUnit.SECONDS))
+        failure.get()?.let { throw it }
+        assertEquals(true, completed.get())
+        assertTrue(usages.isNotEmpty())
     }
 }

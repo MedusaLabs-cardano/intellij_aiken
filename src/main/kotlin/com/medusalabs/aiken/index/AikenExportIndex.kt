@@ -13,16 +13,16 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
-val AIKEN_EXPORT_INDEX_NAME: ID<String, String> = ID.create("aiken.exports")
-private const val AIKEN_EXPORT_INDEX_SEPARATOR: Char = '\u001F'
+val aikenExportIndexName: ID<String, String> = ID.create("aiken.exports")
+private const val aikenExportIndexSeparator: Char = '\u001F'
 
 fun decodeAikenExportIndexValue(value: String): List<String> =
     value
-        .split(AIKEN_EXPORT_INDEX_SEPARATOR)
+        .split(aikenExportIndexSeparator)
         .filter { it.isNotBlank() }
 
 class AikenExportIndex : FileBasedIndexExtension<String, String>() {
-    override fun getName(): ID<String, String> = AIKEN_EXPORT_INDEX_NAME
+    override fun getName(): ID<String, String> = aikenExportIndexName
 
     override fun getVersion(): Int = 1
 
@@ -45,7 +45,7 @@ class AikenExportIndex : FileBasedIndexExtension<String, String>() {
                 return@DataIndexer emptyMap()
             }
 
-            mapOf(modulePath to exportedSymbols.joinToString(AIKEN_EXPORT_INDEX_SEPARATOR.toString()))
+            mapOf(modulePath to exportedSymbols.joinToString(aikenExportIndexSeparator.toString()))
         }
 
     private object StringExternalizer : DataExternalizer<String> {

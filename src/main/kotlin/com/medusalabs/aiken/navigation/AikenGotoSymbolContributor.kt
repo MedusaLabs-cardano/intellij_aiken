@@ -13,7 +13,7 @@ import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.indexing.FindSymbolParameters
 import com.intellij.util.indexing.IdFilter
 import com.intellij.util.indexing.FileBasedIndex.ValueProcessor
-import com.medusalabs.aiken.index.AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME
+import com.medusalabs.aiken.index.aikenTopLevelSymbolIndexName
 import com.medusalabs.aiken.index.AikenTopLevelSymbolKind
 import com.medusalabs.aiken.index.aikenTopLevelSymbolNameKey
 
@@ -31,10 +31,10 @@ class AikenGotoSymbolContributor : ChooseByNameContributorEx {
 
         try {
             index.processAllKeys(
-                AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
+                aikenTopLevelSymbolIndexName,
                 Processor { key ->
                     if (!key.startsWith("name|")) return@Processor true
-                    if (index.getContainingFiles(AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME, key, scope).isEmpty()) {
+                    if (index.getContainingFiles(aikenTopLevelSymbolIndexName, key, scope).isEmpty()) {
                         return@Processor true
                     }
                     val symbolName = key.substringAfterLast('|')
@@ -68,7 +68,7 @@ class AikenGotoSymbolContributor : ChooseByNameContributorEx {
             for (key in keys) {
                 val completed =
                     index.processValues(
-                        AIKEN_TOP_LEVEL_SYMBOL_INDEX_NAME,
+                        aikenTopLevelSymbolIndexName,
                         key,
                         null,
                         ValueProcessor<Int> { file, offset ->

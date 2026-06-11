@@ -121,6 +121,40 @@ class AikenProjectScaffolderTest : AikenPlatformTestCase() {
     }
 
     @Test
+    fun defaultRunConfigurationsUseProjectDirMacroInsteadOfLocalAbsolutePaths() {
+        val projectDir = Files.createTempDirectory("aiken-run-config-paths")
+
+        AikenProjectScaffolder.createProject(
+            targetDirectoryPath = projectDir.toString(),
+            vendor = "acme",
+            projectName = "demo",
+            libraryOnly = false,
+            toolchainMode = AikenToolchainMode.GLOBAL,
+            aikenVersion = "1.1.21",
+            stdlibVersion = "v3.0.0",
+            plutusVersion = "V3"
+        )
+
+        val runConfigurationsDir = projectDir.resolve(".idea").resolve("runConfigurations")
+        val runConfigurationFiles =
+            listOf(
+                "Build_blueprint.xml",
+                "Clean_artifacts.xml",
+                "Make_artifacts.xml",
+                "Parametrize_blueprint.xml",
+                "Run_checks.xml"
+            )
+        runConfigurationFiles.forEach { fileName ->
+            val content = readProjectText(runConfigurationsDir.resolve(fileName))
+            assertTrue("$fileName must use IntelliJ project macro", content.contains("""name="projectDirectory" value="${'$'}PROJECT_DIR${'$'}""""))
+            assertFalse("$fileName must not contain a Unix home project path", Regex("""/home/[^"'\\\s]+/[^"'\s]*""").containsMatchIn(content))
+            val macOsHomePathPattern = Regex("""/""" + """Users/[^"'\\\s]+/[^"'\s]*""")
+            assertFalse("$fileName must not contain a macOS user project path", macOsHomePathPattern.containsMatchIn(content))
+            assertFalse("$fileName must not contain a Windows drive path", Regex("""[A-Za-z]:\\[^"'\s]*""").containsMatchIn(content))
+        }
+    }
+
+    @Test
     fun startupActivityInstallsDefaultRunConfigurationsForExternallyCreatedAikenProject() = runBlocking {
         val manifest = myFixture.addFileToProject("aiken.toml", "name = \"acme/demo\"\n")
 

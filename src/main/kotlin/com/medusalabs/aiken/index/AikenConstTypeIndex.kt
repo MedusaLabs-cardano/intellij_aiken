@@ -13,14 +13,14 @@ import com.medusalabs.aiken.project.AikenModulePath
 import java.io.DataInput
 import java.io.DataOutput
 
-val AIKEN_CONST_TYPE_INDEX_NAME: ID<String, String> = ID.create("aiken.constTypes")
+val aikenConstTypeIndexName: ID<String, String> = ID.create("aiken.constTypes")
 
 fun aikenConstTypeModuleKey(modulePath: String, constName: String): String = "module|$modulePath|$constName"
 
 fun aikenConstTypeTypeKey(type: String): String = "type|$type"
 
-private const val AIKEN_CONST_TYPE_ENTRY_SEPARATOR = '\u001e'
-private const val AIKEN_CONST_TYPE_FIELD_SEPARATOR = '\u001f'
+private const val aikenConstTypeEntrySeparator = '\u001e'
+private const val aikenConstTypeFieldSeparator = '\u001f'
 
 data class AikenConstTypeIndexEntry(
     val modulePath: String,
@@ -30,14 +30,14 @@ data class AikenConstTypeIndexEntry(
 )
 
 fun encodeAikenConstTypeIndexValues(entries: List<AikenConstTypeIndexEntry>): String =
-    entries.joinToString(AIKEN_CONST_TYPE_ENTRY_SEPARATOR.toString()) { entry ->
-        listOf(entry.modulePath, entry.constName, entry.type, entry.exported.toString()).joinToString(AIKEN_CONST_TYPE_FIELD_SEPARATOR.toString())
+    entries.joinToString(aikenConstTypeEntrySeparator.toString()) { entry ->
+        listOf(entry.modulePath, entry.constName, entry.type, entry.exported.toString()).joinToString(aikenConstTypeFieldSeparator.toString())
     }
 
 fun decodeAikenConstTypeIndexValues(value: String): List<AikenConstTypeIndexEntry> =
-    value.split(AIKEN_CONST_TYPE_ENTRY_SEPARATOR)
+    value.split(aikenConstTypeEntrySeparator)
         .mapNotNull { encoded ->
-            val parts = encoded.split(AIKEN_CONST_TYPE_FIELD_SEPARATOR, limit = 4)
+            val parts = encoded.split(aikenConstTypeFieldSeparator, limit = 4)
             if (parts.size != 4) return@mapNotNull null
             val (modulePath, constName, type, exportedRaw) = parts
             if (modulePath.isBlank() || constName.isBlank() || type.isBlank()) return@mapNotNull null
@@ -46,7 +46,7 @@ fun decodeAikenConstTypeIndexValues(value: String): List<AikenConstTypeIndexEntr
         }
 
 class AikenConstTypeIndex : FileBasedIndexExtension<String, String>() {
-    override fun getName(): ID<String, String> = AIKEN_CONST_TYPE_INDEX_NAME
+    override fun getName(): ID<String, String> = aikenConstTypeIndexName
 
     override fun getVersion(): Int = 2
 

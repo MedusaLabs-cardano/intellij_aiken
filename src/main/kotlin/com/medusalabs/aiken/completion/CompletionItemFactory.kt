@@ -60,7 +60,7 @@ internal object CompletionItemFactory {
                 .withBoldness(kind == CompletionSymbolKind.KEYWORD)
                 .withInsertHandler { insertionContext, _ ->
                     normalizeWrongLayoutPrefix(insertionContext, text)
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+                    AikenAutoPopupGuard.cancelPendingRequests()
                 }
 
         val lookup =

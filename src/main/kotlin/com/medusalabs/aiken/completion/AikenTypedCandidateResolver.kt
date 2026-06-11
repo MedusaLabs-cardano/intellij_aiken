@@ -7,10 +7,10 @@ import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenImportedNameKind
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_CONST_TYPE_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_CONSTRUCTIBLE_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_EXPORT_INDEX_NAME
-import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
+import com.medusalabs.aiken.index.aikenConstTypeIndexName
+import com.medusalabs.aiken.index.aikenConstructibleIndexName
+import com.medusalabs.aiken.index.aikenExportIndexName
+import com.medusalabs.aiken.index.aikenFunctionSignatureIndexName
 import com.medusalabs.aiken.index.AikenConstTypeExtractor
 import com.medusalabs.aiken.index.AikenConstructibleExtractor
 import com.medusalabs.aiken.index.AikenPublicExportExtractor
@@ -413,7 +413,7 @@ internal object AikenTypedCandidateResolver {
                 val signature =
                     index
                         .getValues(
-                            AIKEN_FUNCTION_SIGNATURE_INDEX_NAME,
+                            aikenFunctionSignatureIndexName,
                             aikenFunctionSignatureModuleKey(importedName.statement.modulePath, importedName.sourceName),
                             scope
                         )
@@ -476,7 +476,7 @@ internal object AikenTypedCandidateResolver {
                 val signature =
                     index
                         .getValues(
-                            AIKEN_FUNCTION_SIGNATURE_INDEX_NAME,
+                            aikenFunctionSignatureIndexName,
                             aikenFunctionSignatureModuleKey(importedName.statement.modulePath, importedName.sourceName),
                             scope
                         )
@@ -618,7 +618,7 @@ internal object AikenTypedCandidateResolver {
         val index = FileBasedIndex.getInstance()
         val scope = AikenSearchScopes.forElement(anchor)
         for (modulePath in importedModules) {
-            for (value in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, modulePath, scope)) {
+            for (value in index.getValues(aikenConstructibleIndexName, modulePath, scope)) {
                 for (entry in decodeAikenConstructibleIndexValue(value)) {
                     if (entry.ownerName in excludedNames) continue
                     val matchDistance = resolver.expectedTypeDistance(anchor, entry.resultTypeName, expectedType) ?: continue
@@ -672,7 +672,7 @@ internal object AikenTypedCandidateResolver {
         var indexedMatchesFound = false
 
         for (compatibleType in expectedType.compatibleTypes.keys) {
-            for (encodedValue in index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureReturnTypeKey(compatibleType), scope)) {
+            for (encodedValue in index.getValues(aikenFunctionSignatureIndexName, aikenFunctionSignatureReturnTypeKey(compatibleType), scope)) {
                 for (entry in decodeAikenFunctionReturnTypeIndexValues(encodedValue)) {
                     if (entry.modulePath == currentModulePath) continue
                     if (entry.functionName in excludedNames) continue
@@ -697,7 +697,7 @@ internal object AikenTypedCandidateResolver {
         }
 
         for (genericKey in genericReturnLookupKeys(expectedType)) {
-            for (encodedValue in index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, genericKey, scope)) {
+            for (encodedValue in index.getValues(aikenFunctionSignatureIndexName, genericKey, scope)) {
                 for (entry in decodeAikenFunctionReturnTypeIndexValues(encodedValue)) {
                     if (entry.modulePath == currentModulePath) continue
                     if (entry.functionName in excludedNames) continue
@@ -827,7 +827,7 @@ internal object AikenTypedCandidateResolver {
         val result = ArrayList<AikenTypedExpectedTypeCandidate.Identifier>()
 
         for (compatibleType in expectedType.compatibleTypes.keys) {
-            for (encodedValue in index.getValues(AIKEN_CONST_TYPE_INDEX_NAME, aikenConstTypeTypeKey(compatibleType), scope)) {
+            for (encodedValue in index.getValues(aikenConstTypeIndexName, aikenConstTypeTypeKey(compatibleType), scope)) {
                 for (entry in decodeAikenConstTypeIndexValues(encodedValue)) {
                     if (entry.modulePath == currentModulePath) continue
                     if (entry.constName in excludedNames) continue
@@ -901,7 +901,7 @@ internal object AikenTypedCandidateResolver {
         val result = ArrayList<AikenTypedExpectedTypeCandidate.Constructible>()
 
         for (compatibleType in expectedType.compatibleTypes.keys) {
-            for (encodedValue in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, aikenConstructibleResultTypeKey(compatibleType), scope)) {
+            for (encodedValue in index.getValues(aikenConstructibleIndexName, aikenConstructibleResultTypeKey(compatibleType), scope)) {
                 for (entry in decodeAikenConstructibleReturnTypeIndexValues(encodedValue)) {
                     if (entry.modulePath == currentModulePath) continue
                     if (entry.ownerName in excludedNames) continue
@@ -945,7 +945,7 @@ internal object AikenTypedCandidateResolver {
         if (!DumbService.isDumb(anchor.project)) {
             val index = FileBasedIndex.getInstance()
             val scope = AikenSearchScopes.forElement(anchor)
-            index.getValues(AIKEN_CONST_TYPE_INDEX_NAME, aikenConstTypeModuleKey(modulePath, constName), scope)
+            index.getValues(aikenConstTypeIndexName, aikenConstTypeModuleKey(modulePath, constName), scope)
                 .firstOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?.let { return it }
@@ -965,7 +965,7 @@ internal object AikenTypedCandidateResolver {
             val names = LinkedHashSet<String>()
             val index = FileBasedIndex.getInstance()
             val scope = AikenSearchScopes.forElement(anchor)
-            for (value in index.getValues(AIKEN_EXPORT_INDEX_NAME, modulePath, scope)) {
+            for (value in index.getValues(aikenExportIndexName, modulePath, scope)) {
                 names += decodeAikenExportIndexValue(value)
             }
             if (names.isNotEmpty()) {

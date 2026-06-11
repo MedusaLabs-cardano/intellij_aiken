@@ -13,7 +13,7 @@ import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_CONSTRUCTIBLE_INDEX_NAME
+import com.medusalabs.aiken.index.aikenConstructibleIndexName
 import com.medusalabs.aiken.index.AikenConstructibleEntry
 import com.medusalabs.aiken.index.AikenConstructibleExtractor
 import com.medusalabs.aiken.index.decodeAikenConstructibleIndexValue
@@ -128,7 +128,7 @@ object AikenConstructibleCompletionSupport {
         if (constructible.fields.isEmpty()) return
         editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, PendingConstructibleInvocation(constructible, caretOffset))
         editor.caretModel.moveToOffset(caretOffset)
-        AutoPopupController.getInstance(project).autoPopupMemberLookup(editor, CompletionType.BASIC, null)
+        AutoPopupController.getInstance(project).scheduleAutoPopup(editor, CompletionType.BASIC, null)
     }
 
     private fun createNamedFormLookup(
@@ -162,7 +162,7 @@ object AikenConstructibleCompletionSupport {
                 .withIcon(spec.icon)
                 .withTypeText(spec.typeText, true)
                 .withInsertHandler { insertionContext, _ ->
-                    AikenAutoPopupGuard.cancelPendingRequests(insertionContext.project)
+                    AikenAutoPopupGuard.cancelPendingRequests()
                     applyInsertionFamily(insertionContext, spec.insertionFamily)
                 }
 
@@ -237,7 +237,7 @@ object AikenConstructibleCompletionSupport {
                 insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
                 insertionContext.commitDocument()
                 AutoPopupController.getInstance(insertionContext.project)
-                    .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                    .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
             }
             AikenConstructibleInsertionFamily.PositionalForm -> {
                 replaceInsertedLookupText(insertionContext, "()")
@@ -245,7 +245,7 @@ object AikenConstructibleCompletionSupport {
                 insertionContext.editor.putUserData(PENDING_CONSTRUCTIBLE_FORM_KEY, null)
                 insertionContext.commitDocument()
                 AutoPopupController.getInstance(insertionContext.project)
-                    .autoPopupMemberLookup(insertionContext.editor, CompletionType.BASIC, null)
+                    .scheduleAutoPopup(insertionContext.editor, CompletionType.BASIC, null)
             }
         }
     }
@@ -341,7 +341,7 @@ object AikenConstructibleCompletionSupport {
             if (!addedAny && !DumbService.isDumb(anchor.project)) {
                 val index = FileBasedIndex.getInstance()
                 val scope = AikenSearchScopes.forElement(anchor)
-                for (value in index.getValues(AIKEN_CONSTRUCTIBLE_INDEX_NAME, modulePath, scope)) {
+                for (value in index.getValues(aikenConstructibleIndexName, modulePath, scope)) {
                     for (entry in decodeAikenConstructibleIndexValue(value)) {
                         if (entry.ownerName != name) continue
                         val key = modulePath to entry.offset

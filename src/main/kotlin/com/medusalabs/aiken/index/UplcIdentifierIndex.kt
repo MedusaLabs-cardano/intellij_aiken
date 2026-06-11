@@ -15,8 +15,8 @@ import com.medusalabs.aiken.lang.UplcFileType
 import java.io.DataInput
 import java.io.DataOutput
 
-val UPLC_IDENTIFIER_INDEX_NAME: ID<String, Int> = ID.create("uplc.identifiers")
-private val UPLC_IDENTIFIER_INDEX_TOKENS: TokenSet =
+val uplcIdentifierIndexName: ID<String, Int> = ID.create("uplc.identifiers")
+private val uplcIdentifierIndexTokens: TokenSet =
     TokenSet.create(
         UplcTokenTypes.IDENTIFIER,
         UplcTokenTypes.TYPE,
@@ -28,7 +28,7 @@ private val UPLC_IDENTIFIER_INDEX_TOKENS: TokenSet =
  * Indexes identifier-like tokens across all `.uplc` files in a project.
  */
 class UplcIdentifierIndex : FileBasedIndexExtension<String, Int>() {
-    override fun getName(): ID<String, Int> = UPLC_IDENTIFIER_INDEX_NAME
+    override fun getName(): ID<String, Int> = uplcIdentifierIndexName
 
     override fun getVersion(): Int = 2
 
@@ -52,7 +52,7 @@ class UplcIdentifierIndex : FileBasedIndexExtension<String, Int>() {
             val result = HashMap<String, Int>()
             while (lexer.tokenType != null) {
                 val tokenType = lexer.tokenType
-                if (tokenType != null && UPLC_IDENTIFIER_INDEX_TOKENS.contains(tokenType)) {
+                if (tokenType != null && uplcIdentifierIndexTokens.contains(tokenType)) {
                     val word = text.subSequence(lexer.tokenStart, lexer.tokenEnd).toString()
                     if (word.length >= 2) {
                         val kind =

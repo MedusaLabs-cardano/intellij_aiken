@@ -4,7 +4,7 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.medusalabs.aiken.imports.AikenUseStatementParser
-import com.medusalabs.aiken.index.AIKEN_FUNCTION_SIGNATURE_INDEX_NAME
+import com.medusalabs.aiken.index.aikenFunctionSignatureIndexName
 import com.medusalabs.aiken.index.aikenFunctionSignatureModuleKey
 import com.medusalabs.aiken.index.aikenFunctionSignatureNameKey
 import com.medusalabs.aiken.project.AikenModulePath
@@ -130,7 +130,7 @@ object AikenArgumentCompletionSupport {
                 currentModulePath
                     ?.let { modulePath ->
                         index.getValues(
-                            AIKEN_FUNCTION_SIGNATURE_INDEX_NAME,
+                            aikenFunctionSignatureIndexName,
                             aikenFunctionSignatureModuleKey(modulePath, call.calleeName),
                             scope
                         )
@@ -150,7 +150,7 @@ object AikenArgumentCompletionSupport {
         for (target in importedTargets) {
             val indexed =
                 index.getValues(
-                    AIKEN_FUNCTION_SIGNATURE_INDEX_NAME,
+                    aikenFunctionSignatureIndexName,
                     aikenFunctionSignatureModuleKey(target.modulePath, target.symbolName),
                     scope
                 )
@@ -160,7 +160,7 @@ object AikenArgumentCompletionSupport {
             if (indexed.isNotEmpty()) return indexed
         }
 
-        return index.getValues(AIKEN_FUNCTION_SIGNATURE_INDEX_NAME, aikenFunctionSignatureNameKey(call.calleeName), scope)
+        return index.getValues(aikenFunctionSignatureIndexName, aikenFunctionSignatureNameKey(call.calleeName), scope)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .toSet()
