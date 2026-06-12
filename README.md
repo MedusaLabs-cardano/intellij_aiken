@@ -99,7 +99,6 @@ For memory-heavy full test runs, use a larger Gradle/Kotlin heap:
 - The Aiken compiler and LSP remain the source of truth for formatting, diagnostics, hover, and ordinary code actions.
 - Formatting intentionally delegates to `aiken fmt`; the plugin does not reimplement Aiken formatter semantics.
 - Semantic completion, navigation, rename, usages, parameter info, and Structure View are implemented natively for IDE responsiveness and richer context handling.
-- Project-map notes live in `PROJECT_MAP/` and mirror source paths for quicker navigation during development.
 
 ## Release Notes
 

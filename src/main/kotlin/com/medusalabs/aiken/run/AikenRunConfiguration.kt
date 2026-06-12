@@ -1,8 +1,6 @@
 package com.medusalabs.aiken.run
 
 import com.intellij.build.DefaultBuildDescriptor
-import com.intellij.build.FilePosition
-import com.intellij.build.FileNavigatable
 import com.intellij.build.BuildDescriptor
 import com.intellij.build.BuildView
 import com.intellij.build.BuildViewManager
@@ -10,11 +8,12 @@ import com.intellij.build.events.BuildEvent
 import com.intellij.build.events.EventResult
 import com.intellij.build.events.Failure
 import com.intellij.build.events.FailureResult
-import com.intellij.build.events.FileMessageEvent
-import com.intellij.build.events.FileMessageEventResult
 import com.intellij.build.events.FinishBuildEvent
+import com.intellij.build.events.FinishEvent
 import com.intellij.build.events.MessageEvent
 import com.intellij.build.events.MessageEventResult
+import com.intellij.build.events.OutputBuildEvent
+import com.intellij.build.events.StartEvent
 import com.intellij.build.events.StartBuildEvent
 import com.intellij.build.events.SuccessResult
 import com.intellij.build.events.Warning
@@ -36,6 +35,7 @@ import com.intellij.execution.process.KillableProcessHandler
 import com.intellij.execution.process.NopProcessHandler
 import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
+import com.intellij.execution.process.ProcessOutputType
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.process.ProcessListener
@@ -61,6 +61,7 @@ import com.intellij.execution.filters.TextConsoleBuilderFactory
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProgressManager
@@ -134,6 +135,7 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import com.intellij.terminal.TerminalExecutionConsole
 import com.intellij.terminal.TerminalExecutionConsoleBuilder
+import com.medusalabs.aiken.project.AikenModulePath
 import com.medusalabs.aiken.tooling.AikenNodeToolchain
 import com.medusalabs.aiken.tooling.AikenProjectToolchainSettings
 import com.medusalabs.aiken.tooling.AikenToolchainMode
@@ -171,6 +173,19 @@ import java.math.BigInteger
 private const val applyEditorLeftInset = 10
 private const val diagnosticsRootId = "aiken-root"
 private const val diagnosticTitleMaxLength = 120
+
+private data class AikenSourcePosition(
+    val file: File,
+    val startLine: Int,
+    val startColumn: Int
+)
+
+private fun stripBuildEventDetailsAnsi(text: String?): String? {
+    text ?: return null
+    val withoutAnsi = Regex("""(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]""").replace(text, "")
+    val withoutBrokenAnsi = Regex("""\uFFFD\[[0-?]*[ -/]*[@-~]""").replace(withoutAnsi, "")
+    return Regex("""[\u001B\u009B\uFFFD]""").replace(withoutBrokenAnsi, "")
+}
 
 private class NoTreeSelectionModel : DefaultTreeSelectionModel() {
     override fun setSelectionPath(path: TreePath?) = Unit
@@ -223,6 +238,30 @@ private class AikenFinishBuildEvent(
     override fun getResult(): EventResult = eventResult
 }
 
+private class AikenStartEvent(
+    eventId: Any,
+    parentId: Any,
+    message: String
+) : AikenBuildEvent(eventId, parentId, message), StartEvent
+
+private class AikenFinishEvent(
+    eventId: Any,
+    parentId: Any,
+    message: String,
+    private val eventResult: EventResult
+) : AikenBuildEvent(eventId, parentId, message), FinishEvent {
+    override fun getResult(): EventResult = eventResult
+}
+
+private class AikenOutputBuildEvent(
+    eventId: Any,
+    parentId: Any,
+    message: String,
+    private val eventOutputType: ProcessOutputType
+) : AikenBuildEvent(eventId, parentId, message), OutputBuildEvent {
+    override fun getOutputType(): ProcessOutputType = eventOutputType
+}
+
 private class AikenSuccessResult : SuccessResult {
     override fun isUpToDate(): Boolean = false
     override fun getWarnings(): List<Warning> = emptyList()
@@ -237,15 +276,7 @@ private open class AikenMessageEventResult(
     private val detailsText: String?
 ) : MessageEventResult {
     override fun getKind(): MessageEvent.Kind = messageKind
-    override fun getDetails(): String? = detailsText
-}
-
-private class AikenFileMessageEventResult(
-    messageKind: MessageEvent.Kind,
-    detailsText: String?,
-    private val position: FilePosition
-) : AikenMessageEventResult(messageKind, detailsText), FileMessageEventResult {
-    override fun getFilePosition(): FilePosition = position
+    override fun getDetails(): String? = stripBuildEventDetailsAnsi(detailsText)
 }
 
 private open class AikenMessageBuildEvent(
@@ -269,11 +300,12 @@ private class AikenFileMessageBuildEvent(
     messageGroup: String,
     title: String,
     description: String?,
-    private val position: FilePosition
-) : AikenMessageBuildEvent(eventId, parentId, messageKind, messageGroup, title, description), FileMessageEvent {
-    override fun getFilePosition(): FilePosition = position
-    override fun getNavigatable(project: Project): Navigatable = FileNavigatable(project, position)
-    override fun getResult(): FileMessageEventResult = AikenFileMessageEventResult(kind, description, position)
+    private val position: AikenSourcePosition
+) : AikenMessageBuildEvent(eventId, parentId, messageKind, messageGroup, title, description) {
+    override fun getNavigatable(project: Project): Navigatable? {
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(position.file) ?: return null
+        return OpenFileDescriptor(project, virtualFile, position.startLine, position.startColumn)
+    }
 }
 
 @Suppress("SameParameterValue")
@@ -4765,38 +4797,82 @@ class AikenRunConfiguration(
             diagnostics: DiagnosticsSections,
             workDir: String?
         ) {
-            diagnostics.warnings.forEachIndexed { index, block ->
-                emitBuildMessage(buildView, buildId, "warnings", index, block, MessageEvent.Kind.WARNING, workDir)
-            }
-            diagnostics.errors.forEachIndexed { index, block ->
-                emitBuildMessage(buildView, buildId, "errors", index, block, MessageEvent.Kind.ERROR, workDir)
+            for ((moduleIndex, group) in buildDiagnosticGroups(diagnostics, workDir).withIndex()) {
+                val moduleId = "aiken-build-module-$moduleIndex-${System.nanoTime()}"
+                val moduleDisplayName = withLeafCount(group.moduleName?.let(::moduleDisplayName) ?: "diagnostics", group.entries.size)
+                buildView.onEvent(
+                    buildId,
+                    AikenStartEvent(moduleId, buildId, moduleDisplayName)
+                )
+                for (entry in group.entries) {
+                    emitBuildMessage(buildView, buildId, moduleId, entry, workDir)
+                }
+                val hasErrors = group.entries.any { it.kind == MessageEvent.Kind.ERROR }
+                buildView.onEvent(
+                    buildId,
+                    AikenFinishEvent(
+                        moduleId,
+                        buildId,
+                        moduleDisplayName,
+                        if (hasErrors) AikenFailureResult() else AikenSuccessResult()
+                    )
+                )
             }
         }
 
         private fun emitBuildMessage(
             buildView: BuildView,
             buildId: Any,
-            sectionName: String,
-            index: Int,
-            block: String,
-            kind: MessageEvent.Kind,
+            parentId: Any,
+            entry: BuildDiagnosticEntry,
             workDir: String?
         ) {
+            val sectionName = entry.sectionName
+            val index = entry.index
+            val block = entry.block
             val title = buildDiagnosticNodeTitle(sectionName, index, block)
-            val filePosition = extractDiagnosticFilePosition(block, workDir)
+            val filePosition = extractDiagnosticSourcePosition(block, workDir)
             val eventId = "aiken-$sectionName-$index-${System.nanoTime()}"
-            val description = block.trim()
+            val displayKind =
+                if (entry.kind == MessageEvent.Kind.ERROR) {
+                    MessageEvent.Kind.SIMPLE
+                } else {
+                    entry.kind
+                }
             if (filePosition != null) {
                 buildView.onEvent(
                     buildId,
-                    AikenFileMessageBuildEvent(eventId, buildId, kind, sectionName, title, description, filePosition)
+                    AikenFileMessageBuildEvent(eventId, parentId, displayKind, sectionName, title, null, filePosition)
                 )
             } else {
                 buildView.onEvent(
                     buildId,
-                    AikenMessageBuildEvent(eventId, buildId, kind, sectionName, title, description)
+                    AikenMessageBuildEvent(eventId, parentId, displayKind, sectionName, title, null)
                 )
             }
+            val rawOutput = if (block.endsWith('\n')) block else "$block\n"
+            emitBuildOutput(buildView, buildId, parentId, "module", sectionName, index, rawOutput)
+            emitBuildOutput(buildView, buildId, eventId, "leaf", sectionName, index, rawOutput)
+        }
+
+        private fun emitBuildOutput(
+            buildView: BuildView,
+            buildId: Any,
+            parentId: Any,
+            scope: String,
+            sectionName: String,
+            index: Int,
+            rawOutput: String
+        ) {
+            buildView.onEvent(
+                buildId,
+                AikenOutputBuildEvent(
+                    "aiken-$sectionName-$index-$scope-output-${System.nanoTime()}",
+                    parentId,
+                    rawOutput,
+                    ProcessOutputType.STDOUT
+                )
+            )
         }
     }
 
@@ -7503,11 +7579,11 @@ class AikenRunConfiguration(
         return TestSourceLocation(location.absolutePath, location.line).toLocationHint()
     }
 
-    private fun extractDiagnosticFilePosition(block: String, workDir: String?): FilePosition? {
+    private fun extractDiagnosticSourcePosition(block: String, workDir: String?): AikenSourcePosition? {
         val location = extractDiagnosticLocation(block, workDir) ?: return null
         val startLine = (location.line - 1).coerceAtLeast(0)
         val startColumn = location.column?.minus(1)?.coerceAtLeast(0) ?: 0
-        return FilePosition(File(location.absolutePath), startLine, startColumn)
+        return AikenSourcePosition(File(location.absolutePath), startLine, startColumn)
     }
 
     private fun extractDiagnosticLocation(block: String, workDir: String?): DiagnosticLocation? {
@@ -7518,6 +7594,60 @@ class AikenRunConfiguration(
             column = match.groupValues.getOrNull(3)?.toIntOrNull()?.coerceAtLeast(1),
             workDir = workDir
         )
+    }
+
+    private fun buildDiagnosticGroups(
+        diagnostics: DiagnosticsSections,
+        workDir: String?
+    ): List<BuildDiagnosticGroup> {
+        val grouped = LinkedHashMap<String, Pair<String?, MutableList<BuildDiagnosticEntry>>>()
+
+        fun add(sectionName: String, index: Int, block: String, kind: MessageEvent.Kind) {
+            val moduleName = extractDiagnosticModuleName(block, workDir)
+            val groupKey = moduleName?.let { "module:$it" } ?: "unresolved:diagnostics"
+            val pair =
+                grouped.getOrPut(groupKey) {
+                    moduleName to ArrayList()
+                }
+            pair.second += BuildDiagnosticEntry(sectionName, index, block, kind)
+        }
+
+        diagnostics.warnings.forEachIndexed { index, block ->
+            add("warnings", index, block, MessageEvent.Kind.WARNING)
+        }
+        diagnostics.errors.forEachIndexed { index, block ->
+            add("errors", index, block, MessageEvent.Kind.ERROR)
+        }
+
+        return grouped.values.map { (moduleName, entries) ->
+            BuildDiagnosticGroup(moduleName, entries.toList())
+        }
+    }
+
+    private fun extractDiagnosticModuleName(block: String, workDir: String?): String? {
+        val match = DIAGNOSTIC_LOCATION_REGEX.find(stripAnsi(block)) ?: return null
+        val rawPath = match.groupValues.getOrNull(1)?.trim().orEmpty()
+        if (rawPath.isEmpty()) return null
+
+        relativeDiagnosticPath(rawPath, workDir)?.let { relativePath ->
+            AikenModulePath.fromRelativePath(relativePath)?.let { return it }
+        }
+        return AikenModulePath.fromRelativePath(rawPath)
+    }
+
+    private fun relativeDiagnosticPath(rawPath: String, workDir: String?): String? {
+        val normalized = rawPath.replace('\\', '/')
+        if (!File(rawPath).isAbsolute) return normalized
+        if (workDir.isNullOrBlank()) return null
+
+        return try {
+            File(workDir).canonicalFile.toPath()
+                .relativize(File(rawPath).canonicalFile.toPath())
+                .toString()
+                .replace('\\', '/')
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun resolveDiagnosticLocation(
@@ -7610,6 +7740,18 @@ class AikenRunConfiguration(
     private data class DiagnosticsSections(
         val warnings: List<String>,
         val errors: List<String>
+    )
+
+    private data class BuildDiagnosticEntry(
+        val sectionName: String,
+        val index: Int,
+        val block: String,
+        val kind: MessageEvent.Kind
+    )
+
+    private data class BuildDiagnosticGroup(
+        val moduleName: String?,
+        val entries: List<BuildDiagnosticEntry>
     )
 
     private data class CommandRunResult(

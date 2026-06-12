@@ -1,7 +1,6 @@
 package com.medusalabs.aiken.run
 
 import com.intellij.build.BuildTextConsoleView
-import com.intellij.build.FilePosition
 import com.intellij.build.events.BuildEvent
 import com.intellij.build.events.EventResult
 import com.intellij.build.events.MessageEvent
@@ -83,7 +82,7 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     }
 
     @Test
-    fun buildTextConsoleDecodesAnsiFileMessageEventDetails() {
+    fun buildTextConsoleDecodesAnsiDiagnosticMessageDetails() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val source =
             myFixture.addFileToProject(
@@ -98,10 +97,7 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
             )
         val console = BuildTextConsoleView(project, false, emptyList())
         Disposer.register(testRootDisposable, console)
-        val event =
-            createFileMessageEvent(
-                position = FilePosition(File(source.virtualFile.path), 2, 4)
-            )
+        val event = createDiagnosticMessageEvent(sourcePosition(File(source.virtualFile.path)))
 
         console.component
         console.onEvent("build-root", event)
@@ -150,7 +146,7 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     }
 
     @Test
-    fun buildDiagnosticFilePositionUsesResolvedDiagnosticLocation() {
+    fun buildDiagnosticSourcePositionUsesResolvedDiagnosticLocation() {
         myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
         val source =
             myFixture.addFileToProject(
@@ -167,8 +163,8 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         val configuration = buildConfiguration()
         val workDir = source.virtualFile.parent.parent.path
 
-        val filePosition =
-            configuration.extractDiagnosticFilePositionForTest(
+        val sourcePosition =
+            configuration.extractDiagnosticSourcePositionForTest(
                 """
                 ⚠ I came across an unused variable: n
                   ╭─[validators/placeholder.ak:10:3]
@@ -177,10 +173,62 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
                 workDir
             )
 
-        requireNotNull(filePosition)
-        assertEquals(File(source.virtualFile.path).canonicalFile, requireNotNull(filePosition.file).canonicalFile)
-        assertEquals(9, filePosition.startLine)
-        assertEquals(2, filePosition.startColumn)
+        requireNotNull(sourcePosition)
+        assertEquals(File(source.virtualFile.path).canonicalFile, sourcePosition.fileField("file").canonicalFile)
+        assertEquals(9, sourcePosition.intField("startLine"))
+        assertEquals(2, sourcePosition.intField("startColumn"))
+    }
+
+    @Test
+    fun buildDiagnosticsAreGroupedByModule() {
+        myFixture.addFileToProject("aiken.toml", "name = \"demo\"\nversion = \"0.0.0\"\n")
+        val validator =
+            myFixture.addFileToProject(
+                "validators/placeholder.ak",
+                """
+                validator placeholder {
+                  mint(_redeemer: Data, _policy_id: Data, _self: Data) {
+                    todo
+                  }
+                }
+                """.trimIndent()
+            )
+        myFixture.addFileToProject(
+            "lib/helpers.ak",
+            """
+            pub fn helper() {
+              todo
+            }
+            """.trimIndent()
+        )
+        val workDir = validator.virtualFile.parent.parent.path
+        val diagnostics =
+            diagnosticsSectionsForTest(
+                warnings = listOf(
+                    """
+                    ⚠ I came across an unused variable: n
+                      ╭─[validators/placeholder.ak:2:3]
+                    """.trimIndent()
+                ),
+                errors = listOf(
+                    """
+                    × I found a todo left in the code.
+                      ╭─[lib/helpers.ak:2:3]
+                    """.trimIndent(),
+                    """
+                    × Another validator issue.
+                      ╭─[validators/placeholder.ak:3:5]
+                    """.trimIndent()
+                )
+            )
+
+        val groups = buildConfiguration().buildDiagnosticGroupsForTest(diagnostics, workDir)
+
+        assertEquals(2, groups.size)
+        assertEquals("placeholder", groups[0].stringField("moduleName"))
+        assertEquals(2, groups[0].entriesForTest().size)
+        assertEquals("helpers", groups[1].stringField("moduleName"))
+        assertEquals(1, groups[1].entriesForTest().size)
     }
 
     private fun buildConfiguration(): AikenRunConfiguration {
@@ -204,13 +252,12 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return constructor.newInstance("build-root", "Build Succeeded", result) as BuildEvent
     }
 
-    private fun createFileMessageEvent(
-        position: FilePosition
-    ): BuildEvent {
+    private fun createDiagnosticMessageEvent(position: Any): BuildEvent {
         val diagnosticDescription =
             "\u001B[33mI found a todo left in the code.\u001B[0m\n" +
                 "\u001B[35mAn expression of type Bool is expected here.\u001B[0m"
         val eventClass = Class.forName("com.medusalabs.aiken.run.AikenFileMessageBuildEvent")
+        val positionClass = Class.forName("com.medusalabs.aiken.run.AikenSourcePosition")
         val constructor =
             eventClass.getDeclaredConstructor(
                 Any::class.java,
@@ -219,7 +266,7 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
                 String::class.java,
                 String::class.java,
                 String::class.java,
-                FilePosition::class.java
+                positionClass
             )
         constructor.isAccessible = true
         return constructor.newInstance(
@@ -263,6 +310,31 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return method.invoke(this, block, workDir)
     }
 
+    private fun diagnosticsSectionsForTest(
+        warnings: List<String>,
+        errors: List<String>
+    ): Any {
+        val diagnosticsClass = AikenRunConfiguration::class.java.declaredClasses.first { it.simpleName == "DiagnosticsSections" }
+        val constructor = diagnosticsClass.getDeclaredConstructor(List::class.java, List::class.java)
+        constructor.isAccessible = true
+        return constructor.newInstance(warnings, errors)
+    }
+
+    private fun AikenRunConfiguration.buildDiagnosticGroupsForTest(
+        diagnostics: Any,
+        workDir: String?
+    ): List<Any> {
+        val method =
+            AikenRunConfiguration::class.java.getDeclaredMethod(
+                "buildDiagnosticGroups",
+                diagnostics.javaClass,
+                String::class.java
+            )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        return method.invoke(this, diagnostics, workDir) as List<Any>
+    }
+
     private fun AikenRunConfiguration.createBuildDiagnosticMessageFilterForTest(
         workDir: String?
     ): com.intellij.execution.filters.Filter {
@@ -276,18 +348,18 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         return method.invoke(this, workDir) as com.intellij.execution.filters.Filter
     }
 
-    private fun AikenRunConfiguration.extractDiagnosticFilePositionForTest(
+    private fun AikenRunConfiguration.extractDiagnosticSourcePositionForTest(
         block: String,
         workDir: String?
-    ): FilePosition? {
+    ): Any? {
         val method =
             AikenRunConfiguration::class.java.getDeclaredMethod(
-                "extractDiagnosticFilePosition",
+                "extractDiagnosticSourcePosition",
                 String::class.java,
                 String::class.java
             )
         method.isAccessible = true
-        return method.invoke(this, block, workDir) as FilePosition?
+        return method.invoke(this, block, workDir)
     }
 
     private fun Any.stringField(name: String): String =
@@ -296,6 +368,13 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
     private fun Any.intField(name: String): Int =
         declaredFieldValue(name) as Int
 
+    private fun Any.fileField(name: String): File =
+        declaredFieldValue(name) as File
+
+    @Suppress("UNCHECKED_CAST")
+    private fun Any.entriesForTest(): List<Any> =
+        declaredFieldValue("entries") as List<Any>
+
     private fun Any.nullableIntField(name: String): Int? =
         declaredFieldValue(name) as Int?
 
@@ -303,5 +382,12 @@ class AikenBuildMessagesRunStateTest : AikenPlatformTestCase() {
         val field = javaClass.getDeclaredField(name)
         field.isAccessible = true
         return field.get(this)
+    }
+
+    private fun sourcePosition(file: File): Any {
+        val positionClass = Class.forName("com.medusalabs.aiken.run.AikenSourcePosition")
+        val constructor = positionClass.getDeclaredConstructor(File::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        constructor.isAccessible = true
+        return constructor.newInstance(file, 2, 4)
     }
 }

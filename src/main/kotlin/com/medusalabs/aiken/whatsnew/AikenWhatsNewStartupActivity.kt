@@ -1,16 +1,17 @@
 package com.medusalabs.aiken.whatsnew
 
-import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.plugins.cl.PluginAwareClassLoader
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.extensions.PluginAware
+import com.intellij.openapi.extensions.PluginDescriptor
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.impl.HTMLEditorProvider
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.util.text.StringUtil
@@ -21,13 +22,19 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.Locale
 
-private val AIKEN_WHATS_NEW_LOGGER: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
-private val AIKEN_PLUGIN_ID: PluginId = PluginId.getId("com.medusalabs.aiken")
-private const val AIKEN_WHATS_NEW_SHOWN_VERSION_KEY = "com.medusalabs.aiken.whatsnew.shownVersion"
-private const val AIKEN_WHATS_NEW_TAB_TITLE = "Aiken · What's New"
-private const val AIKEN_WHATS_NEW_LATEST_RESOURCE = "/whatsnew/latest/index.html"
+private val aikenWhatsNewLogger: Logger = Logger.getInstance(AikenWhatsNewStartupActivity::class.java)
+private const val aikenWhatsNewShownVersionKey = "com.medusalabs.aiken.whatsnew.shownVersion"
+private const val aikenWhatsNewTabTitle = "Aiken · What's New"
+private const val aikenWhatsNewLatestResource = "/whatsnew/latest/index.html"
 
-class AikenWhatsNewStartupActivity : ProjectActivity {
+class AikenWhatsNewStartupActivity : ProjectActivity, PluginAware {
+    @Volatile
+    private var pluginDescriptor: PluginDescriptor? = null
+
+    override fun setPluginDescriptor(pluginDescriptor: PluginDescriptor) {
+        this.pluginDescriptor = pluginDescriptor
+    }
+
     override suspend fun execute(project: Project) {
         if (ApplicationManager.getApplication().isUnitTestMode) return
 
@@ -35,14 +42,14 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
         if (currentVersion.isBlank()) return
 
         val props = PropertiesComponent.getInstance()
-        if (props.getValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY) == currentVersion) return
+        if (props.getValue(aikenWhatsNewShownVersionKey) == currentVersion) return
 
         subscribeToLafChanges(project)
         val html = loadHtml(currentVersion) ?: return
 
         ApplicationManager.getApplication().invokeLater {
             openOrRefreshTab(project, html)
-            props.setValue(AIKEN_WHATS_NEW_SHOWN_VERSION_KEY, currentVersion)
+            props.setValue(aikenWhatsNewShownVersionKey, currentVersion)
         }
     }
 
@@ -53,8 +60,8 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
         var baseResourcePath = versionResourcePath
         var template = readResource(versionResourcePath)
         if (template == null) {
-            baseResourcePath = AIKEN_WHATS_NEW_LATEST_RESOURCE
-            template = readResource(AIKEN_WHATS_NEW_LATEST_RESOURCE)
+            baseResourcePath = aikenWhatsNewLatestResource
+            template = readResource(aikenWhatsNewLatestResource)
         }
         template ?: return null
         val baseResourceDir = baseResourcePath.substringBeforeLast('/', missingDelimiterValue = "")
@@ -75,7 +82,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 val resourcePath = resolveResourcePath(baseResourceDir, source)
                 val bytes = readResourceBytes(resourcePath)
                 if (bytes == null) {
-                    AIKEN_WHATS_NEW_LOGGER.warn("Failed to inline What's New image resource: $resourcePath")
+                    aikenWhatsNewLogger.warn("Failed to inline What's New image resource: $resourcePath")
                     match.value
                 } else {
                     val mimeType = imageMimeType(resourcePath)
@@ -117,7 +124,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 stream.readBytes()
             }
         } catch (t: Throwable) {
-                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                aikenWhatsNewLogger.warn("Failed to read What's New resource: $path", t)
                 null
             }
     }
@@ -128,7 +135,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 String(bytes, StandardCharsets.UTF_8)
             }
         } catch (t: Throwable) {
-                AIKEN_WHATS_NEW_LOGGER.warn("Failed to read What's New resource: $path", t)
+                aikenWhatsNewLogger.warn("Failed to read What's New resource: $path", t)
                 null
             }
     }
@@ -142,7 +149,7 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
                 val html = loadHtml(version) ?: return@LafManagerListener
                 ApplicationManager.getApplication().invokeLater {
                     val manager = FileEditorManager.getInstance(project)
-                    if (manager.openFiles.none { it.name == AIKEN_WHATS_NEW_TAB_TITLE }) return@invokeLater
+                    if (manager.openFiles.none { it.name == aikenWhatsNewTabTitle }) return@invokeLater
                     openOrRefreshTab(project, html)
                 }
             }
@@ -152,13 +159,15 @@ class AikenWhatsNewStartupActivity : ProjectActivity {
     private fun openOrRefreshTab(project: Project, html: String) {
         val manager = FileEditorManager.getInstance(project)
         manager.openFiles
-            .filter { it.name == AIKEN_WHATS_NEW_TAB_TITLE }
+            .filter { it.name == aikenWhatsNewTabTitle }
             .forEach { manager.closeFile(it) }
-        HTMLEditorProvider.openEditor(project, AIKEN_WHATS_NEW_TAB_TITLE, html)
+        HTMLEditorProvider.openEditor(project, aikenWhatsNewTabTitle, html)
     }
 
-    private fun currentPluginVersion(): String = PluginManagerCore
-        .getPlugin(AIKEN_PLUGIN_ID)
+    private fun currentPluginVersion(): String = (
+        pluginDescriptor
+            ?: (javaClass.classLoader as? PluginAwareClassLoader)?.pluginDescriptor
+        )
         ?.version
         ?.trim()
         .orEmpty()

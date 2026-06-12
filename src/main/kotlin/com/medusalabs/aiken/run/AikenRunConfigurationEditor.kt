@@ -24,6 +24,7 @@ import javax.swing.text.JTextComponent
 
 class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val descriptionFontScale = 0.9f
+    private val compactFieldPreferredWidth = JBUI.scale(500)
     private val buildCard = "build"
     private val artifactsCard = "artifacts"
     private val cleanCard = "clean"
@@ -54,10 +55,10 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
     private val addressModuleField = JBTextField()
     private val addressValidatorField = JBTextField()
     private val addressDelegatedToField = JBTextField()
-    private val addressIncludeScriptCborCheck = JBCheckBox("Generate script file")
-    private val addressIncludeTestnetAddressCheck = JBCheckBox("Generate testnet address")
-    private val addressIncludeMainnetAddressCheck = JBCheckBox("Generate mainnet address")
-    private val addressGeneratePolicyIdCheck = JBCheckBox("Generate policy ID")
+    private val addressIncludeScriptCborCheck = JBCheckBox("Script file")
+    private val addressIncludeTestnetAddressCheck = JBCheckBox("Testnet address")
+    private val addressIncludeMainnetAddressCheck = JBCheckBox("Mainnet address")
+    private val addressGeneratePolicyIdCheck = JBCheckBox("Policy ID")
     private val addressScriptTemplateField = JBTextField()
     private val addressMainnetTemplateField = JBTextField()
     private val addressTestnetTemplateField = JBTextField()
@@ -132,6 +133,7 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
         checkMaxSuccessField.emptyText.text = "100"
         checkMatchTestsField.emptyText.text = "e.g. list, aiken/list, aiken/list.{map}"
         checkEnvField.emptyText.text = "e.g. preprod"
+        configureCompactFieldWidths()
     }
 
     override fun resetEditorFrom(configuration: AikenRunConfiguration) {
@@ -298,23 +300,17 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             group("General") {
                 row("Project directory:") {
                     cell(projectDirectoryField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Working directory for Aiken command. Relative paths resolve from here.")
                 }
 
                 row("Extra arguments:") {
                     cell(extraArgsField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Optional raw arguments appended at the end.")
                 }
             }
 
             row {
                 cell(commandSpecificPanel)
-                    .resizableColumn()
-                    .align(AlignX.FILL)
             }
         }
 
@@ -340,8 +336,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row("Output mode:") {
                     cell(buildOutputModeCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("TTY for terminal output, IDE integrated for structured warnings/errors.")
                 }
 
@@ -351,29 +345,21 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row("Build environment:") {
                     cell(buildEnvField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Environment name from aiken.toml, for example preprod.")
                 }
 
                 row("Blueprint output file:") {
                     cell(buildOutField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Output blueprint file. Relative paths are inside project directory.")
                 }
 
                 row("Trace filter:") {
                     cell(buildTraceFilterCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Select which trace categories to include in generated code.")
                 }
 
                 row("Trace level:") {
                     cell(buildTraceLevelCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Controls detail level of emitted traces.")
                 }
             }
@@ -386,29 +372,21 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             group("Options") {
                 row("Input blueprint file:") {
                     cell(addressInField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Blueprint JSON file used to produce script, addresses, and policy IDs.")
                 }
 
                 row("Module:") {
                     cell(addressModuleField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Optional module filter(s). Separate multiple values with comma or space.")
                 }
 
                 row("Validator:") {
                     cell(addressValidatorField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Optional top-level validator filter(s), without handler suffixes like spend/mint/else.")
                 }
 
                 row("Delegated stake address:") {
                     cell(addressDelegatedToField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Optional stake key/address attached to both generated addresses (testnet and mainnet).")
                 }
             }
@@ -417,39 +395,29 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 row {
                     cell(createFixedWidthToggleCell(addressIncludeScriptCborCheck, toggleColumnWidth))
                     cell(addressScriptTemplateField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Template for script file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
                     cell(createFixedWidthToggleCell(addressIncludeTestnetAddressCheck, toggleColumnWidth))
                     cell(addressTestnetTemplateField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Template for testnet address file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
                     cell(createFixedWidthToggleCell(addressIncludeMainnetAddressCheck, toggleColumnWidth))
                     cell(addressMainnetTemplateField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Template for mainnet address file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row {
                     cell(createFixedWidthToggleCell(addressGeneratePolicyIdCheck, toggleColumnWidth))
                     cell(addressPolicyTemplateField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Template for policy file. Use %module% and %validator%. Use '/' to create subdirectories.")
                 }
 
                 row("Artifacts base path:") {
                     cell(addressArtifactsBasePathField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Output directory for auto-saved selected artifacts.")
                 }
             }
@@ -463,6 +431,49 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             minimumSize = Dimension(width, checkBox.preferredSize.height)
             add(checkBox, BorderLayout.WEST)
         }
+    }
+
+    private fun configureCompactFieldWidths() {
+        listOf(
+            projectDirectoryField,
+            extraArgsField,
+            checkWarningsHandlingCombo,
+            buildEnvField,
+            buildOutField,
+            buildTraceFilterCombo,
+            buildTraceLevelCombo,
+            buildOutputModeCombo,
+            addressInField,
+            addressModuleField,
+            addressValidatorField,
+            addressDelegatedToField,
+            addressScriptTemplateField,
+            addressMainnetTemplateField,
+            addressTestnetTemplateField,
+            addressPolicyTemplateField,
+            addressArtifactsBasePathField,
+            cleanTargetPathField,
+            applyInField,
+            applyOutField,
+            applyModuleField,
+            applyValidatorField,
+            applyDefaultCborParametersField,
+            applyOutputModeCombo,
+            checkOutputModeCombo,
+            checkSeedField,
+            checkMaxSuccessField,
+            checkPropertyCoverageCombo,
+            checkMatchTestsField,
+            checkEnvField,
+            checkTraceFilterCombo,
+            checkTraceLevelCombo
+        ).forEach(::applyCompactFieldWidth)
+    }
+
+    private fun applyCompactFieldWidth(component: JComponent) {
+        val size = Dimension(compactFieldPreferredWidth, component.preferredSize.height)
+        component.preferredSize = size
+        component.minimumSize = size
     }
 
     private fun applyUnifiedDescriptionFont(component: Component) {
@@ -508,8 +519,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             group("Options") {
                 row("Warnings handling:") {
                     cell(checkWarningsHandlingCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Ignore warnings, keep normal behavior, or treat warnings as errors.")
                 }
 
@@ -523,8 +532,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row("Output mode:") {
                     cell(checkOutputModeCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("TTY for terminal output, JSON for machine output, IDE integrated for test tree.")
                 }
 
@@ -534,29 +541,21 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row("Seed:") {
                     cell(checkSeedField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Unsigned integer seed for deterministic property tests.")
                 }
 
                 row("Max success:") {
                     cell(checkMaxSuccessField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Maximum successful iterations per property test.")
                 }
 
                 row("Property coverage mode:") {
                     cell(checkPropertyCoverageCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("How property-test label coverage is evaluated.")
                 }
 
                 row("Match tests pattern:") {
                     cell(checkMatchTestsField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Examples: list, aiken/list, aiken/list.{map}, module. Separate entries with comma or space.")
                     cell(checkExactMatchCheck)
                         .align(AlignX.RIGHT)
@@ -564,22 +563,16 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
 
                 row("Check environment:") {
                     cell(checkEnvField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Environment name from aiken.toml, for example preprod.")
                 }
 
                 row("Trace filter:") {
                     cell(checkTraceFilterCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Select which trace categories to include while checking.")
                 }
 
                 row("Trace level:") {
                     cell(checkTraceLevelCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Controls detail level of traces in check output.")
                 }
             }
@@ -591,8 +584,6 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             group("Options") {
                 row("Target directory:") {
                     cell(cleanTargetPathField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Directory whose contents will be deleted. Relative paths resolve from project directory.")
                 }
             }
@@ -604,50 +595,36 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
             group("Options") {
                 row("Input blueprint file:") {
                     cell(applyInField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Blueprint JSON used as input. Default is plutus.json.")
                 }
 
                 row("Output blueprint file:") {
                     cell(applyOutField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Output blueprint file path. Default is plutus.json.")
                 }
 
                 row("Module:") {
                     cell(applyModuleField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Validator module. Optional only if blueprint has a single validator.")
                 }
 
                 row("Validator:") {
                     cell(applyValidatorField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Validator name in the selected module. Optional only if unique.")
                 }
 
                 row("Auto aplied CBOR parameters:") {
                     cell(applyDefaultCborParametersField)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("Tip: run manual parameterization first, then paste those CBOR values here. Separate values with comma or space.")
                 }
 
                 row("Output mode:") {
                     cell(applyOutputModeCombo)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                         .comment("TTY for native interactive prompts, IDE integrated for structured GUI parameterization.")
                 }
 
                 row {
                     cell(applyAutoRepeatPanel)
-                        .resizableColumn()
-                        .align(AlignX.FILL)
                 }
             }
         }
@@ -685,8 +662,11 @@ class AikenRunConfigurationEditor : SettingsEditor<AikenRunConfiguration>() {
                 AikenRunCommand.BUILD -> 680
                 AikenRunCommand.CHECK -> 900
             }
-        rootContent?.preferredSize = Dimension(860, preferredHeight)
-        rootContent?.revalidate()
+        rootContent?.let { content ->
+            content.preferredSize = null
+            content.preferredSize = Dimension(content.preferredSize.width, preferredHeight)
+            content.revalidate()
+        }
     }
 
     private enum class CheckWarningsHandling(private val label: String) {

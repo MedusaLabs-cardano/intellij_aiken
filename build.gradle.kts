@@ -1,4 +1,5 @@
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 
@@ -104,6 +105,10 @@ intellijPlatform {
     }
 
     pluginVerification {
+        ides {
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "262.7132.23")
+        }
+
         verificationReportsFormats.set(
             listOf(VerifyPluginTask.VerificationReportsFormats.MARKDOWN)
         )
@@ -136,7 +141,7 @@ tasks {
                 ?.takeIf { file(it).exists() }
         val idePath = configuredIdePath ?: toolboxIdePath
         if (idePath != null) {
-            ides.setFrom(file(idePath))
+            ides.from(file(idePath))
         }
     }
 }
